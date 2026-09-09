@@ -13,3 +13,6 @@
 [submodule "deps/Waveshare-LCD-2.8"]
 	path = deps/Waveshare-LCD-2.8
 	url = https://github.com/FatihErtugral/esp32s3-waveshare-2.8-touch-lcd.git
+[submodule "deps/Kalman"]
+	path = deps/Kalman
+	url = https://github.com/balzer82/Kalman.git

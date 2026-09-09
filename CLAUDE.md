@@ -53,9 +53,10 @@ Vendored as git submodules for reference (not yet wired into the PlatformIO buil
 - **esp32-ant** (`deps/esp32-ant`, [RaemondBW/esp32-ant](https://github.com/RaemondBW/esp32-ant)): Reference for 2.4GHz PHY software ANT+ decoding.
 - **SparkFun u-blox GNSS Arduino Library** (`deps/SparkFun_u-blox_GNSS`, [sparkfun/SparkFun_u-blox_GNSS_Arduino_Library](https://github.com/sparkfun/SparkFun_u-blox_GNSS_Arduino_Library)): Official UBX binary protocol parsing for the MAX-M10S.
 - **Waveshare-LCD-2.8** (`deps/Waveshare-LCD-2.8`, [FatihErtugral/esp32s3-waveshare-2.8-touch-lcd](https://github.com/FatihErtugral/esp32s3-waveshare-2.8-touch-lcd)): Community starter kit for this exact board (LVGL UI, touch, IMU, RTC, SD card, ESP-IDF v5.5.1). No official `waveshareteam` repo exists for the 2.8" ESP32-S3 board specifically — this is a third-party reference, confirmed with the user.
+- **Kalman** (`deps/Kalman`, [balzer82/Kalman](https://github.com/balzer82/Kalman)): Reference for Kalman filter GPS algorithms (covers the Kalman-filtering half of the original OpenBikeComputer reference below).
 
 Not yet vendored — the URL originally given did not resolve to an existing repo, and a confident replacement wasn't found:
-- **OpenBikeComputer**: intended as a reference for UBX parsing / Kalman filter GPS algorithms. Neither [timohueser/OpenBikeComputer](https://github.com/timohueser/OpenBikeComputer) (Rust/nRF54L firmware, no UBX/Kalman) nor [Random90/OpenBikeComputerRTOS_ESP32](https://github.com/Random90/OpenBikeComputerRTOS_ESP32) (ESP32/FreeRTOS, but reed-switch speed sensing, no GPS) actually matches this description — confirm the intended repo.
+- **OpenBikeComputer** (UBX parsing half only — Kalman filtering is now covered by `deps/Kalman` above): Neither [timohueser/OpenBikeComputer](https://github.com/timohueser/OpenBikeComputer) (Rust/nRF54L firmware, no UBX) nor [Random90/OpenBikeComputerRTOS_ESP32](https://github.com/Random90/OpenBikeComputerRTOS_ESP32) (ESP32/FreeRTOS, but reed-switch speed sensing, no GPS) actually matches this description — user to provide the intended repo.
 
 ## 7. Agent Code Generation & Build Rules
 1. **Compilation Validation**: Always run `pio run` after creating or modifying code to verify zero build errors.
