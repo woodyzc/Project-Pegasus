@@ -47,10 +47,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Offline Breadcrumb Navigation**: Read `.gpx` files from SD card and render breadcrumb trails on LVGL canvas.
 
 ## 6. Open-Source Reference Repositories (`deps/`)
-- **X-TRACK** (`deps/X-TRACK`): Core framework for `PageManager`, `DataCenter`, `Page_Dashboard`, and GPX breadcrumb rendering.
-- **LilyGO T-Watch / ESP32-S3 Repos**: Reference for ST7789/FT6336 LVGL drivers and QMI8658 motion wake-up algorithms.
-- **OpenBikeComputer**: Reference for UBX binary parsing and Kalman filter GPS algorithms.
-- **esp32-ant**: Reference for 2.4GHz PHY software ANT+ decoding.
+Vendored as git submodules for reference (not yet wired into the PlatformIO build). Each submodule's responsibility:
+
+- **`deps/X-TRACK`** ([FASTSHIFT/X-TRACK](https://github.com/FASTSHIFT/X-TRACK)): Extract `DataCenter` (Pub/Sub message bus), `PageManager` page life-cycle management, and breadcrumb-trail rendering.
+- **`deps/NimBLE-Arduino`** ([h2zero/NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)): Low-power BLE client for connecting to the Galaxy Watch 8 / a standard BLE heart-rate strap (`0x180D`), and for receiving turn-by-turn (TBT) navigation data pushed from the phone app.
+- **`deps/esp32-ant`** ([RaemondBW/esp32-ant](https://github.com/RaemondBW/esp32-ant)): Soft-decode ANT+ heart-rate data (Device Type `0x78`) directly off the ESP32-S3's 2.4GHz PHY — no external hardware required.
+- **`deps/SparkFun_u-blox_GNSS`** ([sparkfun/SparkFun_u-blox_GNSS_Arduino_Library](https://github.com/sparkfun/SparkFun_u-blox_GNSS_Arduino_Library)): Drive the u-blox MAX-M10S module, configure pure UBX binary protocol output, and parse high-precision fix data.
+- **`deps/Kalman`** ([balzer82/Kalman](https://github.com/balzer82/Kalman)) and **`deps/Arduino-KalmanFilter`** ([nhatuan84/Arduino-KalmanFilter](https://github.com/nhatuan84/Arduino-KalmanFilter)): Reference for the low-speed anti-drift Kalman-filter logic applied to GPS fixes.
+- **`deps/uBloxGPS`** ([SquirrelEng/uBloxGPS](https://github.com/SquirrelEng/uBloxGPS)): Lightweight reference for decoding the UBX binary `NAV-PVT` message directly (no NMEA parsing, smaller footprint than TinyGPS) — the UBX-parsing half of the original `OpenBikeComputer` request.
+- **`deps/Waveshare-LCD-2.8`** ([FatihErtugral/esp32s3-waveshare-2.8-touch-lcd](https://github.com/FatihErtugral/esp32s3-waveshare-2.8-touch-lcd)): Reference for driving the ST7789 screen, FT6336 touch panel, and QMI8658 IMU on this exact board. No official `waveshareteam` repo exists for the 2.8" ESP32-S3 board specifically — this is a third-party reference, confirmed with the user.
+
+Together, `deps/Kalman` + `deps/Arduino-KalmanFilter` + `deps/uBloxGPS` replace the originally-requested `deps/OpenBikeComputer` submodule, whose UBX/Kalman-filter code couldn't be located under that repo name (neither [timohueser/OpenBikeComputer](https://github.com/timohueser/OpenBikeComputer) nor [Random90/OpenBikeComputerRTOS_ESP32](https://github.com/Random90/OpenBikeComputerRTOS_ESP32) actually contains it).
 
 ## 7. Agent Code Generation & Build Rules
 1. **Compilation Validation**: Always run `pio run` after creating or modifying code to verify zero build errors.
