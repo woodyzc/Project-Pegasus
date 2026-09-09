@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LVGL Speed UI Simulation</title>
+  <style>
+    :root {
+      --bg: #101820;
+      --panel: #1a2a35;
+      --muted: #93a4b8;
+      --cyan: #61DAFB;
+      --white: #ffffff;
+      --danger: #ff5a5a;
+      --green: #7ef0a5;
+      --yellow: #ffd166;
+      --blue: #7bc8ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0b0f14;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    .screen {
+      width: 240px;
+      height: 320px;
+      background: var(--bg);
+      color: var(--white);
+      padding: 14px 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      border-radius: 10px;
+      box-shadow: 0 0 28px rgba(0,0,0,0.42);
+    }
+    .title {
+      text-align: center;
+      font-size: 11px;
+      letter-spacing: 2px;
+      color: var(--muted);
+      font-weight: 700;
+      margin-top: 2px;
+      opacity: 0.9;
+    }
+    .speed-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 92px;
+      margin-top: 2px;
+    }
+    .speed {
+      font-size: 52px;
+      font-weight: 700;
+      line-height: 0.9;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+    .speed-unit {
+      margin-top: 2px;
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: lowercase;
+    }
+    .trip-section {
+      display: flex;
+      flex-direction: column;
+      margin-top: 2px;
+    }
+    .section-label {
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 1.3px;
+      font-weight: 700;
+      margin-bottom: 3px;
+      text-transform: uppercase;
+    }
+    .trip-value {
+      font-size: 22px;
+      line-height: 1.1;
+      font-weight: 700;
+      color: var(--white);
+    }
+    .bottom-row {
+      margin-top: 4px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+      align-items: end;
+    }
+    .meta-block {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .meta-block.right { align-items: flex-end; }
+    .meta-block.center { align-items: center; text-align: center; }
+    .time-value, .hr-value, .grade-value, .nav-value {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--white);
+      white-space: nowrap;
+    }
+    .hr-value {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      justify-content: flex-end;
+    }
+    .heart {
+      color: var(--danger);
+      font-size: 14px;
+      line-height: 1;
+    }
+    .hr-unit {
+      font-size: 10px;
+      opacity: 0.8;
+      color: var(--white);
+      margin-left: 1px;
+    }
+    .grade-value {
+      font-size: 16px;
+      color: var(--cyan);
+    }
+    .nav-block {
+      margin-top: 6px;
+      padding: 8px 10px 7px;
+      border-radius: 9px;
+      background: linear-gradient(180deg, rgba(97, 218, 251, 0.12), rgba(97, 218, 251, 0.06));
+      border: 1px solid rgba(97, 218, 251, 0.18);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 8px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+      position: relative;
+    }
+    .nav-label {
+      position: absolute;
+      top: 7px;
+      left: 10px;
+      color: var(--muted);
+      font-size: 8px;
+      letter-spacing: 1.2px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .nav-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      background: rgba(97, 218, 251, 0.2);
+      color: var(--cyan);
+      font-size: 28px;
+      line-height: 1;
+      box-shadow: inset 0 0 0 1px rgba(97, 218, 251, 0.25);
+      margin-top: 12px;
+      justify-self: end;
+    }
+    .nav-value {
+      font-size: 16px;
+      color: var(--white);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      text-align: right;
+      white-space: nowrap;
+      font-weight: 700;
+      margin-top: 18px;
+      margin-right: 4px;
+    }
+    .zone-pill {
+      margin-top: 3px;
+      padding: 3px 6px;
+      border-radius: 999px;
+      font-size: 8px;
+      letter-spacing: 0.7px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #081015;
+      background: var(--green);
+    }
+    .zone-pill {
+      margin-top: 4px;
+      padding: 4px 7px;
+      border-radius: 999px;
+      font-size: 9px;
+      letter-spacing: 0.8px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #081015;
+      background: var(--green);
+    }
+  </style>
+</head>
+<body>
+  <div class="screen">
+    <div class="title">PEGASUS</div>
+
+    <div class="speed-block">
+      <div class="speed" id="speedValue">68.4</div>
+      <div class="speed-unit">km/h</div>
+    </div>
+
+    <div class="trip-section">
+      <div class="section-label">TRIP</div>
+      <div class="trip-value" id="tripValue">12.34 km</div>
+    </div>
+
+    <div class="bottom-row">
+      <div class="meta-block">
+        <div class="section-label">BEIJING TIME</div>
+        <div class="time-value" id="clockValue">--:--:--</div>
+      </div>
+
+      <div class="meta-block center">
+        <div class="section-label">INCLINE</div>
+        <div class="grade-value" id="gradeValue">+4.2%</div>
+      </div>
+
+      <div class="meta-block right">
+        <div class="section-label">HEART RATE</div>
+        <div class="hr-value">
+          <span class="heart">♥</span>
+          <span id="hrValue">152</span>
+          <span class="hr-unit">bpm</span>
+        </div>
+        <div class="zone-pill" id="hrZone">Zone 4</div>
+      </div>
+    </div>
+
+    <div class="nav-block">
+      <div class="nav-label">Route</div>
+      <div class="nav-arrow">➤</div>
+      <div class="nav-value" id="navDirection">LEFT</div>
+    </div>
+  </div>
+
+  <script>
+    const speedEl = document.getElementById('speedValue');
+    const tripEl = document.getElementById('tripValue');
+    const hrEl = document.getElementById('hrValue');
+    const hrZoneEl = document.getElementById('hrZone');
+    const clockEl = document.getElementById('clockValue');
+    const gradeEl = document.getElementById('gradeValue');
+    const navDirectionEl = document.getElementById('navDirection');
+
+    let tripKm = 12.34;
+    let speed = 68.4;
+    let heartRate = 152;
+    let incline = 4.2;
+    const navDirections = ['LEFT', 'RIGHT', 'STRAIGHT', 'SLIGHT LEFT', 'SLIGHT RIGHT'];
+    const navIcons = {
+      LEFT: '↰',
+      RIGHT: '↱',
+      STRAIGHT: '➤',
+      'SLIGHT LEFT': '↖',
+      'SLIGHT RIGHT': '↗'
+    };
+
+    function updateHeartRateZone() {
+      let zone = 'Zone 1';
+      let color = '#7ef0a5';
+
+      if (heartRate >= 150) {
+        zone = 'Zone 4';
+        color = '#ffd166';
+      } else if (heartRate >= 120) {
+        zone = 'Zone 3';
+        color = '#7bc8ff';
+      } else if (heartRate >= 90) {
+        zone = 'Zone 2';
+        color = '#7ef0a5';
+      }
+
+      hrZoneEl.textContent = zone;
+      hrZoneEl.style.background = color;
+    }
+
+    function updateClock() {
+      const now = new Date();
+      const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
+      const beijing = new Date(utcMs + (8 * 60 * 60 * 1000));
+      const hh = String(beijing.getHours()).padStart(2, '0');
+      const mm = String(beijing.getMinutes()).padStart(2, '0');
+      const ss = String(beijing.getSeconds()).padStart(2, '0');
+      clockEl.textContent = `${hh}:${mm}:${ss}`;
+    }
+
+    function tick() {
+      speed = 55 + Math.sin(Date.now() / 900) * 20 + (Math.random() * 8);
+      tripKm += 0.02 + Math.random() * 0.04;
+      heartRate = 126 + Math.sin(Date.now() / 1200) * 28 + (Math.random() * 14);
+      incline = 2.5 + Math.sin(Date.now() / 1400) * 3.8;
+      speedEl.textContent = speed.toFixed(1);
+      tripEl.textContent = `${tripKm.toFixed(2)} km`;
+      hrEl.textContent = Math.round(heartRate);
+      gradeEl.textContent = `${incline >= 0 ? '+' : ''}${incline.toFixed(1)}%`;
+      const direction = navDirections[Math.floor((Date.now() / 1800) % navDirections.length)];
+      navDirectionEl.textContent = direction;
+      document.querySelector('.nav-arrow').textContent = navIcons[direction] || '➤';
+      updateHeartRateZone();
+      updateClock();
+    }
+
+    tick();
+    setInterval(tick, 1000);
+  </script>
+</body>
+</html>
