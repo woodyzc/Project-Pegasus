@@ -19,3 +19,6 @@
 [submodule "deps/Arduino-KalmanFilter"]
 	path = deps/Arduino-KalmanFilter
 	url = https://github.com/nhatuan84/Arduino-KalmanFilter.git
+[submodule "deps/uBloxGPS"]
+	path = deps/uBloxGPS
+	url = https://github.com/SquirrelEng/uBloxGPS.git
