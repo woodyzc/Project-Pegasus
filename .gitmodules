@@ -10,3 +10,6 @@
 [submodule "deps/SparkFun_u-blox_GNSS"]
 	path = deps/SparkFun_u-blox_GNSS
 	url = https://github.com/sparkfun/SparkFun_u-blox_GNSS_Arduino_Library.git
+[submodule "deps/Waveshare-LCD-2.8"]
+	path = deps/Waveshare-LCD-2.8
+	url = https://github.com/FatihErtugral/esp32s3-waveshare-2.8-touch-lcd.git
