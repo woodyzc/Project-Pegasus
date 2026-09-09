@@ -16,3 +16,6 @@
 [submodule "deps/Kalman"]
 	path = deps/Kalman
 	url = https://github.com/balzer82/Kalman.git
+[submodule "deps/Arduino-KalmanFilter"]
+	path = deps/Arduino-KalmanFilter
+	url = https://github.com/nhatuan84/Arduino-KalmanFilter.git
