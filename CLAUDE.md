@@ -47,10 +47,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Offline Breadcrumb Navigation**: Read `.gpx` files from SD card and render breadcrumb trails on LVGL canvas.
 
 ## 6. Open-Source Reference Repositories (`deps/`)
-- **X-TRACK** (`deps/X-TRACK`): Core framework for `PageManager`, `DataCenter`, `Page_Dashboard`, and GPX breadcrumb rendering.
-- **LilyGO T-Watch / ESP32-S3 Repos**: Reference for ST7789/FT6336 LVGL drivers and QMI8658 motion wake-up algorithms.
-- **OpenBikeComputer**: Reference for UBX binary parsing and Kalman filter GPS algorithms.
-- **esp32-ant**: Reference for 2.4GHz PHY software ANT+ decoding.
+Vendored as git submodules for reference (not yet wired into the PlatformIO build):
+- **X-TRACK** (`deps/X-TRACK`, [FASTSHIFT/X-TRACK](https://github.com/FASTSHIFT/X-TRACK)): Core framework for `PageManager`, `DataCenter`, `Page_Dashboard`, and GPX breadcrumb rendering.
+- **NimBLE-Arduino** (`deps/NimBLE-Arduino`, [h2zero/NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)): BLE client stack for the Galaxy Watch 8 heart-rate connection (§3).
+- **esp32-ant** (`deps/esp32-ant`, [RaemondBW/esp32-ant](https://github.com/RaemondBW/esp32-ant)): Reference for 2.4GHz PHY software ANT+ decoding.
+- **SparkFun u-blox GNSS Arduino Library** (`deps/SparkFun_u-blox_GNSS`, [sparkfun/SparkFun_u-blox_GNSS_Arduino_Library](https://github.com/sparkfun/SparkFun_u-blox_GNSS_Arduino_Library)): Official UBX binary protocol parsing for the MAX-M10S.
+
+Not yet vendored — the URLs originally given for these did not resolve to existing repos, and a confident replacement wasn't found:
+- **OpenBikeComputer**: intended as a reference for UBX parsing / Kalman filter GPS algorithms. Neither [timohueser/OpenBikeComputer](https://github.com/timohueser/OpenBikeComputer) (Rust/nRF54L firmware, no UBX/Kalman) nor [Random90/OpenBikeComputerRTOS_ESP32](https://github.com/Random90/OpenBikeComputerRTOS_ESP32) (ESP32/FreeRTOS, but reed-switch speed sensing, no GPS) actually matches this description — confirm the intended repo.
+- **LilyGO T-Watch / Waveshare ESP32-S3-Touch-LCD-2.8 reference**: no official `waveshareteam` repo exists for the 2.8" ESP32-S3 board specifically (only C6/C5 variants were found under that org) — confirm the intended repo/URL for ST7789/FT6336 LVGL drivers and QMI8658 wake-up reference code.
 
 ## 7. Agent Code Generation & Build Rules
 1. **Compilation Validation**: Always run `pio run` after creating or modifying code to verify zero build errors.

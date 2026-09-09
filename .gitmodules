@@ -1,0 +1,12 @@
+[submodule "deps/X-TRACK"]
+	path = deps/X-TRACK
+	url = https://github.com/FASTSHIFT/X-TRACK.git
+[submodule "deps/NimBLE-Arduino"]
+	path = deps/NimBLE-Arduino
+	url = https://github.com/h2zero/NimBLE-Arduino.git
+[submodule "deps/esp32-ant"]
+	path = deps/esp32-ant
+	url = https://github.com/RaemondBW/esp32-ant.git
+[submodule "deps/SparkFun_u-blox_GNSS"]
+	path = deps/SparkFun_u-blox_GNSS
+	url = https://github.com/sparkfun/SparkFun_u-blox_GNSS_Arduino_Library.git
