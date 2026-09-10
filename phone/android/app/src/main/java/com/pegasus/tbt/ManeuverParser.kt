@@ -101,6 +101,13 @@ object ManeuverParser {
         return Math.round(metres).toInt()
     }
 
+    // Only "onto" and "toward(s)" introduce the road. A bare "on" was tried
+    // and removed: Maps frequently wraps an aside around the maneuver, e.g.
+    //   "Turn left (traffic lights on the left) onto Jones Branch Dr"
+    // and the "on" inside that aside matched first, yielding the road name
+    // "the left) onto Jones Branch Dr" on a real route.
+    private val ROAD_INTRO = Regex("""\b(?:onto|towards?)\s+""", RegexOption.IGNORE_CASE)
+
     /**
      * Best-effort road name. Maps usually phrases the body as "onto X" or
      * "toward X"; when it doesn't, the body line is generally the road itself.
@@ -108,18 +115,31 @@ object ManeuverParser {
     fun extractStreet(title: String, text: String): String {
         val source = if (text.isNotEmpty()) text else title
 
-        Regex("""\b(?:onto|towards?|on)\s+(.+)""", RegexOption.IGNORE_CASE)
-            .find(source)
-            ?.groupValues?.get(1)
-            ?.let { return it.trim().trimEnd('.', ',') }
+        // The LAST introducer, not the first: the road being joined comes at
+        // the end, while an aside earlier in the sentence may contain one too.
+        // (Matching only the keyword and taking the remainder by index, rather
+        // than capturing with (.+) -- a greedy capture consumes to the end of
+        // the string, so findAll would only ever return one match.)
+        ROAD_INTRO.findAll(source).lastOrNull()?.let { match ->
+            return cleanUp(source.substring(match.range.last + 1))
+        }
 
         // Drop a leading distance so "350 m - Main St" doesn't repeat what the
         // head unit already shows in its own distance field.
-        return source
-            .replace(DISTANCE_PATTERN, "")
-            .trim()
-            .trimStart('-', '–', '·', ' ')
-            .trimEnd('.', ',')
-            .trim()
+        return cleanUp(source.replace(DISTANCE_PATTERN, ""))
+    }
+
+    private fun cleanUp(value: String): String {
+        var result = value.trim()
+
+        // An aside can leave its closing bracket stranded at the front once
+        // the text before it has been cut away.
+        while (result.isNotEmpty() && (result[0] == ')' || result[0] == ']' ||
+                result[0] == '-' || result[0] == '–' || result[0] == '·')
+        ) {
+            result = result.substring(1).trim()
+        }
+
+        return result.trim().trimEnd('.', ',', ' ')
     }
 }

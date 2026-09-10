@@ -49,6 +49,51 @@ class ManeuverParserTest {
     }
 
     @Test
+    fun `an aside before the road does not hijack the street name`() {
+        // Regression: observed on a real route in McLean, VA. An earlier
+        // version accepted a bare "on" as the road introducer, so the "on"
+        // inside the parenthetical matched first and the extracted name came
+        // out as "the left) onto Jones Branch Dr".
+        assertEquals(
+            "Jones Branch Dr",
+            ManeuverParser.extractStreet("Turn left", "Turn left (traffic lights on the left) onto Jones Branch Dr")
+        )
+        assertEquals(
+            "Westpark Dr",
+            ManeuverParser.extractStreet("", "Keep right (the bank is on the right) onto Westpark Dr")
+        )
+        // Last introducer wins even when the aside contains one of its own.
+        assertEquals(
+            "Elm St",
+            ManeuverParser.extractStreet("", "Continue (merges onto the ramp) onto Elm St")
+        )
+    }
+
+    @Test
+    fun `real capture - whole instruction in the title, EXTRA_TEXT null`() {
+        // Verified on a Samsung phone, Maps in English with imperial units:
+        // EXTRA_TEXT comes back null and the entire instruction arrives as one
+        // title line separated by a middle dot. Worth pinning, because it means
+        // the parser must cope with a null body and cannot assume the road name
+        // lives in its own field.
+        val m = ManeuverParser.parse("200 ft · Turn left toward Jones Branch Dr", null)
+        assertEquals(ManeuverParser.Icon.TURN_LEFT, m?.iconId)
+        assertEquals(61, m?.distanceMetres) // 200 ft = 60.96 m
+        assertEquals("Jones Branch Dr", m?.streetName)
+    }
+
+    @Test
+    fun `imperial distances round the way Maps shows them`() {
+        // Real capture: Maps displayed "0.1 mi" and the head unit should show
+        // the metric equivalent, not the raw number.
+        assertEquals(161, ManeuverParser.parseDistanceMetres("0.1 mi"))
+        val m = ManeuverParser.parse("Turn left", "0.1 mi onto Jones Branch Dr")
+        assertEquals(ManeuverParser.Icon.TURN_LEFT, m?.iconId)
+        assertEquals(161, m?.distanceMetres)
+        assertEquals("Jones Branch Dr", m?.streetName)
+    }
+
+    @Test
     fun `unrecognised text yields nothing rather than a guess`() {
         assertNull(ManeuverParser.parse("Rate your trip", "How was traffic?"))
         assertNull(ManeuverParser.parse(null, null))

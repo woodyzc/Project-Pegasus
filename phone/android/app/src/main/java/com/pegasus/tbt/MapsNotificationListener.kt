@@ -63,8 +63,11 @@ class MapsNotificationListener : NotificationListenerService() {
             return
         }
 
+        // The raw strings are kept even on success. A parse that succeeds but
+        // is subtly wrong -- a road name that swallowed part of an aside, say
+        // -- is invisible without seeing what Maps actually sent.
         lastParse = "icon=${maneuver.iconId} dist=${maneuver.distanceMetres}m " +
-            "street='${maneuver.streetName}'"
+            "street='${maneuver.streetName}'\nraw: '$title' / '$text'"
         Log.d(TAG, lastParse)
 
         ble?.send(
