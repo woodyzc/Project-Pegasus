@@ -99,18 +99,29 @@ void SoftANT_Task(void *pvParameters) {
     // onto a passing rider's). nvs_flash_init() is done by the Arduino core.
     cfg.store = &ant_node_store_nvs;
     cfg.coexist = s_coexist;
-    // Pin the library's own receive task to Core 0 alongside this supervisor,
-    // per CLAUDE.md §4 (Core 0 = Background Data Core, Core 1 = UI).
+    // The library's radio task stays on its own Core 1 default -- the one
+    // deliberate exception to CLAUDE.md §4's "Core 0 = Background Data Core"
+    // (documented there too). This supervisor still runs on Core 0.
     //
-    // Worth knowing: the library defaults this task to Core 1 precisely
-    // BECAUSE the BT controller lives on Core 0, and this task runs at
-    // configMAX_PRIORITIES-2. So the spec's layout puts a max-priority task on
-    // the same core as the controller it's hooking. The alternative
-    // (ANT_NODE_CORE_1) avoids that but preempts the LVGL render loop instead,
-    // which is why the spec puts it here. Untested on hardware either way --
-    // if ANT frames are dropped under load, try ANT_NODE_CORE_1 and check
-    // whether UI jank is the better trade.
-    cfg.task_core = ANT_NODE_CORE_0;
+    // Reasoning, from reading the library rather than guessing:
+    //   * Core 0 is where the BT controller lives, and this task runs at
+    //     configMAX_PRIORITIES-2. Putting it there means a max-priority task
+    //     contending with the very controller it hooks -- which is exactly
+    //     why the library defaults it to Core 1.
+    //   * The "but it will starve LVGL on Core 1" worry does not hold for a
+    //     receiver. ant_node's loop is tick -> wait_until(deadline), and in RX
+    //     mode wait_until() takes the ant_espphy_wait_rx() path, which blocks
+    //     in ulTaskNotifyTake() and yields the core. It only busy-waits
+    //     (esp_rom_delay_us) for sub-millisecond TX deadlines, and we are a
+    //     slave that never transmits. So it wakes on a frame (~4Hz for HRM)
+    //     plus radio events, does a short ant_mac_tick(), and blocks again.
+    //   * Core 1 is also the configuration the library actually verified live
+    //     on an S3 tracking a real strap; Core 0 is unverified.
+    //
+    // Net: the timing-critical radio task gets the safe, proven core, and §4's
+    // real intent -- our own data handling on Core 0 -- is served by this
+    // supervisor and by DataCenter publishing.
+    cfg.task_core = ANT_NODE_CORE_1;
     // proximity_rssi stays 0 (accept any strap) for first bring-up. -70 is
     // "on my bike" per the library's docs -- worth setting once pairing is
     // known to work, so a passing rider's strap can't be picked up.

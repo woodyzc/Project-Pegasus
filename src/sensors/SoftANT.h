@@ -16,8 +16,10 @@
 //     here would duplicate and fight the library.
 //   * The library also owns the real receive task (`ant_node_start()` spawns
 //     it at priority configMAX_PRIORITIES-2 so it can hold the 32768Hz ANT
-//     TDMA grid). We pin THAT task to Core 0 via cfg.task_core, rather than
-//     hand-rolling a capture loop -- see the core-choice note in SoftANT.cpp.
+//     TDMA grid). We leave THAT task on the library's own Core 1 default
+//     rather than hand-rolling a capture loop -- see the core-choice note in
+//     SoftANT.cpp for why it is the one part of this module that does not sit
+//     on Core 0.
 //
 // So SoftANT_Task() below is a supervisory task, not the capture loop: it owns
 // the node's lifecycle (start + open the HRM channel) and watches for the
