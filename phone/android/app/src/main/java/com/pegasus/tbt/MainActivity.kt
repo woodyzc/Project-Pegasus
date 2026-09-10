@@ -39,8 +39,20 @@ class MainActivity : AppCompatActivity() {
             // Polled rather than pushed: the service is the source of truth and
             // this screen is often not alive to receive a callback.
             status.text = TbtService.status
-            parseStatus.text = "Last notification: ${MapsNotificationListener.lastParse}"
-            handler.postDelayed(this, 1000)
+            val age = MapsNotificationListener.secondsSinceLast()
+            val cadence = if (age < 0) {
+                "no Maps notification yet"
+            } else {
+                "seen ${MapsNotificationListener.seen}" +
+                    " / used ${MapsNotificationListener.used}" +
+                    " / parsed ${MapsNotificationListener.parsed}" +
+                    String.format("  (%.1fs ago)", age)
+            }
+            parseStatus.text = "$cadence\n${MapsNotificationListener.lastParse}"
+            // 200ms rather than a second: this line is the only window onto
+            // what the parser is doing, and a second of lag makes a working
+            // parser look broken while you watch it.
+            handler.postDelayed(this, 200)
         }
     }
 

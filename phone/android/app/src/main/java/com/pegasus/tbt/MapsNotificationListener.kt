@@ -36,6 +36,34 @@ class MapsNotificationListener : NotificationListenerService() {
         @Volatile
         var lastParse: String = "nothing seen yet"
             private set
+
+        // Instrumentation, because "the update rate feels low" has three very
+        // different causes and they need telling apart:
+        //   seen   - Maps notifications that arrived at all
+        //   used   - those that passed the ongoing-event filter
+        //   parsed - those that yielded a maneuver
+        // seen >> used means the filter is discarding real updates; used >>
+        // parsed means the wording is not matching; seen barely climbing means
+        // Maps itself is posting slowly and no amount of tuning here helps.
+        @Volatile
+        var seen: Int = 0
+            private set
+
+        @Volatile
+        var used: Int = 0
+            private set
+
+        @Volatile
+        var parsed: Int = 0
+            private set
+
+        @Volatile
+        var lastAtMs: Long = 0L
+            private set
+
+        /** Seconds since the last Maps notification, or -1 if none yet. */
+        fun secondsSinceLast(): Float =
+            if (lastAtMs == 0L) -1f else (System.currentTimeMillis() - lastAtMs) / 1000f
     }
 
     override fun onListenerConnected() {
@@ -49,10 +77,14 @@ class MapsNotificationListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName != MAPS_PACKAGE) return
 
+        seen++
+        lastAtMs = System.currentTimeMillis()
+
         val notification = sbn.notification ?: return
         // Navigation is an ongoing notification; ignore the rest (offers,
         // timeline prompts, "rate this place" and so on).
         if (notification.flags and Notification.FLAG_ONGOING_EVENT == 0) return
+        used++
 
         val title = readTitle(notification)
         val text = readText(notification)
@@ -63,6 +95,7 @@ class MapsNotificationListener : NotificationListenerService() {
             Log.d(TAG, lastParse)
             return
         }
+        parsed++
 
         // The raw strings are kept even on success. A parse that succeeds but
         // is subtly wrong -- a road name that swallowed part of an aside, say

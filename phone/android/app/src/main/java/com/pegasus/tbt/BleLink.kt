@@ -39,8 +39,14 @@ class BleLink(context: Context) {
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val SCAN_TIMEOUT_MS = 20_000L
 
-        /** Maps updates distance constantly; this is plenty for a head unit. */
-        const val MIN_WRITE_INTERVAL_MS = 500L
+        /**
+         * Floor between BLE writes. Riding a bike, a turn prompt that lags by
+         * half a second is a bike length of error, so this is deliberately
+         * tighter than the 500ms it started at. It exists at all only to stop
+         * a burst of identical updates saturating the link -- identical frames
+         * are dropped separately, so in practice this rarely bites.
+         */
+        const val MIN_WRITE_INTERVAL_MS = 150L
     }
 
     private val handler = Handler(Looper.getMainLooper())
