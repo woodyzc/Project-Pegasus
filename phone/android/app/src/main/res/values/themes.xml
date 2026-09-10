@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Named explicitly rather than referencing the AppCompat theme straight
+         from the manifest, so the app has somewhere to put its own styling
+         later without touching the manifest again. -->
+    <style name="Theme.PegasusTBT" parent="Theme.AppCompat.DayNight.NoActionBar" />
+</resources>

@@ -9,3 +9,11 @@ test/host/test_parsebpm
 test/host/test_ble_hr_parse
 test/host/test_parsebpm_asan
 test/host/test_ble_hr_parse_asan
+
+# Android companion app (phone/android)
+.gradle/
+phone/android/build/
+phone/android/app/build/
+phone/android/local.properties
+*.iml
+.idea/
