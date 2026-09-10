@@ -132,6 +132,24 @@ int main(void) {
     check(strcmp(street, "untouched") == 0, "street not written");
     printf("done\n");
 
+    printf("- unknown-distance sentinel survives decoding: ");
+    /* The phone sends this when Maps names a turn without saying how far away
+       it is -- "Turn right onto Richter Farm Rd" with no distance anywhere in
+       the notification, which on one drive was 38 of 109 maneuvers. It must
+       reach the UI intact rather than being rejected as an absurd distance:
+       the arrow and the street name are still worth showing. */
+    len = build(buf, 3, TBT_DISTANCE_UNKNOWN, "Richter Farm Rd");
+    check(TBT_ParseFrame(buf, len, &icon, &distance, street, sizeof(street)), "accepts sentinel");
+    check(distance == TBT_DISTANCE_UNKNOWN, "sentinel survives");
+    check(icon == 3, "icon still decoded");
+    check(strcmp(street, "Richter Farm Rd") == 0, "street still decoded");
+    /* One metre below the sentinel is an ordinary distance, not a near-miss to
+       be treated as unknown. */
+    len = build(buf, 3, TBT_DISTANCE_UNKNOWN - 1, "");
+    check(TBT_ParseFrame(buf, len, &icon, &distance, street, sizeof(street)), "accepts");
+    check(distance == TBT_DISTANCE_UNKNOWN - 1, "adjacent value is a real distance");
+    printf("done\n");
+
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     printf("RESULT: %s\n", failures == 0 ? "PASS" : "FAIL");
     return failures == 0 ? 0 : 1;

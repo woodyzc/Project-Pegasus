@@ -61,6 +61,14 @@ class MapsNotificationListener : NotificationListenerService() {
         var lastAtMs: Long = 0L
             private set
 
+        // What was last put on the wire, so a distance-less repeat of the same
+        // step can be recognised and dropped.
+        @Volatile
+        private var lastSentIcon: Int = -1
+
+        @Volatile
+        private var lastSentStreet: String = ""
+
         /** Status notifications carrying no maneuver ("Rerouting", ...). */
         @Volatile
         var transient: Int = 0
@@ -150,9 +158,21 @@ class MapsNotificationListener : NotificationListenerService() {
         // The raw strings are kept even on success. A parse that succeeds but
         // is subtly wrong -- a road name that swallowed part of an aside, say
         // -- is invisible without seeing what Maps actually sent.
-        lastParse = "icon=${maneuver.iconId} dist=${maneuver.distanceMetres}m " +
+        val shownDistance = if (maneuver.hasDistance) "${maneuver.distanceMetres}m" else "unknown"
+        lastParse = "icon=${maneuver.iconId} dist=$shownDistance " +
             "street='${maneuver.streetName}'\nraw: '$title' / '$text'"
         Log.d(TAG, lastParse)
+
+        // A distance-less posting of the turn already on screen must not
+        // replace a good number with a dash. Maps interleaves the two forms
+        // for the same step, so without this the distance would flicker
+        // between counting down and "--" every few seconds.
+        val sameManeuver = maneuver.iconId == lastSentIcon && maneuver.streetName == lastSentStreet
+        if (!maneuver.hasDistance && sameManeuver) {
+            return
+        }
+        lastSentIcon = maneuver.iconId
+        lastSentStreet = maneuver.streetName
 
         TbtService.link?.send(
             TbtFrame.encode(maneuver.iconId, maneuver.distanceMetres, maneuver.streetName)
@@ -164,6 +184,10 @@ class MapsNotificationListener : NotificationListenerService() {
         // Navigation stopped. Clear immediately rather than waiting for the
         // firmware's 30s staleness timeout to notice.
         lastParse = "navigation ended (failures below are from the drive)"
+        // Forget what was on screen: the next route must send its first step
+        // even if it happens to open with the same turn onto the same road.
+        lastSentIcon = -1
+        lastSentStreet = ""
         TbtService.link?.send(TbtFrame.clearFrame(), force = true)
     }
 

@@ -38,8 +38,25 @@ class TbtFrameTest {
     @Test(expected = IllegalArgumentException::class)
     fun `negative distance is refused rather than wrapped`() {
         // Without the guard this would go out as a ~4 billion metre uint32,
-        // which the head unit has no way to recognise as wrong.
-        TbtFrame.encode(1, -1, "")
+        // which the head unit has no way to recognise as wrong. -1 is the one
+        // exception and has its own test below: it is the agreed sentinel.
+        TbtFrame.encode(1, -2, "")
+    }
+
+    @Test
+    fun `unknown distance goes out as the firmware sentinel`() {
+        // TBT_DISTANCE_UNKNOWN in src/navigation/TbtParse.h is 0xFFFFFFFF, and
+        // ManeuverParser.DISTANCE_UNKNOWN is -1: the same 32 bits. This is the
+        // byte-for-byte pin between the two, which is the only thing that
+        // notices if one side is changed alone.
+        val frame = TbtFrame.encode(3, ManeuverParser.DISTANCE_UNKNOWN, "Richter Farm Rd")
+        assertEquals(0xFF.toByte(), frame[4])
+        assertEquals(0xFF.toByte(), frame[5])
+        assertEquals(0xFF.toByte(), frame[6])
+        assertEquals(0xFF.toByte(), frame[7])
+        // The rest of the frame is unaffected: icon and name still travel.
+        assertEquals(3.toByte(), frame[2])
+        assertEquals("Richter Farm Rd".length.toByte(), frame[3])
     }
 
     @Test(expected = IllegalArgumentException::class)

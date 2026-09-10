@@ -35,7 +35,17 @@ object ManeuverParser {
         const val ARRIVE = 10
     }
 
-    data class Maneuver(val iconId: Int, val distanceMetres: Int, val streetName: String)
+    /**
+     * Distance for a maneuver Maps named without saying how far away it is.
+     * Encoded on the wire as TBT_DISTANCE_UNKNOWN (0xFFFFFFFF); the head unit
+     * shows a dash rather than a number. Negative here so it can never be
+     * confused with a real metre count.
+     */
+    const val DISTANCE_UNKNOWN = -1
+
+    data class Maneuver(val iconId: Int, val distanceMetres: Int, val streetName: String) {
+        val hasDistance: Boolean get() = distanceMetres != DISTANCE_UNKNOWN
+    }
 
     /**
      * Why a notification carries no maneuver, when that is not a parser fault.
@@ -88,6 +98,9 @@ object ManeuverParser {
         return null
     }
 
+    private val BARE_LEFT = Regex("""\bleft\b""", RegexOption.IGNORE_CASE)
+    private val BARE_RIGHT = Regex("""\bright\b""", RegexOption.IGNORE_CASE)
+
     // Ordered most specific first: "slight left" must beat the bare "left",
     // and "roundabout" must beat any direction word inside the same phrase.
     private val ICON_PATTERNS: List<Pair<Regex, Int>> = listOf(
@@ -130,9 +143,18 @@ object ManeuverParser {
         Regex("""\barriv|\bdestination\b""", RegexOption.IGNORE_CASE) to Icon.ARRIVE,
         Regex("""\b(continue|straight|head)\b""", RegexOption.IGNORE_CASE) to Icon.STRAIGHT,
         // Last resort: a bare direction word with no verb around it.
-        Regex("""\bleft\b""", RegexOption.IGNORE_CASE) to Icon.TURN_LEFT,
-        Regex("""\bright\b""", RegexOption.IGNORE_CASE) to Icon.TURN_RIGHT,
+        BARE_LEFT to Icon.TURN_LEFT,
+        BARE_RIGHT to Icon.TURN_RIGHT,
     )
+
+    // The two last-resort patterns, named so they can be recognised again
+    // rather than found by position. They match any sentence containing the
+    // word "left" or "right" anywhere -- fine as a fallback when a distance
+    // corroborates that this is a maneuver, but far too loose to accept on
+    // their own. See the distance handling in parse().
+    private val WEAK_PATTERNS = setOf(BARE_LEFT, BARE_RIGHT)
+
+    private fun isStrong(pattern: Regex) = pattern !in WEAK_PATTERNS
 
     // "350 m", "1.2 km", "500 ft", "0.3 mi" -- Maps uses whichever unit system
     // the phone is set to, so all four have to be understood.
@@ -168,12 +190,29 @@ object ManeuverParser {
 
         val combined = "$titleText $bodyText"
 
-        val iconId = ICON_PATTERNS.firstOrNull { it.first.containsMatchIn(combined) }?.second
-            ?: return null
+        val rule = ICON_PATTERNS.firstOrNull { it.first.containsMatchIn(combined) } ?: return null
+        val iconId = rule.second
 
         // Distance may sit in either line depending on Maps version; arrival
         // notices often carry none at all, which is legitimate.
-        val distance = parseDistanceMetres(combined) ?: if (iconId == Icon.ARRIVE) 0 else return null
+        //
+        // A missing distance used to discard the maneuver outright. On a drive
+        // through a housing estate that cost 38 of 109 maneuvers: Maps posts
+        // the step as a bare instruction ("Turn right onto Richter Farm Rd")
+        // with no distance in either line, and the arrow and street name went
+        // in the bin along with the absent number.
+        //
+        // So a maneuver may now travel without one -- but only when a real
+        // instruction was recognised. The two bare direction words match any
+        // sentence mentioning "left" or "right", and a distance is what
+        // corroborates that such a sentence is a maneuver at all; without one
+        // they would forward any passing notification that happened to say
+        // "right".
+        val distance = parseDistanceMetres(combined) ?: when {
+            iconId == Icon.ARRIVE -> 0
+            isStrong(rule.first) -> DISTANCE_UNKNOWN
+            else -> return null
+        }
 
         return Maneuver(iconId, distance, extractStreet(titleText, bodyText))
     }

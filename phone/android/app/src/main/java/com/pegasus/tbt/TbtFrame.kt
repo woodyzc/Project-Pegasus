@@ -30,7 +30,9 @@ object TbtFrame {
 
     fun encode(iconId: Int, distanceMetres: Int, streetName: String): ByteArray {
         require(iconId in 0..10) { "icon id out of range: $iconId" }
-        require(distanceMetres >= 0) { "negative distance: $distanceMetres" }
+        require(distanceMetres >= 0 || distanceMetres == ManeuverParser.DISTANCE_UNKNOWN) {
+            "negative distance: $distanceMetres"
+        }
 
         val nameBytes = truncateUtf8(streetName, STREET_NAME_MAX_BYTES)
         val frame = ByteArray(HEADER_LEN + nameBytes.size)
@@ -40,7 +42,10 @@ object TbtFrame {
         frame[2] = iconId.toByte()
         frame[3] = nameBytes.size.toByte()
 
-        val d = distanceMetres.toLong()
+        // DISTANCE_UNKNOWN is -1 here and TBT_DISTANCE_UNKNOWN is 0xFFFFFFFF
+        // on the wire, which is the same 32 bits; masking to 32 bits carries
+        // it across without a special case.
+        val d = distanceMetres.toLong() and 0xFFFFFFFFL
         frame[4] = (d and 0xFF).toByte()
         frame[5] = ((d shr 8) and 0xFF).toByte()
         frame[6] = ((d shr 16) and 0xFF).toByte()

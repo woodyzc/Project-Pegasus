@@ -161,8 +161,14 @@ class ManeuverParserTest {
         assertNull(ManeuverParser.parse("Rate your trip", "How was traffic?"))
         assertNull(ManeuverParser.parse(null, null))
         assertNull(ManeuverParser.parse("", ""))
-        // A maneuver with no distance is rejected unless it is an arrival.
-        assertNull(ManeuverParser.parse("Turn right", "onto Main St"))
+        // A maneuver with no distance used to be rejected here. It is now
+        // carried with DISTANCE_UNKNOWN instead -- see the housing-estate
+        // capture above, where that rule cost 38 of 109 maneuvers. What must
+        // still be refused is a *weak* match with no distance, which is the
+        // subject of its own test.
+        val noDistance = ManeuverParser.parse("Turn right", "onto Main St")
+        assertEquals(ManeuverParser.Icon.TURN_RIGHT, noDistance?.iconId)
+        assertEquals(ManeuverParser.DISTANCE_UNKNOWN, noDistance?.distanceMetres)
     }
 
     @Test
@@ -266,6 +272,39 @@ class ManeuverParserTest {
             "Take the exit toward Clopper Rd/W. Diamond Ave/Mont. Village Ave",
             ManeuverParser.unparsedKey("7.2 mi · Take the exit toward Clopper Rd/W. Diamond Ave/Mont. Village Ave")
         )
+    }
+
+    @Test
+    fun `a named turn with no distance still travels`() {
+        // Verbatim from a drive through a housing estate: 38 of 109 maneuvers
+        // arrived as a bare instruction with no distance in either line, and
+        // every one was discarded -- arrow and street name with it.
+        val m = ManeuverParser.parse("Turn right onto Richter Farm Rd", "")
+        assertEquals(ManeuverParser.Icon.TURN_RIGHT, m?.iconId)
+        assertEquals(ManeuverParser.DISTANCE_UNKNOWN, m?.distanceMetres)
+        assertEquals(false, m?.hasDistance)
+        assertEquals("Richter Farm Rd", m?.streetName)
+
+        val straight = ManeuverParser.parse("Continue straight to stay on Rockingham Ct", "")
+        assertEquals(ManeuverParser.Icon.STRAIGHT, straight?.iconId)
+        assertEquals(ManeuverParser.DISTANCE_UNKNOWN, straight?.distanceMetres)
+    }
+
+    @Test
+    fun `a bare direction word is still refused without a distance`() {
+        // The last-resort patterns match any sentence mentioning "left" or
+        // "right". A distance is what corroborates that such a sentence is a
+        // maneuver, so dropping the distance requirement for them would
+        // forward any passing notification that happened to use the word.
+        assertNull(ManeuverParser.parse("Traffic is heavy on the right", ""))
+        assertNull(ManeuverParser.parse("You have 2 messages left", ""))
+        // With a distance, the same fallback is allowed to speak.
+        assertEquals(
+            ManeuverParser.Icon.TURN_RIGHT,
+            ManeuverParser.parse("300 ft · the right lane", "")?.iconId
+        )
+        // Genuine junk stays refused either way.
+        assertNull(ManeuverParser.parse("Rate your trip", "How was traffic?"))
     }
 
     @Test

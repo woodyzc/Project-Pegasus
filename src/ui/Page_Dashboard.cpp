@@ -11,9 +11,9 @@
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
 #include "../navigation/GpxTrack.h"
+#include "../navigation/TbtParse.h"
 #include "../system/TimeZone.h"
 #include "MapView.h"
-#include "Page_Map.h"
 #include "Page_Map.h"
 
 // Visual design ported from the agents/lvgl-ui-layout-speed-odometer-clock
@@ -261,6 +261,13 @@ const char *TbtIconSymbol(uint8_t icon_id) {
 // Distances follow the same unit setting as speed: showing kilometres to the
 // next turn on a device reading mph would be incoherent.
 void FormatTbtDistance(uint32_t metres, char *out, size_t out_size) {
+    // Maps sometimes names the turn without saying how far away it is. The
+    // arrow and the street are still worth showing; a fabricated distance is
+    // not, so the field says plainly that it does not know.
+    if (metres == TBT_DISTANCE_UNKNOWN) {
+        snprintf(out, out_size, "--");
+        return;
+    }
     if (Settings_GetSpeedUnit() == SPEED_UNIT_MPH) {
         const float feet = metres * 3.28084f;
         if (feet < 1000.0f) {
