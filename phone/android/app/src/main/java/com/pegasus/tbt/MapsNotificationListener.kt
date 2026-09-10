@@ -115,11 +115,20 @@ class MapsNotificationListener : NotificationListenerService() {
         // The listener can be bound by the system before the user ever opens
         // the app -- after a reboot, for instance -- so make sure the link is
         // up rather than assuming MainActivity started it.
-        TbtService.start(applicationContext)
+        //
+        // startIfEnabled, not start: Android rebinds this listener for as long
+        // as notification access is granted, including straight after a Force
+        // stop, and an unconditional start here made the service impossible to
+        // kill from the phone.
+        TbtService.startIfEnabled(applicationContext)
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName != MAPS_PACKAGE) return
+        // Stopped means stopped: the system keeps this listener bound whatever
+        // the user does, so it has to check for itself rather than assume no
+        // notifications will arrive.
+        if (!TbtService.isEnabled(applicationContext)) return
 
         seen++
         lastAtMs = System.currentTimeMillis()

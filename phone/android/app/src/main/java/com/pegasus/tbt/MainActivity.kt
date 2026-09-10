@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var status: TextView
     private lateinit var parseStatus: TextView
+    private lateinit var powerButton: Button
     private val handler = Handler(Looper.getMainLooper())
 
     private val refresh = object : Runnable {
@@ -39,6 +40,7 @@ class MainActivity : AppCompatActivity() {
             // Polled rather than pushed: the service is the source of truth and
             // this screen is often not alive to receive a callback.
             status.text = TbtService.status
+            syncPowerButton()
             val age = MapsNotificationListener.secondsSinceLast()
             val cadence = if (age < 0) {
                 "no Maps notification yet"
@@ -114,6 +116,20 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { TbtService.link?.send(TbtFrame.clearFrame(), force = true) }
         }
 
+        // The way to turn the thing off. Without it the only apparent option
+        // was Force stop, which the rebound notification listener promptly
+        // undid -- so the app looked unkillable.
+        powerButton = Button(this).apply {
+            setOnClickListener {
+                if (TbtService.isEnabled(this@MainActivity)) {
+                    TbtService.stopByUser(this@MainActivity)
+                } else {
+                    TbtService.startByUser(this@MainActivity)
+                }
+                syncPowerButton()
+            }
+        }
+
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 48, 48, 48)
@@ -122,10 +138,25 @@ class MainActivity : AppCompatActivity() {
             addView(notifButton)
             addView(testButton)
             addView(clearButton)
+            addView(powerButton)
         })
 
         requestRuntimePermissions()
-        TbtService.start(this)
+        // Respect a previous stop rather than overriding it just because the
+        // user opened the screen to look at the counters.
+        TbtService.startIfEnabled(this)
+        syncPowerButton()
+    }
+
+    /**
+     * Keeps the button's label matching the real state, which can change
+     * without this screen doing anything -- the notification's Stop action
+     * works while the Activity is in the foreground. Only assigns on a change
+     * so it can be called from the 200ms refresh without churning layout.
+     */
+    private fun syncPowerButton() {
+        val wanted = if (TbtService.isEnabled(this)) "Stop link" else "Start link"
+        if (powerButton.text != wanted) powerButton.text = wanted
     }
 
     override fun onResume() {
