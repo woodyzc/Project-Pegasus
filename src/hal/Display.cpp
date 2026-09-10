@@ -28,12 +28,29 @@ static void Display_Flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
     lv_disp_flush_ready(drv);
 }
 
+// ledc channel shared by Backlight_Init() and Display_SetBrightness().
+static constexpr uint8_t BACKLIGHT_LEDC_CHANNEL = 0;
+static uint8_t s_brightness_pct = 100;
+
 static void Backlight_Init() {
     // TFT_BL is a plain GPIO on this board (no dedicated PWM controller),
     // driven on/off via ledc for future brightness control.
-    ledcSetup(0, 5000, 8);
-    ledcAttachPin(TFT_BL, 0);
-    ledcWrite(0, 255); // full brightness at boot
+    ledcSetup(BACKLIGHT_LEDC_CHANNEL, 5000, 8);
+    ledcAttachPin(TFT_BL, BACKLIGHT_LEDC_CHANNEL);
+    ledcWrite(BACKLIGHT_LEDC_CHANNEL, 255); // full brightness at boot
+}
+
+void Display_SetBrightness(uint8_t percent) {
+    if (percent > 100) {
+        percent = 100;
+    }
+    s_brightness_pct = percent;
+    // 8-bit ledc range; rounds so 100% lands exactly on 255.
+    ledcWrite(BACKLIGHT_LEDC_CHANNEL, (uint32_t)((percent * 255 + 50) / 100));
+}
+
+uint8_t Display_GetBrightness() {
+    return s_brightness_pct;
 }
 
 void Display_Init() {

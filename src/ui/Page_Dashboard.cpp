@@ -2,16 +2,46 @@
 
 #include <math.h>
 
+#include "../hal/Battery.h"
 #include "../system/DataCenter.h"
+#include "../system/PageManager/PageManager.h"
+#include "../system/Settings.h"
+
+// Visual design ported from the agents/lvgl-ui-layout-speed-odometer-clock
+// branch (c81da8c): dark slate background, one oversized speed readout, and a
+// caption+value pair per secondary metric. That branch was a single-threaded
+// demo driving LVGL straight from loop() with simulated values; only its
+// layout and palette are taken here. The data path stays this branch's
+// DataCenter pub/sub with Core-0-safe dirty flags.
 
 namespace {
 
-lv_obj_t *s_speed_meter = nullptr;
-lv_meter_indicator_t *s_speed_needle = nullptr;
+// ---- Palette (from the ported design) ----
+constexpr uint32_t COLOR_BG = 0x101820;      // screen background
+constexpr uint32_t COLOR_CAPTION = 0x93A4B8; // small all-caps labels
+constexpr uint32_t COLOR_VALUE = 0xFFFFFF;   // primary readouts
+constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
+constexpr uint32_t COLOR_BADGE_TEXT = 0x081015;
+
+// Heart-rate zone bands and their badge colours.
+constexpr uint8_t ZONE2_LOW = 90;
+constexpr uint8_t ZONE3_LOW = 120;
+constexpr uint8_t ZONE4_LOW = 150;
+constexpr uint32_t COLOR_ZONE_LOW = 0x7EF0A5;
+constexpr uint32_t COLOR_ZONE_MID = 0x7BC8FF;
+constexpr uint32_t COLOR_ZONE_HIGH = 0xFFD166;
+
 lv_obj_t *s_speed_label = nullptr;
+lv_obj_t *s_speed_unit_label = nullptr;
+lv_obj_t *s_trip_label = nullptr;
+lv_obj_t *s_clock_label = nullptr;
+lv_obj_t *s_incline_label = nullptr;
 lv_obj_t *s_hr_label = nullptr;
-lv_obj_t *s_slope_label = nullptr;
+lv_obj_t *s_hr_zone_label = nullptr;
+lv_obj_t *s_route_arrow_label = nullptr;
+lv_obj_t *s_route_dir_label = nullptr;
 lv_obj_t *s_battery_label = nullptr;
+lv_timer_t *s_refresh_timer = nullptr;
 
 // Set by the DataCenter callbacks below (which may run on Core 0 -- see
 // CLAUDE.md's "no direct LVGL access from Core 0" rule) and consumed by
@@ -23,8 +53,22 @@ lv_obj_t *s_battery_label = nullptr;
 // (unlike DataCenter's own cross-topic table, which genuinely needs one).
 volatile bool s_gps_dirty = false;
 volatile bool s_hr_dirty = false;
+volatile bool s_imu_dirty = false;
+volatile bool s_battery_dirty = false;
 
-// DataCenter callback -- may run on Core 0 (whichever core published). Must
+// Trip accumulator, only ever touched from the Core-1 refresh timer (and
+// Page_Dashboard_ResetTrip(), which the settings page calls from the same core).
+double s_trip_km = 0.0;
+double s_prev_lat = 0.0;
+double s_prev_lon = 0.0;
+bool s_has_prev_fix = false;
+
+// Last speed we were handed, kept so a unit change can re-render immediately
+// instead of waiting for the next GPS publish.
+float s_last_speed_kmh = 0.0f;
+bool s_has_speed = false;
+
+// DataCenter callbacks -- may run on Core 0 (whichever core published). Must
 // NOT touch any LVGL object; only ever set a flag for the Core-1 refresh
 // timer to pick up.
 void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
@@ -43,6 +87,76 @@ void OnHeartRatePublished(const char *topic, const void *data, uint32_t size, vo
     s_hr_dirty = true;
 }
 
+void OnImuPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
+    (void)topic;
+    (void)data;
+    (void)size;
+    (void)user_arg;
+    s_imu_dirty = true;
+}
+
+void OnBatteryPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
+    (void)topic;
+    (void)data;
+    (void)size;
+    (void)user_arg;
+    s_battery_dirty = true;
+}
+
+// Great-circle distance in metres. The ported demo used
+// TinyGPSPlus::distanceBetween(); this branch has no TinyGPS dependency
+// (platformio.ini uses the SparkFun u-blox library), so compute it directly.
+double DistanceMetres(double lat1, double lon1, double lat2, double lon2) {
+    constexpr double kEarthRadiusM = 6371000.0;
+    constexpr double kDegToRad = M_PI / 180.0;
+
+    const double dlat = (lat2 - lat1) * kDegToRad;
+    const double dlon = (lon2 - lon1) * kDegToRad;
+    const double a = sin(dlat / 2.0) * sin(dlat / 2.0) +
+                     cos(lat1 * kDegToRad) * cos(lat2 * kDegToRad) * sin(dlon / 2.0) *
+                         sin(dlon / 2.0);
+    return 2.0 * kEarthRadiusM * atan2(sqrt(a), sqrt(1.0 - a));
+}
+
+// A helper so the caption/value pairs below stay one line each at the call site.
+lv_obj_t *MakeLabel(lv_obj_t *parent, const char *text, const lv_font_t *font, uint32_t color,
+                    lv_align_t align, lv_coord_t x, lv_coord_t y) {
+    lv_obj_t *label = lv_label_create(parent);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_obj_align(label, align, x, y);
+    return label;
+}
+
+void UpdateHeartRateZone(uint8_t bpm) {
+    uint32_t color = COLOR_ZONE_LOW;
+    const char *zone_name = "Zone 1";
+
+    if (bpm >= ZONE4_LOW) {
+        color = COLOR_ZONE_HIGH;
+        zone_name = "Zone 4";
+    } else if (bpm >= ZONE3_LOW) {
+        color = COLOR_ZONE_MID;
+        zone_name = "Zone 3";
+    } else if (bpm >= ZONE2_LOW) {
+        color = COLOR_ZONE_LOW;
+        zone_name = "Zone 2";
+    }
+
+    lv_label_set_text(s_hr_zone_label, zone_name);
+    lv_obj_set_style_bg_color(s_hr_zone_label, lv_color_hex(color), 0);
+}
+
+void RenderSpeedAndTrip() {
+    if (s_has_speed) {
+        lv_label_set_text_fmt(s_speed_label, "%.1f", Settings_SpeedFromKmh(s_last_speed_kmh));
+    }
+    lv_label_set_text(s_speed_unit_label, Settings_SpeedUnitLabel());
+    lv_label_set_text_fmt(s_trip_label, "%.2f %s", Settings_DistanceFromKm((float)s_trip_km),
+                          Settings_DistanceUnitLabel());
+}
+
 // The only place in this file allowed to touch LVGL objects: an lv_timer
 // callback runs exclusively from lv_timer_handler(), which this project only
 // ever calls from lvgl_task() on Core 1 (see src/system/LvglTask.cpp).
@@ -53,9 +167,26 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_gps_dirty = false;
         GPS_Info_t gps;
         if (DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps))) {
-            float speed_kmh = gps.speed * 3.6f;
-            lv_meter_set_indicator_value(s_speed_meter, s_speed_needle, (int32_t)lroundf(speed_kmh));
-            lv_label_set_text_fmt(s_speed_label, "%.1f km/h", speed_kmh);
+            s_last_speed_kmh = gps.speed * 3.6f;
+            s_has_speed = true;
+
+            // GPS_Info_t carries no fix-valid flag, so treat an exactly-zero
+            // coordinate pair as "no fix" rather than accumulating a trip leg
+            // from the Gulf of Guinea. The 1km/tick ceiling drops the single
+            // bogus jump a cold fix produces before it settles.
+            const bool has_fix = (gps.lat != 0.0) || (gps.lon != 0.0);
+            if (has_fix) {
+                if (s_has_prev_fix) {
+                    const double step_m = DistanceMetres(s_prev_lat, s_prev_lon, gps.lat, gps.lon);
+                    if (step_m < 1000.0) {
+                        s_trip_km += step_m / 1000.0;
+                    }
+                }
+                s_prev_lat = gps.lat;
+                s_prev_lon = gps.lon;
+                s_has_prev_fix = true;
+            }
+            RenderSpeedAndTrip();
         }
     }
 
@@ -63,69 +194,194 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_hr_dirty = false;
         HeartRate_t hr;
         if (DataCenter_Pull(TOPIC_HEART_RATE, &hr, sizeof(hr))) {
-            lv_label_set_text_fmt(s_hr_label, LV_SYMBOL_CHARGE " %d bpm", hr.bpm);
+            lv_label_set_text_fmt(s_hr_label, "%d", hr.bpm);
+            UpdateHeartRateZone(hr.bpm);
+        }
+    }
+
+    if (s_battery_dirty) {
+        s_battery_dirty = false;
+        Battery_t battery;
+        if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
+            // Icon steps with the charge so the corner reads at a glance
+            // without parsing the number.
+            const char *icon = LV_SYMBOL_BATTERY_EMPTY;
+            if (battery.on_usb) {
+                icon = LV_SYMBOL_CHARGE;
+            } else if (battery.percent >= 87) {
+                icon = LV_SYMBOL_BATTERY_FULL;
+            } else if (battery.percent >= 62) {
+                icon = LV_SYMBOL_BATTERY_3;
+            } else if (battery.percent >= 37) {
+                icon = LV_SYMBOL_BATTERY_2;
+            } else if (battery.percent >= 12) {
+                icon = LV_SYMBOL_BATTERY_1;
+            }
+            lv_label_set_text_fmt(s_battery_label, "%s %d%%", icon, battery.percent);
+            // Red below the curve's low-battery point, so it stands out
+            // against the otherwise uniform caption grey.
+            lv_obj_set_style_text_color(
+                s_battery_label,
+                lv_color_hex((!battery.on_usb && battery.percent <= 10) ? 0xFF6B6B : COLOR_CAPTION),
+                0);
+        }
+    }
+
+    if (s_imu_dirty) {
+        s_imu_dirty = false;
+        IMU_Data_t imu;
+        if (DataCenter_Pull(TOPIC_IMU_DATA, &imu, sizeof(imu))) {
+            // Grade as a percentage of rise over run, from the IMU's pitch.
+            const float grade = tanf(imu.pitch * (float)M_PI / 180.0f) * 100.0f;
+            lv_label_set_text_fmt(s_incline_label, "%+.1f%%", grade);
         }
     }
 }
 
+void OnSettingsClicked(lv_event_t *e) {
+    PageDashboard *self = (PageDashboard *)lv_event_get_user_data(e);
+    if (self != nullptr && self->_Manager != nullptr) {
+        self->_Manager->Push(PAGE_NAME_SETTINGS);
+    }
+}
+
+// One Account per subscription. File-scope rather than members because the
+// DataCenter callbacks above are plain functions and there is only ever one
+// dashboard instance.
+Account s_gps_account("Page_Dashboard/GPS", OnGpsPublished);
+Account s_hr_account("Page_Dashboard/HeartRate", OnHeartRatePublished);
+Account s_imu_account("Page_Dashboard/IMU", OnImuPublished);
+Account s_battery_account("Page_Dashboard/Battery", OnBatteryPublished);
+
 } // namespace
 
-void Page_Dashboard_Create(lv_obj_t *parent) {
-    if (parent == nullptr) {
-        parent = lv_scr_act();
+void Page_Dashboard_ResetTrip() {
+    s_trip_km = 0.0;
+    s_has_prev_fix = false;
+    if (s_trip_label != nullptr) {
+        RenderSpeedAndTrip();
     }
-    lv_obj_set_style_bg_color(parent, lv_color_black(), 0);
+}
 
-    // ---- Speed meter ----
-    s_speed_meter = lv_meter_create(parent);
-    lv_obj_set_size(s_speed_meter, 200, 200);
-    lv_obj_align(s_speed_meter, LV_ALIGN_TOP_MID, 0, 10);
+PageDashboard::PageDashboard() {}
 
-    lv_meter_scale_t *scale = lv_meter_add_scale(s_speed_meter);
-    lv_meter_set_scale_ticks(s_speed_meter, scale, 21, 2, 10, lv_palette_main(LV_PALETTE_GREY));
-    lv_meter_set_scale_major_ticks(s_speed_meter, scale, 4, 4, 15, lv_color_white(), 10);
-    lv_meter_set_scale_range(s_speed_meter, scale, 0, 60, 270, 135); // 0-60 km/h: a plausible bike speed range, not a calibrated value
+void PageDashboard::onViewLoad() {
+    lv_obj_t *parent = _root;
+    lv_obj_set_style_bg_color(parent, lv_color_hex(COLOR_BG), 0);
+    lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_speed_needle = lv_meter_add_needle_line(s_speed_meter, scale, 4, lv_palette_main(LV_PALETTE_RED), -10);
+    MakeLabel(parent, "PEGASUS", &lv_font_montserrat_14, COLOR_CAPTION, LV_ALIGN_TOP_MID, 0, 14);
 
-    s_speed_label = lv_label_create(s_speed_meter);
-    lv_obj_set_style_text_font(s_speed_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_speed_label, LV_ALIGN_CENTER, 0, 40);
-    lv_label_set_text(s_speed_label, "-- km/h");
+    // ---- Settings button (status-bar corner) ----
+    // The project's first interactive widget: everything else on this page is
+    // a passive readout.
+    lv_obj_t *settings_btn = lv_btn_create(parent);
+    lv_obj_set_size(settings_btn, 40, 32);
+    lv_obj_align(settings_btn, LV_ALIGN_TOP_LEFT, 6, 6);
+    lv_obj_set_style_bg_color(settings_btn, lv_color_hex(0x1D2A36), 0);
+    lv_obj_set_style_bg_color(settings_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+    lv_obj_set_style_radius(settings_btn, 8, 0);
+    lv_obj_set_style_shadow_width(settings_btn, 0, 0);
+    lv_obj_add_event_cb(settings_btn, OnSettingsClicked, LV_EVENT_CLICKED, this);
+
+    lv_obj_t *gear = lv_label_create(settings_btn);
+    lv_label_set_text(gear, LV_SYMBOL_SETTINGS);
+    lv_obj_set_style_text_color(gear, lv_color_hex(COLOR_VALUE), 0);
+    lv_obj_center(gear);
+
+    // ---- Battery (status-bar corner) ----
+    // The device's own battery, published to TOPIC_BATTERY by the Core 0
+    // monitor in hal/Battery.cpp -- not to be confused with
+    // HeartRate_t.battery, which is the HR strap's.
+    s_battery_label = MakeLabel(parent, LV_SYMBOL_BATTERY_FULL " --%", &lv_font_montserrat_12,
+                                COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -14, 16);
+
+    // ---- Speed: the one value readable at a glance while riding ----
+    s_speed_label = MakeLabel(parent, "--", &lv_font_montserrat_48, COLOR_VALUE, LV_ALIGN_TOP_MID,
+                              0, 38);
+    s_speed_unit_label = MakeLabel(parent, Settings_SpeedUnitLabel(), &lv_font_montserrat_14,
+                                   COLOR_ACCENT, LV_ALIGN_TOP_MID, 0, 92);
+
+    // ---- Trip ----
+    MakeLabel(parent, "TRIP", &lv_font_montserrat_12, COLOR_CAPTION, LV_ALIGN_TOP_LEFT, 18, 118);
+    s_trip_label = MakeLabel(parent, "0.00 km", &lv_font_montserrat_24, COLOR_VALUE,
+                             LV_ALIGN_TOP_LEFT, 18, 138);
+
+    // ---- Clock ----
+    // Placeholder: no time source exists yet. GPS_Info_t carries no date/time
+    // (the ported demo read it from TinyGPSPlus), and there is no RTC topic,
+    // so this stays "--:--:--" rather than showing an invented value. Wire it
+    // when GPS time or an RTC lands in DataCenter.
+    MakeLabel(parent, "TIME", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_LEFT, 18, 196);
+    s_clock_label = MakeLabel(parent, "--:--:--", &lv_font_montserrat_18, COLOR_VALUE,
+                              LV_ALIGN_TOP_LEFT, 18, 212);
+
+    // ---- Incline ----
+    MakeLabel(parent, "INCLINE", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_MID, 0, 196);
+    s_incline_label = MakeLabel(parent, "--%", &lv_font_montserrat_18, COLOR_ACCENT,
+                                LV_ALIGN_TOP_MID, 0, 212);
 
     // ---- Heart rate ----
-    s_hr_label = lv_label_create(parent);
-    lv_obj_set_style_text_font(s_hr_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_hr_label, LV_ALIGN_TOP_MID, 0, 220);
-    lv_label_set_text(s_hr_label, LV_SYMBOL_CHARGE " -- bpm");
+    MakeLabel(parent, "HEART RATE", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -18,
+              196);
+    s_hr_label = MakeLabel(parent, "--", &lv_font_montserrat_18, COLOR_VALUE, LV_ALIGN_TOP_RIGHT,
+                           -38, 212);
+    MakeLabel(parent, "bpm", &lv_font_montserrat_10, COLOR_VALUE, LV_ALIGN_TOP_RIGHT, -12, 220);
 
-    // ---- Slope icon ----
-    // Placeholder: this task's Prompt only asks to subscribe to GPS_Info and
-    // Sensor/HeartRate, so there's no wired data source for grade/slope yet
-    // (candidates: Sensor/IMU's pitch, or a GPS-altitude-derived grade calc
-    // -- neither implemented here). Widget exists per the "create a slope
-    // icon" ask; it just doesn't update yet.
-    s_slope_label = lv_label_create(parent);
-    lv_obj_set_style_text_font(s_slope_label, &lv_font_montserrat_14, 0);
-    lv_obj_align(s_slope_label, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_label_set_text(s_slope_label, LV_SYMBOL_UP " --%");
+    s_hr_zone_label = lv_label_create(parent);
+    lv_label_set_text(s_hr_zone_label, "--");
+    lv_obj_set_style_text_font(s_hr_zone_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_hr_zone_label, lv_color_hex(COLOR_BADGE_TEXT), 0);
+    lv_obj_set_style_bg_color(s_hr_zone_label, lv_color_hex(COLOR_ZONE_LOW), 0);
+    lv_obj_set_style_bg_opa(s_hr_zone_label, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(s_hr_zone_label, 8, 0);
+    lv_obj_set_style_pad_ver(s_hr_zone_label, 2, 0);
+    lv_obj_set_style_radius(s_hr_zone_label, 8, 0);
+    lv_obj_align(s_hr_zone_label, LV_ALIGN_TOP_RIGHT, -18, 238);
 
-    // ---- Battery indicator ----
-    // Placeholder for the same reason -- this is the device's own battery
-    // level, which has no DataCenter topic yet (not to be confused with
-    // HeartRate_t.battery, which is the HR strap's battery).
-    s_battery_label = lv_label_create(parent);
-    lv_obj_set_style_text_font(s_battery_label, &lv_font_montserrat_14, 0);
-    lv_obj_align(s_battery_label, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_label_set_text(s_battery_label, LV_SYMBOL_BATTERY_FULL " --%");
+    // ---- Route / turn-by-turn ----
+    // Placeholder: CLAUDE.md §5 plans turn arrows pushed over BLE from the
+    // phone, and nothing publishes them yet. The ported demo cycled through
+    // fake directions on a timer; that is deliberately not carried over, so
+    // the screen never shows a turn that isn't real.
+    MakeLabel(parent, "ROUTE", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -18, 264);
+    s_route_arrow_label = MakeLabel(parent, LV_SYMBOL_UP, &lv_font_montserrat_28, COLOR_ACCENT,
+                                    LV_ALIGN_TOP_RIGHT, -18, 278);
+    s_route_dir_label = MakeLabel(parent, "NO ROUTE", &lv_font_montserrat_12, COLOR_VALUE,
+                                  LV_ALIGN_TOP_RIGHT, -18, 300);
 
-    // ---- DataCenter subscriptions ----
-    // Static: one Account per subscription, living for the program's
-    // lifetime (Page_Dashboard is never destroyed in the current design).
-    static Account gps_account("Page_Dashboard/GPS", OnGpsPublished);
-    static Account hr_account("Page_Dashboard/HeartRate", OnHeartRatePublished);
-    DataCenter_Subscribe(TOPIC_GPS_INFO, &gps_account);
-    DataCenter_Subscribe(TOPIC_HEART_RATE, &hr_account);
+    RenderSpeedAndTrip();
 
-    lv_timer_create(RefreshTimerCallback, 100, nullptr);
+    DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
+    DataCenter_Subscribe(TOPIC_HEART_RATE, &s_hr_account);
+    DataCenter_Subscribe(TOPIC_IMU_DATA, &s_imu_account);
+    DataCenter_Subscribe(TOPIC_BATTERY, &s_battery_account);
+
+    s_refresh_timer = lv_timer_create(RefreshTimerCallback, 100, nullptr);
+}
+
+void PageDashboard::onViewUnload() {
+    // The timer outlives the widgets unless it is torn down here, and would
+    // then write to freed lv_obj pointers on its next tick.
+    if (s_refresh_timer != nullptr) {
+        lv_timer_del(s_refresh_timer);
+        s_refresh_timer = nullptr;
+    }
+
+    DataCenter_Unsubscribe(TOPIC_GPS_INFO, &s_gps_account);
+    DataCenter_Unsubscribe(TOPIC_HEART_RATE, &s_hr_account);
+    DataCenter_Unsubscribe(TOPIC_IMU_DATA, &s_imu_account);
+    DataCenter_Unsubscribe(TOPIC_BATTERY, &s_battery_account);
+
+    s_speed_label = nullptr;
+    s_speed_unit_label = nullptr;
+    s_trip_label = nullptr;
+    s_clock_label = nullptr;
+    s_incline_label = nullptr;
+    s_hr_label = nullptr;
+    s_hr_zone_label = nullptr;
+    s_route_arrow_label = nullptr;
+    s_route_dir_label = nullptr;
+    s_battery_label = nullptr;
 }

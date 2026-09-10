@@ -38,11 +38,18 @@ typedef struct {
     bool motion_detected;  // Any-Motion wake trigger state
 } IMU_Data_t;
 
+typedef struct {
+    uint16_t millivolts; // at the battery, i.e. already past the 2:1 divider
+    uint8_t percent;     // 0-100, from the LiPo discharge curve
+    bool on_usb;         // true when the rail reads above any real LiPo, i.e. USB-powered
+} Battery_t;
+
 // Well-known topic names (CLAUDE.md §4 examples: "Sensor/HeartRate", "GPS_Info").
 // Add new topics by extending the registration table in DataCenter.cpp.
 extern const char *const TOPIC_GPS_INFO;
 extern const char *const TOPIC_HEART_RATE;
 extern const char *const TOPIC_IMU_DATA;
+extern const char *const TOPIC_BATTERY;
 
 // Called by a subscriber on every DataCenter_Publish() to that topic, with a
 // fresh copy of the published data (NOT a pointer into DataCenter's internal

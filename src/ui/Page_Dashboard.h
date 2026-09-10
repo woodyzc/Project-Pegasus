@@ -1,17 +1,22 @@
 #pragma once
 
-#include <lvgl.h>
+#include "../system/PageManager/PageBase.h"
 
-// Main bike-computer dashboard: speed meter, heart-rate label, slope icon,
-// and battery indicator. Subscribes itself to the DataCenter's GPS_Info and
-// Sensor/HeartRate topics (see src/system/DataCenter.h) and keeps the
-// speed/heart-rate widgets in sync as new data is published.
-//
-// Preconditions (caller's responsibility):
-//   - lv_init() and DataCenter_Init() have already run.
-//   - Called from Core 1 only. Like all LVGL object creation, this is not
-//     safe to call from Core 0 -- e.g. call it from setup() before
-//     LvglTask_Start(), not from a sensor task.
-//
-// `parent`: object to build the dashboard under, or nullptr for lv_scr_act().
-void Page_Dashboard_Create(lv_obj_t *parent);
+// Names pages are registered under with PageManager (see main.cpp).
+#define PAGE_NAME_DASHBOARD "Dashboard"
+#define PAGE_NAME_SETTINGS "Settings"
+
+// The riding screen: speed, trip, time, incline, heart rate, route.
+// Subscribes to DataCenter on load and renders from the Core-1 LVGL timer.
+class PageDashboard : public PageBase {
+public:
+    PageDashboard();
+    virtual ~PageDashboard() {}
+
+    virtual void onViewLoad() override;
+    virtual void onViewUnload() override;
+};
+
+// Zero the trip accumulator. Called from the settings page; safe only from
+// Core 1 (LVGL context), which is where both pages run.
+void Page_Dashboard_ResetTrip();

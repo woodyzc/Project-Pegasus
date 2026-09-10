@@ -62,10 +62,20 @@
 #define LV_USE_LINE 1
 #define LV_USE_METER 1
 #define LV_USE_TABLE 1
+#define LV_USE_SLIDER 1 /* Page_Settings: brightness */
+#define LV_USE_SWITCH 1 /* Page_Settings: units toggle */
 
-#define LV_FONT_MONTSERRAT_14 1
-#define LV_FONT_MONTSERRAT_24 1
-#define LV_FONT_MONTSERRAT_36 1
+/* Font sizes used by Page_Dashboard's layout. Every size referenced from C++
+ * must be enabled here: LVGL compiles each lv_font_montserrat_*.c behind an
+ * #if on these macros, so a missing one links as
+ * "undefined reference to `lv_font_montserrat_NN'". */
+#define LV_FONT_MONTSERRAT_10 1 /* captions (TRIP, INCLINE, HEART RATE, ...) */
+#define LV_FONT_MONTSERRAT_12 1 /* route direction text */
+#define LV_FONT_MONTSERRAT_14 1 /* title, zone badge */
+#define LV_FONT_MONTSERRAT_18 1 /* clock / incline / bpm readouts */
+#define LV_FONT_MONTSERRAT_24 1 /* trip distance */
+#define LV_FONT_MONTSERRAT_28 1 /* route arrow glyph */
+#define LV_FONT_MONTSERRAT_48 1 /* primary speed readout */
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
 #define LV_USE_THEME_DEFAULT 1

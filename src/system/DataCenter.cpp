@@ -7,6 +7,7 @@
 const char *const TOPIC_GPS_INFO = "GPS_Info";
 const char *const TOPIC_HEART_RATE = "Sensor/HeartRate";
 const char *const TOPIC_IMU_DATA = "Sensor/IMU";
+const char *const TOPIC_BATTERY = "Sensor/Battery";
 
 Account::Account(const char *id, DataCenter_Callback_t callback, void *user_arg)
     : ID(id), Callback(callback), UserArg(user_arg) {
@@ -28,6 +29,7 @@ Topic s_topics[] = {
     {TOPIC_GPS_INFO, sizeof(GPS_Info_t), nullptr, false, {}},
     {TOPIC_HEART_RATE, sizeof(HeartRate_t), nullptr, false, {}},
     {TOPIC_IMU_DATA, sizeof(IMU_Data_t), nullptr, false, {}},
+    {TOPIC_BATTERY, sizeof(Battery_t), nullptr, false, {}},
 };
 constexpr size_t kTopicCount = sizeof(s_topics) / sizeof(s_topics[0]);
 
