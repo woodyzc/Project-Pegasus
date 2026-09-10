@@ -10,7 +10,10 @@
 #include "../system/DataCenter.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
+#include "../navigation/GpxTrack.h"
 #include "../system/TimeZone.h"
+#include "MapView.h"
+#include "Page_Map.h"
 #include "Page_Map.h"
 
 // Visual design ported from the agents/lvgl-ui-layout-speed-odometer-clock
@@ -28,6 +31,11 @@ constexpr uint32_t COLOR_CAPTION = 0x93A4B8; // small all-caps labels
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;   // primary readouts
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
 constexpr uint32_t COLOR_BADGE_TEXT = 0x081015;
+constexpr uint32_t COLOR_CELL_BG = 0x141E27;
+constexpr uint32_t COLOR_CELL_BORDER = 0x24313D;
+// Filled behind the incline value on a real climb: the grade matters most
+// when it is large, and colour carries that faster than digits do.
+constexpr uint32_t COLOR_CLIMB_FILL = 0x3A2E12;
 
 // A turn older than this is treated as gone (phone closed, app backgrounded,
 // link dropped without a clean disconnect).
@@ -44,6 +52,7 @@ constexpr uint32_t COLOR_ZONE_HIGH = 0xFFD166;
 lv_obj_t *s_speed_label = nullptr;
 lv_obj_t *s_speed_unit_label = nullptr;
 lv_obj_t *s_trip_label = nullptr;
+lv_obj_t *s_trip_unit_label = nullptr;
 lv_obj_t *s_clock_label = nullptr;
 lv_obj_t *s_clock_caption = nullptr;
 
@@ -52,7 +61,22 @@ lv_obj_t *s_clock_caption = nullptr;
 const char *s_active_tz = nullptr;
 lv_obj_t *s_incline_label = nullptr;
 lv_obj_t *s_hr_label = nullptr;
-lv_obj_t *s_hr_zone_label = nullptr;
+lv_obj_t *s_incline_cell = nullptr;
+lv_obj_t *s_zone_marker = nullptr;
+lv_obj_t *s_zone_segments[4] = {nullptr, nullptr, nullptr, nullptr};
+
+// The navigation slot holds one of two things depending on the chosen mode:
+// a turn card in TBT, or a live breadcrumb map in GPX. Only one is created,
+// so the other costs nothing.
+lv_obj_t *s_nav_cell = nullptr;
+MapView_t s_map_view;
+bool s_nav_is_map = false;
+
+// Storage for the inline map. lv_line keeps a pointer to the point array
+// rather than copying it, so these must be file-scope.
+constexpr size_t INLINE_MAP_POINTS = 256;
+lv_point_t s_map_points[INLINE_MAP_POINTS];
+MapPoint_t s_map_projected[INLINE_MAP_POINTS];
 lv_obj_t *s_route_arrow_label = nullptr;
 lv_obj_t *s_route_dir_label = nullptr;
 lv_obj_t *s_route_dist_label = nullptr;
@@ -155,23 +179,62 @@ lv_obj_t *MakeLabel(lv_obj_t *parent, const char *text, const lv_font_t *font, u
     return label;
 }
 
-void UpdateHeartRateZone(uint8_t bpm) {
-    uint32_t color = COLOR_ZONE_LOW;
-    const char *zone_name = "Zone 1";
+// One bordered cell: caption at the top, value at the bottom. Cells bound
+// their contents, so a long value cannot drift into a neighbour -- which is
+// exactly how the clock ended up on top of the incline figure when these were
+// free-floating labels.
+lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
+                   const char *caption) {
+    lv_obj_t *cell = lv_obj_create(parent);
+    lv_obj_set_size(cell, w, h);
+    lv_obj_set_pos(cell, x, y);
+    lv_obj_set_style_bg_color(cell, lv_color_hex(COLOR_CELL_BG), 0);
+    lv_obj_set_style_border_color(cell, lv_color_hex(COLOR_CELL_BORDER), 0);
+    lv_obj_set_style_border_width(cell, 1, 0);
+    lv_obj_set_style_radius(cell, 4, 0);
+    lv_obj_set_style_pad_all(cell, 0, 0);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
 
+    lv_obj_t *label = lv_label_create(cell);
+    lv_label_set_text(label, caption);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 6, 4);
+    return cell;
+}
+
+// The unit set small beside its value rather than on its own line: a 240px
+// panel cannot spend a whole row on "km/h".
+lv_obj_t *MakeUnit(lv_obj_t *cell, const char *text) {
+    lv_obj_t *label = lv_label_create(cell);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
+    return label;
+}
+
+void UpdateHeartRateZone(uint8_t bpm) {
+    int zone = 0; // 0-based index into the four bands
     if (bpm >= ZONE4_LOW) {
-        color = COLOR_ZONE_HIGH;
-        zone_name = "Zone 4";
+        zone = 3;
     } else if (bpm >= ZONE3_LOW) {
-        color = COLOR_ZONE_MID;
-        zone_name = "Zone 3";
+        zone = 2;
     } else if (bpm >= ZONE2_LOW) {
-        color = COLOR_ZONE_LOW;
-        zone_name = "Zone 2";
+        zone = 1;
     }
 
-    lv_label_set_text(s_hr_zone_label, zone_name);
-    lv_obj_set_style_bg_color(s_hr_zone_label, lv_color_hex(color), 0);
+    // A marker sliding along a coloured bar rather than a text badge: the
+    // position reads at a glance on a bouncing bike, where the words
+    // "Zone 3" do not.
+    for (int i = 0; i < 4; i++) {
+        if (s_zone_segments[i] != nullptr) {
+            lv_obj_set_style_bg_opa(s_zone_segments[i], (i == zone) ? LV_OPA_COVER : LV_OPA_40, 0);
+        }
+    }
+    if (s_zone_marker != nullptr) {
+        const lv_coord_t seg_w = 204 / 4;
+        lv_obj_set_x(s_zone_marker, (lv_coord_t)(18 + zone * seg_w + seg_w / 2 - 4));
+    }
 }
 
 // LVGL's built-in symbol font has no diagonal or u-turn arrows, so the
@@ -215,6 +278,10 @@ void FormatTbtDistance(uint32_t metres, char *out, size_t out_size) {
 }
 
 void ClearTbt() {
+    // In GPX mode the slot holds a map and these labels do not exist.
+    if (s_route_arrow_label == nullptr) {
+        return;
+    }
     lv_label_set_text(s_route_arrow_label, LV_SYMBOL_UP);
     lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(0x3A4854), 0);
     lv_label_set_text(s_route_dist_label, "");
@@ -226,8 +293,10 @@ void RenderSpeedAndTrip() {
         lv_label_set_text_fmt(s_speed_label, "%.1f", Settings_SpeedFromKmh(s_last_speed_kmh));
     }
     lv_label_set_text(s_speed_unit_label, Settings_SpeedUnitLabel());
-    lv_label_set_text_fmt(s_trip_label, "%.2f %s", Settings_DistanceFromKm((float)s_trip_km),
-                          Settings_DistanceUnitLabel());
+    lv_label_set_text_fmt(s_trip_label, "%.2f", Settings_DistanceFromKm((float)s_trip_km));
+    if (s_trip_unit_label != nullptr) {
+        lv_label_set_text(s_trip_unit_label, Settings_DistanceUnitLabel());
+    }
 }
 
 // The only place in this file allowed to touch LVGL objects: an lv_timer
@@ -260,6 +329,12 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             }
             RenderSpeedAndTrip();
 
+            // The inline map follows the rider on the same publish that moves
+            // the speed readout.
+            if (s_nav_is_map) {
+                MapView_SetPosition(&s_map_view, &gps);
+            }
+
             // Local time, derived from the fix itself: the position picks the
             // timezone and newlib applies its DST rule. No setting, no
             // network. Needs a valid fix as well as valid time -- without a
@@ -279,20 +354,18 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 struct tm local;
                 localtime_r(&epoch, &local);
 
-                lv_label_set_text_fmt(s_clock_label, "%02d:%02d:%02d", local.tm_hour,
-                                      local.tm_min, local.tm_sec);
+                lv_label_set_text_fmt(s_clock_label, "%02d:%02d", local.tm_hour, local.tm_min);
 
                 // The caption carries the zone abbreviation newlib resolved
                 // (EST, EDT, CST...), so the displayed hour is attributable
                 // rather than just asserted. A guessed zone says so.
                 char zone[8] = {0};
                 strftime(zone, sizeof(zone), "%Z", &local);
-                lv_label_set_text_fmt(s_clock_caption, approximate ? "TIME ~%s" : "TIME %s", zone);
+                lv_label_set_text_fmt(s_clock_caption, approximate ? "~%s" : "%s", zone);
             } else if (gps.time_valid) {
                 // Time but no fix: UTC is all that can honestly be shown.
-                lv_label_set_text_fmt(s_clock_label, "%02u:%02u:%02u", gps.hour, gps.minute,
-                                      gps.second);
-                lv_label_set_text(s_clock_caption, "TIME UTC");
+                lv_label_set_text_fmt(s_clock_label, "%02u:%02u", gps.hour, gps.minute);
+                lv_label_set_text(s_clock_caption, "UTC");
             }
         }
     }
@@ -334,7 +407,7 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         }
     }
 
-    if (s_tbt_dirty) {
+    if (s_tbt_dirty && !s_nav_is_map) {
         s_tbt_dirty = false;
         TBT_Directive_t tbt;
         if (DataCenter_Pull(TOPIC_NAV_TBT, &tbt, sizeof(tbt))) {
@@ -356,7 +429,7 @@ void RefreshTimerCallback(lv_timer_t *timer) {
 
     // Drop a stale turn rather than leaving the rider following an
     // instruction the phone stopped confirming.
-    if (s_tbt_last_ms != 0 && lv_tick_elaps(s_tbt_last_ms) > TBT_STALE_MS) {
+    if (!s_nav_is_map && s_tbt_last_ms != 0 && lv_tick_elaps(s_tbt_last_ms) > TBT_STALE_MS) {
         ClearTbt();
         s_tbt_last_ms = 0;
     }
@@ -367,7 +440,9 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         if (DataCenter_Pull(TOPIC_IMU_DATA, &imu, sizeof(imu))) {
             // Grade as a percentage of rise over run, from the IMU's pitch.
             const float grade = tanf(imu.pitch * (float)M_PI / 180.0f) * 100.0f;
-            lv_label_set_text_fmt(s_incline_label, "%+.1f%%", grade);
+            lv_label_set_text_fmt(s_incline_label, "%+.1f", grade);
+            lv_obj_set_style_bg_color(
+                s_incline_cell, lv_color_hex(grade >= 3.0f ? COLOR_CLIMB_FILL : COLOR_CELL_BG), 0);
         }
     }
 }
@@ -415,15 +490,22 @@ void PageDashboard::onViewLoad() {
 
     MakeLabel(parent, "PEGASUS", &lv_font_montserrat_14, COLOR_CAPTION, LV_ALIGN_TOP_MID, 0, 14);
 
-    // ---- Settings button (status-bar corner) ----
-    // The project's first interactive widget: everything else on this page is
-    // a passive readout.
+    // ---- Layout ----
+    // Navigation dominates: on a bike, the next turn or where the trail goes
+    // is what a glance is for. Metrics sit underneath in equal cells, each
+    // bounding its own contents.
+    //
+    // The clock moved into the header, replacing a "PEGASUS" wordmark that
+    // told the rider nothing they did not already know -- and that freed a
+    // whole cell for a metric.
+
+    // ---- Header ----
     lv_obj_t *settings_btn = lv_btn_create(parent);
-    lv_obj_set_size(settings_btn, 40, 32);
-    lv_obj_align(settings_btn, LV_ALIGN_TOP_LEFT, 6, 6);
+    lv_obj_set_size(settings_btn, 36, 26);
+    lv_obj_align(settings_btn, LV_ALIGN_TOP_LEFT, 6, 4);
     lv_obj_set_style_bg_color(settings_btn, lv_color_hex(0x1D2A36), 0);
     lv_obj_set_style_bg_color(settings_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
-    lv_obj_set_style_radius(settings_btn, 8, 0);
+    lv_obj_set_style_radius(settings_btn, 6, 0);
     lv_obj_set_style_shadow_width(settings_btn, 0, 0);
     lv_obj_add_event_cb(settings_btn, OnSettingsClicked, LV_EVENT_CLICKED, this);
 
@@ -432,97 +514,153 @@ void PageDashboard::onViewLoad() {
     lv_obj_set_style_text_color(gear, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_center(gear);
 
-    // ---- Map button ----
-    // Only in GPX mode: in TBT mode there is no trail to draw, and the ROUTE
-    // panel below already carries the turn. Offering a button to an empty map
-    // would be a dead end.
-    if (Settings_GetNavMode() == NAV_MODE_GPX) {
-        lv_obj_t *map_btn = lv_btn_create(parent);
-        lv_obj_set_size(map_btn, 40, 32);
-        lv_obj_align(map_btn, LV_ALIGN_TOP_LEFT, 50, 6);
-        lv_obj_set_style_bg_color(map_btn, lv_color_hex(0x1D2A36), 0);
-        lv_obj_set_style_bg_color(map_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
-        lv_obj_set_style_radius(map_btn, 8, 0);
-        lv_obj_set_style_shadow_width(map_btn, 0, 0);
-        lv_obj_add_event_cb(map_btn, OnMapClicked, LV_EVENT_CLICKED, this);
+    s_clock_label = lv_label_create(parent);
+    lv_obj_set_style_text_font(s_clock_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_clock_label, lv_color_hex(COLOR_VALUE), 0);
+    lv_label_set_text(s_clock_label, "--:--");
+    lv_obj_align(s_clock_label, LV_ALIGN_TOP_MID, -10, 6);
 
-        lv_obj_t *map_icon = lv_label_create(map_btn);
-        lv_label_set_text(map_icon, LV_SYMBOL_GPS);
-        lv_obj_set_style_text_color(map_icon, lv_color_hex(COLOR_VALUE), 0);
-        lv_obj_center(map_icon);
+    s_clock_caption = lv_label_create(parent);
+    lv_obj_set_style_text_font(s_clock_caption, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_clock_caption, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_text(s_clock_caption, "");
+    lv_obj_align_to(s_clock_caption, s_clock_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -2);
+
+    // ---- Battery ----
+    // The device's own battery, published to TOPIC_BATTERY by the Core 0
+    // monitor in hal/Battery.cpp -- not HeartRate_t.battery, which is the
+    // strap's.
+    s_battery_label = MakeLabel(parent, LV_SYMBOL_BATTERY_FULL " --%", &lv_font_montserrat_12,
+                                COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -8, 8);
+
+    // ---- Navigation slot: one slot, two possible occupants ----
+    const lv_coord_t NAV_Y = 34;
+    const lv_coord_t NAV_H = 146;
+    s_nav_is_map = (Settings_GetNavMode() == NAV_MODE_GPX);
+
+    if (s_nav_is_map) {
+        // GPX gets the actual map, inline, at the size the glance deserves.
+        MapView_Create(&s_map_view, parent, 18, NAV_Y, 204, NAV_H, s_map_points, s_map_projected,
+                       INLINE_MAP_POINTS);
+        s_nav_cell = s_map_view.container;
+        MapView_FitTrack(&s_map_view);
+
+        // Tapping it opens the full-screen map, where the trail gets the
+        // whole panel.
+        lv_obj_add_flag(s_nav_cell, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_nav_cell, OnMapClicked, LV_EVENT_CLICKED, this);
+
+        if (GpxTrack_PointCount() == 0) {
+            lv_obj_t *empty = lv_label_create(s_nav_cell);
+            // Say which of the two reasons applies: a missing card and an
+            // unreadable one need different things from the rider.
+            lv_label_set_text(empty, GpxTrack_CardMounted() ? "No .gpx on card" : "No SD card");
+            lv_obj_set_style_text_font(empty, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_color(empty, lv_color_hex(COLOR_CAPTION), 0);
+            lv_obj_center(empty);
+        }
+    } else {
+        // TBT gets the turn, which is all the phone sends and all a junction
+        // needs. It carries the largest face on the screen now: it is the one
+        // time-critical thing here.
+        s_nav_cell = MakeCell(parent, 18, NAV_Y, 204, NAV_H, "NEXT TURN");
+
+        s_route_arrow_label = lv_label_create(s_nav_cell);
+        lv_obj_set_style_text_font(s_route_arrow_label, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
+        lv_label_set_text(s_route_arrow_label, LV_SYMBOL_UP);
+        lv_obj_align(s_route_arrow_label, LV_ALIGN_LEFT_MID, 14, -6);
+
+        s_route_dist_label = lv_label_create(s_nav_cell);
+        lv_obj_set_style_text_font(s_route_dist_label, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_color(s_route_dist_label, lv_color_hex(COLOR_VALUE), 0);
+        lv_label_set_text(s_route_dist_label, "");
+        lv_obj_align(s_route_dist_label, LV_ALIGN_LEFT_MID, 74, -6);
+
+        // The road name is how a rider confirms the turn, so it gets a real
+        // size and the full width of the cell.
+        s_route_dir_label = lv_label_create(s_nav_cell);
+        lv_obj_set_width(s_route_dir_label, 188);
+        lv_label_set_long_mode(s_route_dir_label, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_route_dir_label, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_align(s_route_dir_label, LV_ALIGN_BOTTOM_LEFT, 8, -8);
     }
 
-    // ---- Battery (status-bar corner) ----
-    // The device's own battery, published to TOPIC_BATTERY by the Core 0
-    // monitor in hal/Battery.cpp -- not to be confused with
-    // HeartRate_t.battery, which is the HR strap's.
-    s_battery_label = MakeLabel(parent, LV_SYMBOL_BATTERY_FULL " --%", &lv_font_montserrat_12,
-                                COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -14, 16);
+    // ---- Four metrics, two by two ----
+    // Speed is one of them now rather than a hero: worth reading, but not at
+    // the cost of the turn that is actually approaching.
+    const lv_coord_t CELL_W = 100;
+    const lv_coord_t CELL_H = 54;
+    const lv_coord_t COL1 = 18;
+    const lv_coord_t COL2 = 122;
+    const lv_coord_t ROW1 = 186;
+    const lv_coord_t ROW2 = 244;
 
-    // ---- Speed: the one value readable at a glance while riding ----
-    s_speed_label = MakeLabel(parent, "--", &lv_font_montserrat_48, COLOR_VALUE, LV_ALIGN_TOP_MID,
-                              0, 38);
-    s_speed_unit_label = MakeLabel(parent, Settings_SpeedUnitLabel(), &lv_font_montserrat_14,
-                                   COLOR_ACCENT, LV_ALIGN_TOP_MID, 0, 92);
+    lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, CELL_W, CELL_H, "SPEED");
+    s_speed_label = lv_label_create(speed_cell);
+    lv_obj_set_style_text_font(s_speed_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_speed_label, lv_color_hex(COLOR_VALUE), 0);
+    lv_label_set_text(s_speed_label, "--");
+    lv_obj_align(s_speed_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
+    s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
+    lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_align_to(s_speed_unit_label, s_speed_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
 
-    // ---- Trip ----
-    MakeLabel(parent, "TRIP", &lv_font_montserrat_12, COLOR_CAPTION, LV_ALIGN_TOP_LEFT, 18, 118);
-    s_trip_label = MakeLabel(parent, "0.00 km", &lv_font_montserrat_24, COLOR_VALUE,
-                             LV_ALIGN_TOP_LEFT, 18, 138);
+    lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, CELL_W, CELL_H, "TRIP");
+    s_trip_label = lv_label_create(trip_cell);
+    lv_obj_set_style_text_font(s_trip_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_trip_label, lv_color_hex(COLOR_VALUE), 0);
+    lv_label_set_text(s_trip_label, "0.00");
+    lv_obj_align(s_trip_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
+    s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
+    lv_obj_align_to(s_trip_unit_label, s_trip_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
 
-    // ---- Clock ----
-    // Fed by UBX NAV-PVT, which carries UTC alongside the position, so no RTC
-    // is needed -- and the position also chooses the timezone, so the clock
-    // reads local time with no setting to get wrong. Stays "--:--:--" until
-    // the receiver reports the time fully resolved.
-    s_clock_caption = MakeLabel(parent, "TIME", &lv_font_montserrat_10, COLOR_CAPTION,
-                                LV_ALIGN_TOP_LEFT, 18, 196);
-    s_clock_label = MakeLabel(parent, "--:--:--", &lv_font_montserrat_18, COLOR_VALUE,
-                              LV_ALIGN_TOP_LEFT, 18, 212);
+    s_incline_cell = MakeCell(parent, COL1, ROW2, CELL_W, CELL_H, "INCLINE");
+    s_incline_label = lv_label_create(s_incline_cell);
+    lv_obj_set_style_text_font(s_incline_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_incline_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_label_set_text(s_incline_label, "--");
+    lv_obj_align(s_incline_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
+    lv_obj_t *incline_unit = MakeUnit(s_incline_cell, "%");
+    lv_obj_align_to(incline_unit, s_incline_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
 
-    // ---- Incline ----
-    MakeLabel(parent, "INCLINE", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_MID, 0, 196);
-    s_incline_label = MakeLabel(parent, "--%", &lv_font_montserrat_18, COLOR_ACCENT,
-                                LV_ALIGN_TOP_MID, 0, 212);
+    lv_obj_t *hr_cell = MakeCell(parent, COL2, ROW2, CELL_W, CELL_H, "HEART RATE");
+    s_hr_label = lv_label_create(hr_cell);
+    lv_obj_set_style_text_font(s_hr_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_hr_label, lv_color_hex(COLOR_VALUE), 0);
+    lv_label_set_text(s_hr_label, "--");
+    lv_obj_align(s_hr_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
+    lv_obj_t *hr_unit = MakeUnit(hr_cell, "bpm");
+    lv_obj_align_to(hr_unit, s_hr_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
 
-    // ---- Heart rate ----
-    MakeLabel(parent, "HEART RATE", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -18,
-              196);
-    s_hr_label = MakeLabel(parent, "--", &lv_font_montserrat_18, COLOR_VALUE, LV_ALIGN_TOP_RIGHT,
-                           -38, 212);
-    MakeLabel(parent, "bpm", &lv_font_montserrat_10, COLOR_VALUE, LV_ALIGN_TOP_RIGHT, -12, 220);
+    // ---- Heart-rate zone bar ----
+    // Four bands matching the thresholds above, with a marker under the active
+    // one. Colour and position carry the reading; no word to parse.
+    const lv_coord_t SEG_W = 204 / 4;
+    static const uint32_t ZONE_COLORS[4] = {COLOR_ZONE_LOW, COLOR_ZONE_LOW, COLOR_ZONE_MID,
+                                            COLOR_ZONE_HIGH};
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *segment = lv_obj_create(parent);
+        lv_obj_set_size(segment, SEG_W - 3, 6);
+        lv_obj_set_pos(segment, (lv_coord_t)(18 + i * SEG_W), 304);
+        lv_obj_set_style_bg_color(segment, lv_color_hex(ZONE_COLORS[i]), 0);
+        lv_obj_set_style_bg_opa(segment, LV_OPA_40, 0);
+        lv_obj_set_style_border_width(segment, 0, 0);
+        lv_obj_set_style_radius(segment, 2, 0);
+        lv_obj_clear_flag(segment, LV_OBJ_FLAG_SCROLLABLE);
+        s_zone_segments[i] = segment;
+    }
 
-    s_hr_zone_label = lv_label_create(parent);
-    lv_label_set_text(s_hr_zone_label, "--");
-    lv_obj_set_style_text_font(s_hr_zone_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_hr_zone_label, lv_color_hex(COLOR_BADGE_TEXT), 0);
-    lv_obj_set_style_bg_color(s_hr_zone_label, lv_color_hex(COLOR_ZONE_LOW), 0);
-    lv_obj_set_style_bg_opa(s_hr_zone_label, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_hor(s_hr_zone_label, 8, 0);
-    lv_obj_set_style_pad_ver(s_hr_zone_label, 2, 0);
-    lv_obj_set_style_radius(s_hr_zone_label, 8, 0);
-    lv_obj_align(s_hr_zone_label, LV_ALIGN_TOP_RIGHT, -18, 238);
+    s_zone_marker = lv_label_create(parent);
+    lv_label_set_text(s_zone_marker, LV_SYMBOL_UP);
+    lv_obj_set_style_text_font(s_zone_marker, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_zone_marker, lv_color_hex(COLOR_VALUE), 0);
+    lv_obj_set_pos(s_zone_marker, (lv_coord_t)(18 + SEG_W / 2 - 4), 310);
 
-    // ---- Route / turn-by-turn ----
-    // Fed by TOPIC_NAV_TBT from src/navigation/BLE_TBT_Receiver.cpp, which the
-    // phone writes into over BLE (CLAUDE.md §5).
-    MakeLabel(parent, "ROUTE", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -18, 256);
-    s_route_arrow_label = MakeLabel(parent, LV_SYMBOL_UP, &lv_font_montserrat_28, COLOR_ACCENT,
-                                    LV_ALIGN_TOP_RIGHT, -18, 268);
-    s_route_dist_label = MakeLabel(parent, "", &lv_font_montserrat_18, COLOR_VALUE,
-                                   LV_ALIGN_TOP_RIGHT, -48, 276);
-
-    // Street names run long; clip with an ellipsis instead of letting the text
-    // run left across the heart-rate column.
-    s_route_dir_label = lv_label_create(parent);
-    lv_obj_set_width(s_route_dir_label, 132);
-    lv_label_set_long_mode(s_route_dir_label, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(s_route_dir_label, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(s_route_dir_label, lv_color_hex(COLOR_VALUE), 0);
-    lv_obj_align(s_route_dir_label, LV_ALIGN_TOP_RIGHT, -18, 300);
-
-    ClearTbt();
+    if (!s_nav_is_map) {
+        ClearTbt();
+    }
 
     RenderSpeedAndTrip();
 
@@ -557,9 +695,16 @@ void PageDashboard::onViewUnload() {
     s_active_tz = nullptr;
     s_incline_label = nullptr;
     s_hr_label = nullptr;
-    s_hr_zone_label = nullptr;
     s_route_arrow_label = nullptr;
     s_route_dir_label = nullptr;
     s_route_dist_label = nullptr;
+    s_trip_unit_label = nullptr;
+    s_incline_cell = nullptr;
+    s_zone_marker = nullptr;
+    s_nav_cell = nullptr;
+    s_nav_is_map = false;
+    for (int i = 0; i < 4; i++) {
+        s_zone_segments[i] = nullptr;
+    }
     s_battery_label = nullptr;
 }
