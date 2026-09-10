@@ -12,6 +12,10 @@
 #                         src/sensors/UbxParse.c)
 #   * test_timezone     - position to POSIX TZ, and the civil-to-epoch maths
 #                         (compiles the real src/system/TimeZone.c)
+#   * test_gpx_parse    - GPX track-point extraction (compiles the real
+#                         src/navigation/GpxParse.c)
+#   * test_track_buffer - breadcrumb thinning and bounds (compiles the real
+#                         src/navigation/TrackBuffer.c)
 #
 #   cd test/host && make          # build + run everything
 #   cd test/host && make asan     # same under ASan/UBSan
@@ -27,7 +31,8 @@ CFLAGS ?= -std=c11 -Wall -Wextra
 SUFFIX ?=
 
 BINS := test_parsebpm$(SUFFIX) test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) \
-        test_ubx_parse$(SUFFIX) test_timezone$(SUFFIX)
+        test_ubx_parse$(SUFFIX) test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) \
+        test_track_buffer$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -51,11 +56,18 @@ test_ubx_parse$(SUFFIX): test_ubx_parse.c $(SENSORS)/UbxParse.c
 test_timezone$(SUFFIX): test_timezone.c $(SYSTEM)/TimeZone.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^
 
+test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
+
+test_track_buffer$(SUFFIX): test_track_buffer.c $(NAV)/TrackBuffer.c
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
+
 # Both suites under the sanitizers.
 asan:
 	$(MAKE) CC="$(CC) -fsanitize=address,undefined" SUFFIX=_asan
 
 clean:
-	rm -f test_parsebpm test_ble_hr_parse test_tbt_parse test_ubx_parse test_timezone \
+	rm -f test_parsebpm test_ble_hr_parse test_tbt_parse test_ubx_parse test_timezone test_gpx_parse test_track_buffer \
 	      test_parsebpm_asan test_ble_hr_parse_asan test_tbt_parse_asan \
-	      test_ubx_parse_asan test_timezone_asan
+	      test_ubx_parse_asan test_timezone_asan test_gpx_parse_asan \
+	      test_track_buffer_asan

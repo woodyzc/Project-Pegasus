@@ -5,6 +5,7 @@
 #include "hal/Display.h"
 #include "hal/Touch.h"
 #include "navigation/BLE_TBT_Receiver.h"
+#include "navigation/GpxTrack.h"
 #include "sensors/BLE_HR_Client.h"
 #include "sensors/GPS_Reader.h"
 #include "sensors/SoftANT.h"
@@ -100,6 +101,15 @@ void setup() {
     // Got through radio bring-up: clear the flag so the next boot honours the
     // user's choice instead of falling back to BLE.
     Settings_NoteRadioBringUpOk();
+
+    // Offline breadcrumbs. Only in GPX mode: mounting a card and reading a
+    // multi-megabyte file costs time and PSRAM that TBT mode has no use for.
+    // A missing card is not an error -- it just means no trail.
+    if (Settings_GetNavMode() == NAV_MODE_GPX) {
+        if (GpxTrack_MountCard()) {
+            GpxTrack_LoadFirstAvailable();
+        }
+    }
 
     // TODO(Phase 1 Task 1.3+): remaining Core 0 tasks publishing into
     // DataCenter (GPS_Info, Sensor/IMU) -- Page_Dashboard is already
