@@ -2,9 +2,15 @@
 
 Forwards Google Maps turn-by-turn prompts to the Pegasus head unit over BLE.
 
-**Status: written, never compiled or run.** There is no Android toolchain on
-the machine this was authored on, so nothing here has been through a compiler,
-let alone a phone. Expect to fix things on first open in Android Studio.
+**Status: builds, 16 unit tests pass, and the notification half is verified on
+a real route.** A live Maps route confirmed the maneuver type, the imperial to
+metric conversion (200 ft to 61 m) and the street name — the last of which was
+wrong on first contact and is now a regression test.
+
+**Not yet verified: anything past the phone.** No head unit has been powered
+for the app to find, so the BLE link, the frame reaching the firmware and the
+head unit rendering it are all untested. The status line will sit at
+"Looking for pegasus…" until one is.
 
 ## Why a notification listener
 
