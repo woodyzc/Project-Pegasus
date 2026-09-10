@@ -13,11 +13,12 @@ static constexpr uint8_t REG_TOUCH1_XL = 0x04;
 static constexpr uint8_t REG_TOUCH1_YH = 0x05; // bits[3:0] = Y high nibble
 static constexpr uint8_t REG_TOUCH1_YL = 0x06;
 
-// Raw-panel-to-display orientation mapping. Display_Init() currently sets
-// tft.setRotation(0); these flags are placeholders to flip during hardware
-// bring-up if the reported touch point doesn't line up with what's drawn
-// on screen -- there's no way to derive the correct values without testing
-// against the physical panel, so don't take these as verified.
+// Raw-panel-to-display orientation mapping. Measured on the Hosyond/ES3C28P
+// panel against Display_Init()'s tft.setRotation(0): touching top-left reads
+// (0,1), top-right (239,1), bottom-left (0,319). So the controller already
+// reports display coordinates (240x320, origin top-left, X left-to-right,
+// Y top-to-bottom) and needs no transform -- all three stay false.
+// Revisit if setRotation() ever changes.
 static constexpr bool TOUCH_SWAP_XY = false;
 static constexpr bool TOUCH_INVERT_X = false;
 static constexpr bool TOUCH_INVERT_Y = false;
@@ -38,6 +39,15 @@ static bool ReadReg(uint8_t reg, uint8_t *buf, uint8_t len) {
 }
 
 void Touch_Init() {
+    // The FT6336G stays held in reset until RST is driven high, and answers
+    // nothing on I2C until then. Pulse it low then high and give the
+    // controller's own firmware time to come up before the first transfer.
+    pinMode(TOUCH_RST_PIN, OUTPUT);
+    digitalWrite(TOUCH_RST_PIN, LOW);
+    delay(10);
+    digitalWrite(TOUCH_RST_PIN, HIGH);
+    delay(300);
+
     Wire.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL);
     Wire.setClock(400000);
     pinMode(TOUCH_INT_PIN, INPUT); // FT6336G INT is active-low, open-drain; not currently used to gate reads (see Touch_Read)
