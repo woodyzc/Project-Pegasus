@@ -166,6 +166,32 @@ class ManeuverParserTest {
     }
 
     @Test
+    fun `an unparsed phrasing keys on the wording, not the counting-down distance`() {
+        // A single unrecognised manoeuvre arrives once every few seconds with a
+        // smaller number, so without this the six remembered slots fill with
+        // one manoeuvre and a drive reporting 101 failures teaches nothing.
+        val a = ManeuverParser.unparsedKey("0.4 mi \u00b7 Take the second exit")
+        val b = ManeuverParser.unparsedKey("600 ft \u00b7 Take the second exit")
+        assertEquals(a, b)
+        assertEquals("Take the second exit", a)
+
+        // Regression: hand-written as (km|m|mi|ft) with no word boundary, "mi"
+        // matched as "m" and left the key as "i \u00b7 Take the second exit".
+        assertEquals("Take the second exit", ManeuverParser.unparsedKey("200 mi - Take the second exit"))
+        assertEquals("Take the second exit", ManeuverParser.unparsedKey("1.2 km \u00b7 Take the second exit"))
+
+        // A distance inside the sentence is part of the wording and stays.
+        assertEquals("In 500 ft, use the middle lane",
+            ManeuverParser.unparsedKey("In 500 ft, use the middle lane"))
+
+        // Never key on nothing: an empty or distance-only title must stay
+        // distinguishable rather than collapsing into one blank slot.
+        assertEquals("(empty title)", ManeuverParser.unparsedKey(null))
+        assertEquals("(empty title)", ManeuverParser.unparsedKey("   "))
+        assertEquals("0.4 mi", ManeuverParser.unparsedKey("0.4 mi"))
+    }
+
+    @Test
     fun `arrival needs no distance`() {
         val arrival = ManeuverParser.parse("Arrive at destination", "")
         assertEquals(ManeuverParser.Icon.ARRIVE, arrival?.iconId)

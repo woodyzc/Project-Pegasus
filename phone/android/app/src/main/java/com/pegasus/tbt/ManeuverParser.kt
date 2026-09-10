@@ -165,6 +165,32 @@ object ManeuverParser {
         return if (head.length >= 4) head else value
     }
 
+    /**
+     * The key under which a failed phrasing is remembered, so that one wording
+     * occupies one slot however many times it recurs.
+     *
+     * Maps counts the distance down continuously, so a single unrecognised
+     * manoeuvre arrives dozens of times as "0.4 mi ...", "0.3 mi ...", "600 ft
+     * ..." -- all the same missing pattern. Stripping the leading distance is
+     * what makes a handful of remembered samples cover a whole drive.
+     *
+     * Reuses DISTANCE_PATTERN rather than restating the units: written out
+     * again by hand, the alternation read (km|m|mi|ft) with no word boundary,
+     * so "200 mi" matched as "200 m" and left a stray "i" at the front of the
+     * key -- which would have split one wording back across several slots.
+     */
+    fun unparsedKey(title: String?): String {
+        val raw = title.orEmpty().trim()
+        if (raw.isEmpty()) return "(empty title)"
+
+        val match = DISTANCE_PATTERN.find(raw)
+        // Only a *leading* distance is noise. One inside the sentence ("in 500
+        // ft, turn left") is part of the phrasing this key has to preserve.
+        if (match == null || match.range.first > 0) return raw
+
+        return cleanUp(raw.substring(match.range.last + 1)).ifEmpty { raw }
+    }
+
     private fun cleanUp(value: String): String {
         var result = firstAlternative(value.trim())
 

@@ -61,6 +61,32 @@ class MapsNotificationListener : NotificationListenerService() {
         var lastAtMs: Long = 0L
             private set
 
+        // Distinct phrasings the parser could not read, oldest first.
+        //
+        // Keeping only the most recent one was not enough: a drive ends with
+        // "navigation ended", which overwrote the single sample and destroyed
+        // the evidence for every failure that happened along the way. A drive
+        // that reports 101 failures should hand back the wordings that caused
+        // them, not a blank.
+        private const val MAX_SAMPLES = 6
+        private val samples = LinkedHashSet<String>()
+
+        fun unparsedSamples(): List<String> = synchronized(samples) { samples.toList() }
+
+        private fun rememberUnparsed(title: String?) {
+            // ManeuverParser.unparsedKey collapses the counting-down distance
+            // so one wording takes one slot; keeping that with the rest of the
+            // text handling means a host test can cover it.
+            val key = ManeuverParser.unparsedKey(title)
+            synchronized(samples) {
+                if (samples.contains(key)) return
+                if (samples.size >= MAX_SAMPLES) {
+                    samples.remove(samples.first())
+                }
+                samples.add(key)
+            }
+        }
+
         /** Seconds since the last Maps notification, or -1 if none yet. */
         fun secondsSinceLast(): Float =
             if (lastAtMs == 0L) -1f else (System.currentTimeMillis() - lastAtMs) / 1000f
@@ -91,6 +117,7 @@ class MapsNotificationListener : NotificationListenerService() {
 
         val maneuver = ManeuverParser.parse(title, text)
         if (maneuver == null) {
+            rememberUnparsed(title)
             lastParse = "unparsed: title='$title' text='$text'"
             Log.d(TAG, lastParse)
             return
@@ -113,7 +140,7 @@ class MapsNotificationListener : NotificationListenerService() {
         if (sbn.packageName != MAPS_PACKAGE) return
         // Navigation stopped. Clear immediately rather than waiting for the
         // firmware's 30s staleness timeout to notice.
-        lastParse = "navigation ended"
+        lastParse = "navigation ended (failures below are from the drive)"
         TbtService.link?.send(TbtFrame.clearFrame(), force = true)
     }
 

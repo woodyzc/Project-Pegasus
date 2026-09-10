@@ -48,7 +48,13 @@ class MainActivity : AppCompatActivity() {
                     " / parsed ${MapsNotificationListener.parsed}" +
                     String.format("  (%.1fs ago)", age)
             }
-            parseStatus.text = "$cadence\n${MapsNotificationListener.lastParse}"
+            val failures = MapsNotificationListener.unparsedSamples()
+            val failureBlock = if (failures.isEmpty()) {
+                ""
+            } else {
+                "\n\nUNPARSED (${failures.size} distinct):\n" + failures.joinToString("\n") { "· $it" }
+            }
+            parseStatus.text = "$cadence\n${MapsNotificationListener.lastParse}$failureBlock"
             // 200ms rather than a second: this line is the only window onto
             // what the parser is doing, and a second of lag makes a working
             // parser look broken while you watch it.
