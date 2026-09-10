@@ -83,6 +83,69 @@ class ManeuverParserTest {
     }
 
     @Test
+    fun `motorway exits parse - the case that produced parsed=0 on the road`() {
+        // Verbatim from a drive in Maryland. Before exit/ramp/merge patterns
+        // existed, every notification on that road failed: seen 31, used 31,
+        // parsed 0. The patterns were written for turns and never for the
+        // manoeuvres a highway actually produces.
+        val m = ManeuverParser.parse(
+            "7.2 mi \u00b7 Take the MD-117/MD-124 exit toward Clopper Rd/W. Diamond Ave/" +
+                "Mont. Village Ave/Quince Orch. Rd",
+            null
+        )
+        assertEquals(ManeuverParser.Icon.SLIGHT_RIGHT, m?.iconId)
+        assertEquals(11587, m?.distanceMetres) // 7.2 mi
+        // The full destination list cannot fit in 31 bytes, and truncating it
+        // yields a run-on ending mid-word. The first road is the one on the sign.
+        assertEquals("Clopper Rd", m?.streetName)
+    }
+
+    @Test
+    fun `exit side is taken from the wording when Maps gives it`() {
+        assertEquals(
+            ManeuverParser.Icon.SLIGHT_LEFT,
+            ManeuverParser.parse("1.2 mi \u00b7 Take the I-495 exit on the left toward Silver Spring", null)?.iconId
+        )
+        assertEquals(
+            ManeuverParser.Icon.SLIGHT_RIGHT,
+            ManeuverParser.parse("500 ft \u00b7 Take exit 12 toward Rockville", null)?.iconId
+        )
+        assertEquals(
+            ManeuverParser.Icon.SLIGHT_RIGHT,
+            ManeuverParser.parse("0.4 mi \u00b7 Take the ramp onto I-270 N", null)?.iconId
+        )
+    }
+
+    @Test
+    fun `merges parse, with a side when stated`() {
+        assertEquals(
+            ManeuverParser.Icon.SLIGHT_RIGHT,
+            ManeuverParser.parse("800 ft \u00b7 Merge right onto I-370", null)?.iconId
+        )
+        assertEquals(
+            ManeuverParser.Icon.SLIGHT_LEFT,
+            ManeuverParser.parse("800 ft \u00b7 Merge left onto I-370", null)?.iconId
+        )
+        // No side given: a merge is a continuation, not a turn.
+        assertEquals(
+            ManeuverParser.Icon.STRAIGHT,
+            ManeuverParser.parse("800 ft \u00b7 Merge onto I-370", null)?.iconId
+        )
+    }
+
+    @Test
+    fun `a road number keeps its slash, a destination list does not`() {
+        // "MD-117/MD-124" is one name; splitting it would be wrong. It is also
+        // short enough to fit, so it is never split.
+        assertEquals("MD-117/MD-124", ManeuverParser.extractStreet("", "onto MD-117/MD-124"))
+        // A long list is cut at the first road.
+        assertEquals(
+            "Clopper Rd",
+            ManeuverParser.extractStreet("", "toward Clopper Rd/W. Diamond Ave/Mont. Village Ave")
+        )
+    }
+
+    @Test
     fun `imperial distances round the way Maps shows them`() {
         // Real capture: Maps displayed "0.1 mi" and the head unit should show
         // the metric equivalent, not the raw number.

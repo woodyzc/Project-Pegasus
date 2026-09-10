@@ -48,6 +48,25 @@ object ManeuverParser {
         Regex("""\b(slight(ly)?|bear|keep)\s+right\b""", RegexOption.IGNORE_CASE) to Icon.SLIGHT_RIGHT,
         Regex("""\b(turn|exit)\s+left\b|\bleft\s+turn\b""", RegexOption.IGNORE_CASE) to Icon.TURN_LEFT,
         Regex("""\b(turn|exit)\s+right\b|\bright\s+turn\b""", RegexOption.IGNORE_CASE) to Icon.TURN_RIGHT,
+
+        // Motorway exits, ramps and merges. These were missing entirely, and
+        // on a real drive they are most of what Maps says -- a capture in
+        // Maryland produced "Take the MD-117/MD-124 exit toward Clopper Rd"
+        // and parsed as nothing at all.
+        //
+        // There is no exit glyph in TBT_Icon_t, and a slight divergence is
+        // what an exit actually is, so they map to SLIGHT_LEFT/SLIGHT_RIGHT.
+        // When Maps does not say which side, this assumes right, which holds
+        // for right-hand traffic and is wrong in the UK, Japan and Australia.
+        // Maps is explicit ("exit on the left") whenever it is the unusual
+        // side, so the assumption only applies where it is also the default.
+        Regex("""\bexit\b.*\bon the left\b|\bexit\s+left\b""", RegexOption.IGNORE_CASE)
+            to Icon.SLIGHT_LEFT,
+        Regex("""\btake\s+(the\s+)?.{0,40}?\bexit\b|\btake\s+exit\b|\bramp\b""",
+              RegexOption.IGNORE_CASE) to Icon.SLIGHT_RIGHT,
+        Regex("""\bmerge\b.*\bleft\b""", RegexOption.IGNORE_CASE) to Icon.SLIGHT_LEFT,
+        Regex("""\bmerge\b.*\bright\b""", RegexOption.IGNORE_CASE) to Icon.SLIGHT_RIGHT,
+        Regex("""\bmerge\b""", RegexOption.IGNORE_CASE) to Icon.STRAIGHT,
         Regex("""\barriv|\bdestination\b""", RegexOption.IGNORE_CASE) to Icon.ARRIVE,
         Regex("""\b(continue|straight|head)\b""", RegexOption.IGNORE_CASE) to Icon.STRAIGHT,
         // Last resort: a bare direction word with no verb around it.
@@ -129,8 +148,25 @@ object ManeuverParser {
         return cleanUp(source.replace(DISTANCE_PATTERN, ""))
     }
 
+    /**
+     * Maps often names every road an exit serves:
+     *   "toward Clopper Rd/W. Diamond Ave/Mont. Village Ave/Quince Orch. Rd"
+     * Truncating that to 31 bytes yields a run-on ending mid-word. The first
+     * alternative is the one a rider is looking for on a sign, so cut there
+     * when the whole list will not fit anyway.
+     */
+    private fun firstAlternative(value: String): String {
+        if (value.length <= 31 || !value.contains('/')) {
+            return value
+        }
+        val head = value.substringBefore('/').trim()
+        // A road number like "MD-117/MD-124" is one name, not a list: keep it
+        // whole when the head alone is implausibly short.
+        return if (head.length >= 4) head else value
+    }
+
     private fun cleanUp(value: String): String {
-        var result = value.trim()
+        var result = firstAlternative(value.trim())
 
         // An aside can leave its closing bracket stranded at the front once
         // the text before it has been cut away.
