@@ -178,6 +178,23 @@ bool GpxTrack_Center(double *out_lat, double *out_lon) {
     return TrackBuffer_Center(&s_track, out_lat, out_lon);
 }
 
+const TrackBuffer_t *GpxTrack_Buffer() {
+    return &s_track;
+}
+
+bool GpxTrack_Bounds(double *out_min_lat, double *out_max_lat, double *out_min_lon,
+                     double *out_max_lon) {
+    if (!s_track.has_bounds || out_min_lat == nullptr || out_max_lat == nullptr ||
+        out_min_lon == nullptr || out_max_lon == nullptr) {
+        return false;
+    }
+    *out_min_lat = (double)s_track.min_lat_e7 * 1e-7;
+    *out_max_lat = (double)s_track.max_lat_e7 * 1e-7;
+    *out_min_lon = (double)s_track.min_lon_e7 * 1e-7;
+    *out_max_lon = (double)s_track.max_lon_e7 * 1e-7;
+    return true;
+}
+
 const char *GpxTrack_LoadedName() {
     return s_loaded_name;
 }

@@ -11,6 +11,7 @@
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
 #include "../system/TimeZone.h"
+#include "Page_Map.h"
 
 // Visual design ported from the agents/lvgl-ui-layout-speed-odometer-clock
 // branch (c81da8c): dark slate background, one oversized speed readout, and a
@@ -371,6 +372,13 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     }
 }
 
+void OnMapClicked(lv_event_t *e) {
+    PageDashboard *self = (PageDashboard *)lv_event_get_user_data(e);
+    if (self != nullptr && self->_Manager != nullptr) {
+        self->_Manager->Push(PAGE_NAME_MAP);
+    }
+}
+
 void OnSettingsClicked(lv_event_t *e) {
     PageDashboard *self = (PageDashboard *)lv_event_get_user_data(e);
     if (self != nullptr && self->_Manager != nullptr) {
@@ -423,6 +431,26 @@ void PageDashboard::onViewLoad() {
     lv_label_set_text(gear, LV_SYMBOL_SETTINGS);
     lv_obj_set_style_text_color(gear, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_center(gear);
+
+    // ---- Map button ----
+    // Only in GPX mode: in TBT mode there is no trail to draw, and the ROUTE
+    // panel below already carries the turn. Offering a button to an empty map
+    // would be a dead end.
+    if (Settings_GetNavMode() == NAV_MODE_GPX) {
+        lv_obj_t *map_btn = lv_btn_create(parent);
+        lv_obj_set_size(map_btn, 40, 32);
+        lv_obj_align(map_btn, LV_ALIGN_TOP_LEFT, 50, 6);
+        lv_obj_set_style_bg_color(map_btn, lv_color_hex(0x1D2A36), 0);
+        lv_obj_set_style_bg_color(map_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+        lv_obj_set_style_radius(map_btn, 8, 0);
+        lv_obj_set_style_shadow_width(map_btn, 0, 0);
+        lv_obj_add_event_cb(map_btn, OnMapClicked, LV_EVENT_CLICKED, this);
+
+        lv_obj_t *map_icon = lv_label_create(map_btn);
+        lv_label_set_text(map_icon, LV_SYMBOL_GPS);
+        lv_obj_set_style_text_color(map_icon, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_center(map_icon);
+    }
 
     // ---- Battery (status-bar corner) ----
     // The device's own battery, published to TOPIC_BATTERY by the Core 0

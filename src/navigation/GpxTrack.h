@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "TrackBuffer.h"
+
 // Loads a breadcrumb trail from a .gpx on the SD card (CLAUDE.md §5).
 //
 // ---------------------------------------------------------------------------
@@ -48,6 +50,14 @@ bool GpxTrack_Point(size_t index, double *out_lat, double *out_lon);
 
 // Centre of the loaded trail's bounding box, for framing the view.
 bool GpxTrack_Center(double *out_lat, double *out_lon);
+
+// The underlying store, so callers can use the tested Map_BuildPolyline()
+// rather than re-walking the points themselves. Never NULL.
+const TrackBuffer_t *GpxTrack_Buffer();
+
+// Bounding box of the loaded trail, for framing the initial view.
+bool GpxTrack_Bounds(double *out_min_lat, double *out_max_lat, double *out_min_lon,
+                     double *out_max_lon);
 
 // Name of the file currently loaded, or "" if none.
 const char *GpxTrack_LoadedName();

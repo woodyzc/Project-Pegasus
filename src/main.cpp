@@ -14,6 +14,7 @@
 #include "system/PageManager/PageManager.h"
 #include "system/Settings.h"
 #include "ui/Page_Dashboard.h"
+#include "ui/Page_Map.h"
 #include "ui/Page_Settings.h"
 
 static lv_indev_drv_t s_indev_drv;
@@ -24,6 +25,7 @@ static lv_indev_drv_t s_indev_drv;
 static PageManager s_page_manager;
 static PageDashboard s_page_dashboard;
 static PageSettings s_page_settings;
+static PageMap s_page_map;
 
 void setup() {
     Serial.begin(115200);
@@ -48,6 +50,7 @@ void setup() {
     // pinning), so this satisfies the pages' "Core 1 only" precondition.
     s_page_manager.Register(&s_page_dashboard, PAGE_NAME_DASHBOARD);
     s_page_manager.Register(&s_page_settings, PAGE_NAME_SETTINGS);
+    s_page_manager.Register(&s_page_map, PAGE_NAME_MAP);
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);
     s_page_manager.Push(PAGE_NAME_DASHBOARD);
 

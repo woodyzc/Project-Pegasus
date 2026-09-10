@@ -16,6 +16,8 @@
 #                         src/navigation/GpxParse.c)
 #   * test_track_buffer - breadcrumb thinning and bounds (compiles the real
 #                         src/navigation/TrackBuffer.c)
+#   * test_map_project  - breadcrumb projection geometry (compiles the real
+#                         src/navigation/MapProject.c)
 #
 #   cd test/host && make          # build + run everything
 #   cd test/host && make asan     # same under ASan/UBSan
@@ -32,7 +34,7 @@ SUFFIX ?=
 
 BINS := test_parsebpm$(SUFFIX) test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) \
         test_ubx_parse$(SUFFIX) test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) \
-        test_track_buffer$(SUFFIX)
+        test_track_buffer$(SUFFIX) test_map_project$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -62,12 +64,15 @@ test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c
 test_track_buffer$(SUFFIX): test_track_buffer.c $(NAV)/TrackBuffer.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
 
+test_map_project$(SUFFIX): test_map_project.c $(NAV)/MapProject.c $(NAV)/TrackBuffer.c
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
+
 # Both suites under the sanitizers.
 asan:
 	$(MAKE) CC="$(CC) -fsanitize=address,undefined" SUFFIX=_asan
 
 clean:
-	rm -f test_parsebpm test_ble_hr_parse test_tbt_parse test_ubx_parse test_timezone test_gpx_parse test_track_buffer \
+	rm -f test_parsebpm test_ble_hr_parse test_tbt_parse test_ubx_parse test_timezone test_gpx_parse test_track_buffer test_map_project \
 	      test_parsebpm_asan test_ble_hr_parse_asan test_tbt_parse_asan \
 	      test_ubx_parse_asan test_timezone_asan test_gpx_parse_asan \
-	      test_track_buffer_asan
+	      test_track_buffer_asan test_map_project_asan
