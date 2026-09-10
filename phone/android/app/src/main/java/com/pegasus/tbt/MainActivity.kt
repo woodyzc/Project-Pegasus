@@ -43,18 +43,40 @@ class MainActivity : AppCompatActivity() {
             val cadence = if (age < 0) {
                 "no Maps notification yet"
             } else {
+                // Maneuvers only: status notifications and redacted ones are
+                // excluded from the denominator and shown on their own line,
+                // so this figure means "of the notifications that should have
+                // held a turn, how many were read".
+                val maneuvers = MapsNotificationListener.used -
+                    MapsNotificationListener.transient - MapsNotificationListener.redacted
                 "seen ${MapsNotificationListener.seen}" +
                     " / used ${MapsNotificationListener.used}" +
+                    " / maneuvers $maneuvers" +
                     " / parsed ${MapsNotificationListener.parsed}" +
-                    String.format("  (%.1fs ago)", age)
+                    String.format("  (%.1fs ago)", age) +
+                    "\nskipped: ${MapsNotificationListener.transient} status" +
+                    ", ${MapsNotificationListener.redacted} hidden by Android"
             }
+
+            // A redacted notification is the one failure mode no parser change
+            // can reach -- the text is blanked before this app ever sees it --
+            // so it gets an instruction rather than a number.
+            val redactedNote = if (MapsNotificationListener.redacted > 0) {
+                "\n\n⚠ Android is hiding Maps' notification text." +
+                    "\nSettings > Notifications > Sensitive notifications: turn OFF." +
+                    "\nTurn-by-turn cannot work until you do."
+            } else {
+                ""
+            }
+
             val failures = MapsNotificationListener.unparsedSamples()
             val failureBlock = if (failures.isEmpty()) {
                 ""
             } else {
                 "\n\nUNPARSED (${failures.size} distinct):\n" + failures.joinToString("\n") { "· $it" }
             }
-            parseStatus.text = "$cadence\n${MapsNotificationListener.lastParse}$failureBlock"
+            parseStatus.text =
+                "$cadence\n${MapsNotificationListener.lastParse}$redactedNote$failureBlock"
             // 200ms rather than a second: this line is the only window onto
             // what the parser is doing, and a second of lag makes a working
             // parser look broken while you watch it.

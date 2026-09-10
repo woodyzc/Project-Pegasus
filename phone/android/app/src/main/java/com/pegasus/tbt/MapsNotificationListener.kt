@@ -61,6 +61,16 @@ class MapsNotificationListener : NotificationListenerService() {
         var lastAtMs: Long = 0L
             private set
 
+        /** Status notifications carrying no maneuver ("Rerouting", ...). */
+        @Volatile
+        var transient: Int = 0
+            private set
+
+        /** Notifications Android blanked out before the listener saw them. */
+        @Volatile
+        var redacted: Int = 0
+            private set
+
         // Distinct phrasings the parser could not read, oldest first.
         //
         // Keeping only the most recent one was not enough: a drive ends with
@@ -73,11 +83,11 @@ class MapsNotificationListener : NotificationListenerService() {
 
         fun unparsedSamples(): List<String> = synchronized(samples) { samples.toList() }
 
-        private fun rememberUnparsed(title: String?) {
+        private fun rememberUnparsed(title: String?, text: String?) {
             // ManeuverParser.unparsedKey collapses the counting-down distance
             // so one wording takes one slot; keeping that with the rest of the
             // text handling means a host test can cover it.
-            val key = ManeuverParser.unparsedKey(title)
+            val key = ManeuverParser.unparsedKey(title, text)
             synchronized(samples) {
                 if (samples.contains(key)) return
                 if (samples.size >= MAX_SAMPLES) {
@@ -115,9 +125,22 @@ class MapsNotificationListener : NotificationListenerService() {
         val title = readTitle(notification)
         val text = readText(notification)
 
+        // "Rerouting", "Starting navigation" and the redacted-content notice
+        // are not maneuvers and never were. Counting them as parse failures
+        // made the success rate unreadable, and they crowded the six remembered
+        // sample slots with wordings there is nothing to fix about.
+        val skip = ManeuverParser.skipReason(title, text)
+        if (skip != null) {
+            when (skip) {
+                ManeuverParser.Skip.TRANSIENT -> transient++
+                ManeuverParser.Skip.REDACTED -> redacted++
+            }
+            return
+        }
+
         val maneuver = ManeuverParser.parse(title, text)
         if (maneuver == null) {
-            rememberUnparsed(title)
+            rememberUnparsed(title, text)
             lastParse = "unparsed: title='$title' text='$text'"
             Log.d(TAG, lastParse)
             return

@@ -186,9 +186,86 @@ class ManeuverParserTest {
 
         // Never key on nothing: an empty or distance-only title must stay
         // distinguishable rather than collapsing into one blank slot.
-        assertEquals("(empty title)", ManeuverParser.unparsedKey(null))
-        assertEquals("(empty title)", ManeuverParser.unparsedKey("   "))
+        assertEquals("(no title or text)", ManeuverParser.unparsedKey(null))
+        assertEquals("(no title or text)", ManeuverParser.unparsedKey("   "))
         assertEquals("0.4 mi", ManeuverParser.unparsedKey("0.4 mi"))
+    }
+
+    @Test
+    fun `spelled-out units carry a distance just as the abbreviations do`() {
+        // Regression, from a drive reporting parsed 8 of 33. Only "m/km/mi/ft"
+        // were accepted, so a notification phrased "500 feet" lost its distance
+        // and the maneuver was discarded whole -- "Turn right" showed up in the
+        // unparsed list while Maps was plainly displaying a distance for it.
+        assertEquals(152, ManeuverParser.parseDistanceMetres("500 feet"))
+        assertEquals(161, ManeuverParser.parseDistanceMetres("0.1 miles"))
+        assertEquals(1200, ManeuverParser.parseDistanceMetres("1.2 kilometers"))
+        assertEquals(350, ManeuverParser.parseDistanceMetres("350 meters"))
+        assertEquals(350, ManeuverParser.parseDistanceMetres("350 metres"))
+        assertEquals(183, ManeuverParser.parseDistanceMetres("200 yards"))
+        assertEquals(183, ManeuverParser.parseDistanceMetres("200 yd"))
+
+        // "mi" must win over "m" inside "miles"; the word boundary is what
+        // makes that reliable rather than a happy accident of ordering.
+        assertEquals(1609, ManeuverParser.parseDistanceMetres("1 mile"))
+        assertEquals(1, ManeuverParser.parseDistanceMetres("1 m"))
+
+        val m = ManeuverParser.parse("Turn right", "500 feet onto Bureau Dr")
+        assertEquals(ManeuverParser.Icon.TURN_RIGHT, m?.iconId)
+        assertEquals(152, m?.distanceMetres)
+        assertEquals("Bureau Dr", m?.streetName)
+    }
+
+    @Test
+    fun `leaving a car park is a maneuver`() {
+        // Verbatim from a drive: every exit pattern required the verb "take",
+        // so this matched nothing at all.
+        val m = ManeuverParser.parse("Exit the parking lot toward Game Preserve Rd", "300 feet")
+        // STRAIGHT, not SLIGHT_RIGHT: there is no turn direction in this
+        // instruction and guessing one would be inventing it.
+        assertEquals(ManeuverParser.Icon.STRAIGHT, m?.iconId)
+        assertEquals("Game Preserve Rd", m?.streetName)
+    }
+
+    @Test
+    fun `status notifications are skipped, not counted as parse failures`() {
+        assertEquals(ManeuverParser.Skip.TRANSIENT, ManeuverParser.skipReason("Starting navigation…", ""))
+        assertEquals(ManeuverParser.Skip.TRANSIENT, ManeuverParser.skipReason("Rerouting…", ""))
+        assertEquals(ManeuverParser.Skip.TRANSIENT, ManeuverParser.skipReason("Maps", ""))
+        assertEquals(ManeuverParser.Skip.TRANSIENT, ManeuverParser.skipReason(null, null))
+
+        // The phone blanked the content before the listener ever saw it. This
+        // is not a parser fault and the status screen says so.
+        assertEquals(
+            ManeuverParser.Skip.REDACTED,
+            ManeuverParser.skipReason("Maps", "Sensitive notification content hidden")
+        )
+
+        // A real maneuver is never skipped -- including one whose road name
+        // happens to contain a skip word.
+        assertNull(ManeuverParser.skipReason("200 ft · Turn left onto Main St", null))
+        assertNull(ManeuverParser.skipReason("500 ft · Turn right onto Starting Gate Rd", null))
+    }
+
+    @Test
+    fun `an unparsed key keeps the body text, not just the title`() {
+        // The title-only key could not distinguish "Turn right" with a distance
+        // the parser missed from "Turn right" with no distance at all, which is
+        // exactly the question the previous drive left open.
+        assertEquals(
+            "Turn right | onto Bureau Dr",
+            ManeuverParser.unparsedKey("0.2 mi · Turn right", "300 feet onto Bureau Dr")
+        )
+        assertEquals("Turn right", ManeuverParser.unparsedKey("Turn right", null))
+        assertEquals("(no title) | Rerouting", ManeuverParser.unparsedKey("", "Rerouting"))
+        assertEquals("(no title or text)", ManeuverParser.unparsedKey(null, null))
+
+        // A destination list must not be truncated in a diagnostic key: hiding
+        // half the evidence is the bug this exists to avoid.
+        assertEquals(
+            "Take the exit toward Clopper Rd/W. Diamond Ave/Mont. Village Ave",
+            ManeuverParser.unparsedKey("7.2 mi · Take the exit toward Clopper Rd/W. Diamond Ave/Mont. Village Ave")
+        )
     }
 
     @Test

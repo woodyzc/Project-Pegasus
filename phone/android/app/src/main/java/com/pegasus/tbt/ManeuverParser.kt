@@ -37,6 +37,57 @@ object ManeuverParser {
 
     data class Maneuver(val iconId: Int, val distanceMetres: Int, val streetName: String)
 
+    /**
+     * Why a notification carries no maneuver, when that is not a parser fault.
+     *
+     * Without this every one of these counted as a parse failure, which made
+     * the on-screen success rate meaningless: a drive reporting "parsed 8 of
+     * 33" was mixing genuine misses with notifications that never contained a
+     * maneuver in the first place, and there was no way to tell the two apart.
+     */
+    enum class Skip {
+        /** A status message: rerouting, acquiring GPS, and so on. */
+        TRANSIENT,
+
+        /**
+         * Android replaced the content with "Sensitive notification content
+         * hidden". Nothing here can recover it -- the text never reaches the
+         * listener. The user has to turn off the phone's sensitive-notification
+         * setting, so this is called out separately on the status screen.
+         */
+        REDACTED,
+    }
+
+    private val TRANSIENT_PATTERNS = listOf(
+        Regex("""\bstarting navigation\b|\bstarting\b\s*$""", RegexOption.IGNORE_CASE),
+        Regex("""\brerouting\b|\bre-routing\b""", RegexOption.IGNORE_CASE),
+        Regex("""\bsearching for gps\b|\bgps signal lost\b|\bwaiting for gps\b""",
+              RegexOption.IGNORE_CASE),
+        Regex("""\bfinding a (faster|better) route\b""", RegexOption.IGNORE_CASE),
+        Regex("""\bnavigation (ended|stopped)\b""", RegexOption.IGNORE_CASE),
+    )
+
+    private val REDACTED_PATTERN =
+        Regex("""\bcontent hidden\b|\bsensitive notification\b""", RegexOption.IGNORE_CASE)
+
+    /** Null when the notification should have held a maneuver. */
+    fun skipReason(title: String?, text: String?): Skip? {
+        val titleText = title.orEmpty().trim()
+        val combined = "$titleText ${text.orEmpty()}".trim()
+        if (combined.isEmpty()) return Skip.TRANSIENT
+
+        if (REDACTED_PATTERN.containsMatchIn(combined)) return Skip.REDACTED
+        if (TRANSIENT_PATTERNS.any { it.containsMatchIn(combined) }) return Skip.TRANSIENT
+        // The bare app name is the collapsed/summary notification; it never
+        // carries a maneuver.
+        if (titleText.equals("Maps", ignoreCase = true) ||
+            titleText.equals("Google Maps", ignoreCase = true)
+        ) {
+            return Skip.TRANSIENT
+        }
+        return null
+    }
+
     // Ordered most specific first: "slight left" must beat the bare "left",
     // and "roundabout" must beat any direction word inside the same phrase.
     private val ICON_PATTERNS: List<Pair<Regex, Int>> = listOf(
@@ -67,6 +118,15 @@ object ManeuverParser {
         Regex("""\bmerge\b.*\bleft\b""", RegexOption.IGNORE_CASE) to Icon.SLIGHT_LEFT,
         Regex("""\bmerge\b.*\bright\b""", RegexOption.IGNORE_CASE) to Icon.SLIGHT_RIGHT,
         Regex("""\bmerge\b""", RegexOption.IGNORE_CASE) to Icon.STRAIGHT,
+
+        // A bare "exit" with no "take" in front of it. Observed on a real
+        // drive as "Exit the parking lot toward Game Preserve Rd", which every
+        // pattern above misses because they all require the verb.
+        //
+        // STRAIGHT rather than SLIGHT_RIGHT: leaving a car park implies no
+        // turn direction at all, and the side-guess that is reasonable for a
+        // motorway slip road would here be inventing one.
+        Regex("""\bexit\b""", RegexOption.IGNORE_CASE) to Icon.STRAIGHT,
         Regex("""\barriv|\bdestination\b""", RegexOption.IGNORE_CASE) to Icon.ARRIVE,
         Regex("""\b(continue|straight|head)\b""", RegexOption.IGNORE_CASE) to Icon.STRAIGHT,
         // Last resort: a bare direction word with no verb around it.
@@ -76,13 +136,25 @@ object ManeuverParser {
 
     // "350 m", "1.2 km", "500 ft", "0.3 mi" -- Maps uses whichever unit system
     // the phone is set to, so all four have to be understood.
+    //
+    // The spelled-out forms are here because the abbreviations alone were not
+    // enough on the road: a capture showed "Turn right" failing to parse while
+    // Maps plainly displayed a distance for it. Only the shorthand was
+    // accepted, so any notification phrased "500 feet" or "0.2 miles" lost its
+    // distance and the whole maneuver was discarded as unreadable.
+    //
+    // Longest alternative first so "mi" is preferred over "m" inside "miles".
+    // The trailing \b makes that robust rather than merely lucky -- "m" can
+    // still match the start of "miles", but then fails the boundary and the
+    // engine backtracks into the longer alternative.
     private val DISTANCE_PATTERN = Regex(
-        """(\d+(?:[.,]\d+)?)\s*(km|m|mi|ft)\b""",
+        """(\d+(?:[.,]\d+)?)\s*(kilometers?|kilometres?|km|miles?|mi|meters?|metres?|m|feet|foot|ft|yards?|yds?)\b""",
         RegexOption.IGNORE_CASE
     )
 
     private const val METRES_PER_MILE = 1609.344
     private const val METRES_PER_FOOT = 0.3048
+    private const val METRES_PER_YARD = 0.9144
 
     /**
      * @param title the notification's title line, usually the maneuver
@@ -110,11 +182,13 @@ object ManeuverParser {
     fun parseDistanceMetres(input: String): Int? {
         val match = DISTANCE_PATTERN.find(input) ?: return null
         val value = match.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
-        val metres = when (match.groupValues[2].lowercase()) {
-            "km" -> value * 1000.0
-            "mi" -> value * METRES_PER_MILE
-            "ft" -> value * METRES_PER_FOOT
-            else -> value
+        val unit = match.groupValues[2].lowercase()
+        val metres = when {
+            unit.startsWith("km") || unit.startsWith("kilomet") -> value * 1000.0
+            unit.startsWith("mi") -> value * METRES_PER_MILE
+            unit.startsWith("f") -> value * METRES_PER_FOOT // ft, feet, foot
+            unit.startsWith("y") -> value * METRES_PER_YARD // yd, yds, yard(s)
+            else -> value // m, meter(s), metre(s)
         }
         if (metres < 0 || metres > Int.MAX_VALUE.toDouble()) return null
         return Math.round(metres).toInt()
@@ -132,20 +206,33 @@ object ManeuverParser {
      * "toward X"; when it doesn't, the body line is generally the road itself.
      */
     fun extractStreet(title: String, text: String): String {
-        val source = if (text.isNotEmpty()) text else title
+        // Whichever line names the road wins, rather than always the body.
+        // Preferring a non-empty body unconditionally lost the road on
+        // "Exit the parking lot toward Game Preserve Rd" / "300 feet": the
+        // body was non-empty, so it was chosen, and it held only a distance --
+        // the street came back blank while the title said it plainly.
+        val sources = listOf(text, title).filter { it.isNotEmpty() }
 
         // The LAST introducer, not the first: the road being joined comes at
         // the end, while an aside earlier in the sentence may contain one too.
         // (Matching only the keyword and taking the remainder by index, rather
         // than capturing with (.+) -- a greedy capture consumes to the end of
         // the string, so findAll would only ever return one match.)
-        ROAD_INTRO.findAll(source).lastOrNull()?.let { match ->
-            return cleanUp(source.substring(match.range.last + 1))
+        for (source in sources) {
+            ROAD_INTRO.findAll(source).lastOrNull()?.let { match ->
+                return cleanUp(source.substring(match.range.last + 1))
+            }
         }
 
-        // Drop a leading distance so "350 m - Main St" doesn't repeat what the
-        // head unit already shows in its own distance field.
-        return cleanUp(source.replace(DISTANCE_PATTERN, ""))
+        // No explicit introducer: the line itself is generally the road. Drop
+        // a leading distance so "350 m - Main St" doesn't repeat what the head
+        // unit already shows in its own distance field, and fall through to
+        // the other line when that leaves nothing behind.
+        for (source in sources) {
+            val cleaned = cleanUp(source.replace(DISTANCE_PATTERN, ""))
+            if (cleaned.isNotEmpty()) return cleaned
+        }
+        return ""
     }
 
     /**
@@ -179,16 +266,46 @@ object ManeuverParser {
      * so "200 mi" matched as "200 m" and left a stray "i" at the front of the
      * key -- which would have split one wording back across several slots.
      */
-    fun unparsedKey(title: String?): String {
-        val raw = title.orEmpty().trim()
-        if (raw.isEmpty()) return "(empty title)"
+    fun unparsedKey(title: String?, text: String? = null): String {
+        val head = stripLeadingDistance(title.orEmpty().trim())
+        val body = stripLeadingDistance(text.orEmpty().trim())
 
+        // Both halves, because the title alone was not enough to diagnose the
+        // one that mattered: "Turn right" was recorded as the failing sample
+        // with no way to see whether Maps had put a distance in the body in a
+        // wording the parser did not accept. A key that hides half the
+        // evidence costs another drive to find out.
+        return when {
+            head.isEmpty() && body.isEmpty() -> "(no title or text)"
+            body.isEmpty() -> head
+            head.isEmpty() -> "(no title) | $body"
+            else -> "$head | $body"
+        }
+    }
+
+    /**
+     * Drops a distance only where it leads, which is where Maps puts the
+     * counting-down one. A distance inside the sentence ("In 500 ft, use the
+     * middle lane") is part of the phrasing and is kept.
+     *
+     * Deliberately not cleanUp(): that truncates at the first "/", which is
+     * right for a road name shown on a 240px panel and wrong for a diagnostic
+     * key, where hiding half the string is the whole problem being fixed.
+     */
+    private fun stripLeadingDistance(raw: String): String {
+        if (raw.isEmpty()) return raw
         val match = DISTANCE_PATTERN.find(raw)
-        // Only a *leading* distance is noise. One inside the sentence ("in 500
-        // ft, turn left") is part of the phrasing this key has to preserve.
         if (match == null || match.range.first > 0) return raw
 
-        return cleanUp(raw.substring(match.range.last + 1)).ifEmpty { raw }
+        var rest = raw.substring(match.range.last + 1).trimStart()
+        while (rest.isNotEmpty() && (rest[0] == '·' || rest[0] == '-' || rest[0] == '–' ||
+                rest[0] == ',' || rest[0] == ':')
+        ) {
+            rest = rest.substring(1).trimStart()
+        }
+        // A title that was *only* a distance keeps its original text rather
+        // than collapsing to an empty key.
+        return rest.ifEmpty { raw }
     }
 
     private fun cleanUp(value: String): String {
