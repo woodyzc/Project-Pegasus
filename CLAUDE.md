@@ -35,6 +35,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - Task 1: MAX-M10S UBX parsing with low-speed anti-drift and Kalman filtering.
   - Task 2: Software ANT+ / NimBLE BLE client reception.
   - Task 3: Power & IMU monitoring (detect 5-min inactivity to trigger Deep Sleep).
+  - *Known exception — the `esp32-ant` radio task runs on Core 1.* `ant_node`'s
+    own receive task (priority `configMAX_PRIORITIES-2`, holds the 32768Hz ANT
+    TDMA grid) stays on the library's Core 1 default: Core 0 hosts the BT
+    controller that this task hooks, so pinning it there makes a max-priority
+    task contend with its own controller, and Core 1 is the configuration the
+    library verified live against a real strap. It does not disturb the LVGL
+    loop, because in receive mode it blocks in `ulTaskNotifyTake()` rather than
+    busy-waiting (it only spins for sub-millisecond *transmit* deadlines, and we
+    are a receive-only slave). Our own supervisory task (`SoftANT_Task`) and all
+    DataCenter publishing still run on Core 0, which is what this rule is about.
+    See the rationale block in `src/sensors/SoftANT.cpp`.
 - **Core 1 (UI & Life Cycle Core)**:
   - Task 1: LVGL rendering loop (`lv_timer_handler()`).
   - Task 2: X-TRACK `PageManager` life cycle management.
