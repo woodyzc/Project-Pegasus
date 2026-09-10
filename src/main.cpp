@@ -6,6 +6,7 @@
 #include "hal/Touch.h"
 #include "navigation/BLE_TBT_Receiver.h"
 #include "sensors/BLE_HR_Client.h"
+#include "sensors/GPS_Reader.h"
 #include "sensors/SoftANT.h"
 #include "system/DataCenter.h"
 #include "system/LvglTask.h"
@@ -32,6 +33,7 @@ void setup() {
     Display_Init();
     Touch_Init();
     Battery_Init();
+    GPS_Init();
 
     // After Display_Init(): applies the persisted backlight level to the panel.
     Settings_Init();
@@ -54,6 +56,11 @@ void setup() {
     // and independent -- if a radio mode stalls below, the battery reading is
     // already publishing.
     Battery_StartMonitor();
+
+    // Core 0 GNSS reader. Independent of the heart-rate radios below, so it
+    // starts first: a stall in radio bring-up should not cost the position
+    // fix as well.
+    GPS_StartReader();
 
     // Heart-rate radios come after LvglTask_Start() on purpose: BLE_HR_Start()
     // does its discovery synchronously and blocks for up to ~15s (see

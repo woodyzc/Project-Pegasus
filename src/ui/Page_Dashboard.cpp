@@ -233,12 +233,11 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             s_last_speed_kmh = gps.speed * 3.6f;
             s_has_speed = true;
 
-            // GPS_Info_t carries no fix-valid flag, so treat an exactly-zero
-            // coordinate pair as "no fix" rather than accumulating a trip leg
-            // from the Gulf of Guinea. The 1km/tick ceiling drops the single
-            // bogus jump a cold fix produces before it settles.
-            const bool has_fix = (gps.lat != 0.0) || (gps.lon != 0.0);
-            if (has_fix) {
+            // The receiver's own validity flag, not a guess from the
+            // coordinates: before a fix, lat/lon are legitimately 0,0. The
+            // 1km/tick ceiling still drops the single bogus jump a cold fix
+            // can produce as it settles.
+            if (gps.fix_valid) {
                 if (s_has_prev_fix) {
                     const double step_m = DistanceMetres(s_prev_lat, s_prev_lon, gps.lat, gps.lon);
                     if (step_m < 1000.0) {
@@ -250,6 +249,14 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 s_has_prev_fix = true;
             }
             RenderSpeedAndTrip();
+
+            // UTC as the receiver reports it. A local-time offset belongs in
+            // Settings and does not exist yet, so the caption says UTC rather
+            // than showing a number that is silently wrong by hours.
+            if (gps.time_valid) {
+                lv_label_set_text_fmt(s_clock_label, "%02u:%02u:%02u", gps.hour, gps.minute,
+                                      gps.second);
+            }
         }
     }
 
@@ -400,11 +407,11 @@ void PageDashboard::onViewLoad() {
                              LV_ALIGN_TOP_LEFT, 18, 138);
 
     // ---- Clock ----
-    // Placeholder: no time source exists yet. GPS_Info_t carries no date/time
-    // (the ported demo read it from TinyGPSPlus), and there is no RTC topic,
-    // so this stays "--:--:--" rather than showing an invented value. Wire it
-    // when GPS time or an RTC lands in DataCenter.
-    MakeLabel(parent, "TIME", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_LEFT, 18, 196);
+    // Fed by UBX NAV-PVT, which carries UTC alongside the position, so no RTC
+    // is needed. Stays "--:--:--" until the receiver reports the time fully
+    // resolved.
+    MakeLabel(parent, "TIME (UTC)", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_LEFT, 18,
+              196);
     s_clock_label = MakeLabel(parent, "--:--:--", &lv_font_montserrat_18, COLOR_VALUE,
                               LV_ALIGN_TOP_LEFT, 18, 212);
 

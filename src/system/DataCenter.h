@@ -21,11 +21,28 @@
 // ---- Shared data structures (published under the topic names below) ----
 
 typedef struct {
-    double lat;      // degrees
+    // Set from UBX NAV-PVT's gnssFixOK flag AND its fixType. Consumers must
+    // check this rather than inferring a fix from the coordinates: before a
+    // fix, lat/lon are legitimately 0,0, which is a real place in the Gulf of
+    // Guinea and indistinguishable from "no data" by value alone.
+    bool fix_valid;
+    uint8_t num_sv;   // satellites used in the solution
+
+    double lat;       // degrees
     double lon;       // degrees
     float speed;      // m/s
-    float alt;        // meters
+    float alt;        // meters above mean sea level
     float heading;    // degrees, 0-360
+
+    // UTC, straight off the receiver. time_valid additionally requires the
+    // receiver to report the time fully resolved, not merely present.
+    bool time_valid;
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second;
 } GPS_Info_t;
 
 typedef struct {
