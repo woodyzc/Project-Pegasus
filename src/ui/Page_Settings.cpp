@@ -31,6 +31,11 @@ lv_obj_t *s_hr_btns[HR_SOURCE_COUNT] = {nullptr, nullptr};
 lv_obj_t *s_hr_note = nullptr;
 HrSource_t s_hr_source_at_load = HR_SOURCE_BLE;
 
+constexpr int NAV_MODE_COUNT = 2; // index i == NavMode_t value i (TBT=0, GPX=1)
+lv_obj_t *s_nav_btns[NAV_MODE_COUNT] = {nullptr, nullptr};
+lv_obj_t *s_nav_note = nullptr;
+NavMode_t s_nav_mode_at_load = NAV_MODE_TBT;
+
 // One card per settings group, so the page scrolls as a tidy stack.
 lv_obj_t *MakeCard(lv_obj_t *parent, const char *caption) {
     lv_obj_t *card = lv_obj_create(parent);
@@ -122,10 +127,77 @@ void RefreshHrSelection() {
     }
 }
 
+void RefreshNavSelection() {
+    const NavMode_t current = Settings_GetNavMode();
+
+    for (int i = 0; i < NAV_MODE_COUNT; i++) {
+        if (s_nav_btns[i] == nullptr) {
+            continue;
+        }
+        const bool active = ((int)current == i);
+        lv_obj_set_style_bg_color(s_nav_btns[i],
+                                  lv_color_hex(active ? COLOR_ACCENT : 0x24313D), 0);
+        lv_obj_t *label = lv_obj_get_child(s_nav_btns[i], 0);
+        if (label != nullptr) {
+            lv_obj_set_style_text_color(label, lv_color_hex(active ? 0x081015 : COLOR_VALUE), 0);
+        }
+    }
+
+    if (s_nav_note == nullptr) {
+        return;
+    }
+
+    if (!Settings_NavModeIsImplemented(current)) {
+        // Say so rather than let the rider discover an empty ROUTE panel on
+        // the road.
+        lv_label_set_text(s_nav_note, "GPX breadcrumbs are not built yet: no turn prompts "
+                                      "will be shown in this mode.");
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
+    } else if (current != s_nav_mode_at_load) {
+        lv_label_set_text(s_nav_note, "Saved. Restart to apply.");
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_ACCENT), 0);
+    } else {
+        lv_label_set_text(s_nav_note, "Active now.");
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_CAPTION), 0);
+    }
+}
+
+// Both settings share one radio, so changing either can move the other (see
+// the exclusivity rule in Settings.h). Report it plainly instead of letting a
+// button the user didn't touch change under them.
+void NoteCoercion(const char *changed_to) {
+    lv_label_set_text_fmt(s_hr_note, "Heart rate switched to %s: turn-by-turn needs the BLE "
+                                     "stack, which ANT+ takes over.", changed_to);
+    lv_obj_set_style_text_color(s_hr_note, lv_color_hex(COLOR_DANGER), 0);
+}
+
+void OnNavModeClicked(lv_event_t *e) {
+    const int index = (int)(intptr_t)lv_event_get_user_data(e);
+    const HrSource_t hr_before = Settings_GetHrSource();
+
+    Settings_SetNavMode((NavMode_t)index);
+
+    RefreshNavSelection();
+    RefreshHrSelection();
+    if (Settings_GetHrSource() != hr_before) {
+        NoteCoercion(Settings_HrSourceLabel(Settings_GetHrSource()));
+    }
+}
+
 void OnHrSourceClicked(lv_event_t *e) {
     const int index = (int)(intptr_t)lv_event_get_user_data(e);
+    const NavMode_t nav_before = Settings_GetNavMode();
+
     Settings_SetHrSource((HrSource_t)index);
+
     RefreshHrSelection();
+    RefreshNavSelection();
+    if (Settings_GetNavMode() != nav_before) {
+        lv_label_set_text_fmt(s_nav_note, "Navigation switched to %s: ANT+ takes the radio "
+                                          "turn-by-turn needs.",
+                              Settings_NavModeLabel(Settings_GetNavMode()));
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
+    }
 }
 
 void OnRestartClicked(lv_event_t *e) {
@@ -294,6 +366,56 @@ void PageSettings::onViewLoad() {
 
     RefreshHrSelection();
 
+    // ---- Navigation ----
+    // Coupled to the heart-rate source by the one exclusivity rule in
+    // Settings.h; both selectors repair the other and say what moved.
+    s_nav_mode_at_load = Settings_GetNavMode();
+
+    lv_obj_t *nav_card = MakeCard(body, "NAVIGATION");
+
+    lv_obj_t *nav_row = lv_obj_create(nav_card);
+    lv_obj_set_size(nav_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(nav_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(nav_row, 0, 0);
+    lv_obj_set_style_pad_all(nav_row, 0, 0);
+    lv_obj_set_style_pad_column(nav_row, 6, 0);
+    lv_obj_clear_flag(nav_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(nav_row, LV_FLEX_FLOW_ROW);
+
+    static const char *const NAV_LABELS[NAV_MODE_COUNT] = {"TBT", "GPX"};
+    for (int i = 0; i < NAV_MODE_COUNT; i++) {
+        lv_obj_t *btn = lv_btn_create(nav_row);
+        lv_obj_set_flex_grow(btn, 1);
+        lv_obj_set_height(btn, 34);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_set_style_shadow_width(btn, 0, 0);
+        lv_obj_add_event_cb(btn, OnNavModeClicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+        lv_obj_t *label = lv_label_create(btn);
+        lv_label_set_text(label, NAV_LABELS[i]);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
+        lv_obj_center(label);
+
+        s_nav_btns[i] = btn;
+    }
+
+    lv_obj_t *nav_hint = lv_label_create(nav_card);
+    lv_label_set_text(nav_hint,
+                      "TBT: turn prompts pushed from the phone over BLE.\n"
+                      "GPX: offline breadcrumb from a .gpx on the SD card.\n"
+                      "TBT needs BLE, so it cannot run alongside ANT+.");
+    lv_obj_set_style_text_font(nav_hint, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(nav_hint, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_long_mode(nav_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(nav_hint, LV_PCT(100));
+
+    s_nav_note = lv_label_create(nav_card);
+    lv_obj_set_style_text_font(s_nav_note, &lv_font_montserrat_10, 0);
+    lv_label_set_long_mode(s_nav_note, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_nav_note, LV_PCT(100));
+
+    RefreshNavSelection();
+
     // ---- Reset trip ----
     lv_obj_t *trip_card = MakeCard(body, "TRIP");
     lv_obj_t *reset_btn = lv_btn_create(trip_card);
@@ -356,7 +478,11 @@ void PageSettings::onViewUnload() {
     s_uptime_value = nullptr;
     s_heap_value = nullptr;
     s_hr_note = nullptr;
+    s_nav_note = nullptr;
     for (int i = 0; i < HR_SOURCE_COUNT; i++) {
         s_hr_btns[i] = nullptr;
+    }
+    for (int i = 0; i < NAV_MODE_COUNT; i++) {
+        s_nav_btns[i] = nullptr;
     }
 }

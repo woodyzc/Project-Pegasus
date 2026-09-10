@@ -42,6 +42,32 @@ HrSource_t Settings_GetHrSource();
 void Settings_SetHrSource(HrSource_t source);
 const char *Settings_HrSourceLabel(HrSource_t source);
 
+// Navigation source (CLAUDE.md §5).
+typedef enum {
+    NAV_MODE_TBT = 0, // BLE turn-by-turn pushed from the phone
+    NAV_MODE_GPX = 1, // offline breadcrumb from a .gpx on the SD card
+} NavMode_t;
+
+// ---- The one exclusivity rule ----
+// TBT is a NimBLE GATT server, and HR_SOURCE_ANT hands the BLE controller to
+// deps/esp32-ant as a raw ANT modem with no NimBLE host (SoftANT.h). So
+// NAV_MODE_TBT and HR_SOURCE_ANT can never both be active:
+//
+//     never (NAV_MODE_TBT and HR_SOURCE_ANT)
+//
+// "TBT requires BLE" and "ANT+ requires GPX" are contrapositives of that one
+// statement, so it is enforced in exactly one place rather than as two rules
+// that could drift apart. Both setters below repair the conflict by moving the
+// OTHER setting, and Settings_Init() repairs a stored pair that violates it.
+// Callers that care which way it moved should re-read both after setting.
+NavMode_t Settings_GetNavMode();
+void Settings_SetNavMode(NavMode_t mode);
+const char *Settings_NavModeLabel(NavMode_t mode);
+
+// False for modes whose implementation doesn't exist yet, so the UI can say so
+// instead of offering a choice that quietly does nothing.
+bool Settings_NavModeIsImplemented(NavMode_t mode);
+
 // ---- Radio bring-up safety net ----
 // The HR source lives in NVS, so a mode that hangs during bring-up would
 // survive a reflash and leave the device looping with no reachable UI to undo

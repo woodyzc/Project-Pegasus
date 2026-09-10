@@ -4,6 +4,7 @@
 #include "hal/Battery.h"
 #include "hal/Display.h"
 #include "hal/Touch.h"
+#include "navigation/BLE_TBT_Receiver.h"
 #include "sensors/BLE_HR_Client.h"
 #include "sensors/SoftANT.h"
 #include "system/DataCenter.h"
@@ -78,6 +79,14 @@ void setup() {
         default:
             BLE_HR_Init();
             BLE_HR_Start();
+            // Turn-by-turn shares the NimBLE stack the HR client brings up.
+            // Settings guarantees NAV_MODE_TBT implies this branch (the
+            // exclusivity rule in Settings.h), but honour the mode explicitly
+            // rather than assuming: with GPX selected there is no reason to
+            // advertise a service nothing will write to.
+            if (Settings_GetNavMode() == NAV_MODE_TBT) {
+                BLE_TBT_Start();
+            }
             break;
     }
 

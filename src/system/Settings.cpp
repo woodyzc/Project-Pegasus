@@ -11,6 +11,7 @@ constexpr char KEY_BRIGHTNESS[] = "bright";
 constexpr char KEY_SPEED_UNIT[] = "unit";
 constexpr char KEY_HR_SOURCE[] = "hrsrc";
 constexpr char KEY_RADIO_PENDING[] = "radiopend";
+constexpr char KEY_NAV_MODE[] = "navmode";
 
 constexpr uint8_t DEFAULT_BRIGHTNESS = 100;
 constexpr float KM_TO_MILES = 0.621371f;
@@ -22,12 +23,17 @@ constexpr float KM_TO_MILES = 0.621371f;
 // deliberate act until it is proven on the bench.
 constexpr HrSource_t DEFAULT_HR_SOURCE = HR_SOURCE_BLE;
 
+// TBT is the only navigation mode that exists today; GPX is a declared
+// destination, not a working feature.
+constexpr NavMode_t DEFAULT_NAV_MODE = NAV_MODE_TBT;
+
 Preferences s_prefs;
 bool s_ready = false;
 
 uint8_t s_brightness = DEFAULT_BRIGHTNESS;
 SpeedUnit_t s_speed_unit = SPEED_UNIT_KMH;
 HrSource_t s_hr_source = DEFAULT_HR_SOURCE;
+NavMode_t s_nav_mode = DEFAULT_NAV_MODE;
 bool s_hr_fell_back = false;
 
 } // namespace
@@ -42,6 +48,7 @@ void Settings_Init() {
         s_brightness = s_prefs.getUChar(KEY_BRIGHTNESS, DEFAULT_BRIGHTNESS);
         s_speed_unit = (SpeedUnit_t)s_prefs.getUChar(KEY_SPEED_UNIT, SPEED_UNIT_KMH);
         s_hr_source = (HrSource_t)s_prefs.getUChar(KEY_HR_SOURCE, DEFAULT_HR_SOURCE);
+        s_nav_mode = (NavMode_t)s_prefs.getUChar(KEY_NAV_MODE, DEFAULT_NAV_MODE);
     }
 
     if (s_brightness > 100) {
@@ -54,6 +61,20 @@ void Settings_Init() {
     // setting, which now maps back to the default rather than a dead value.
     if (s_hr_source != HR_SOURCE_BLE && s_hr_source != HR_SOURCE_ANT) {
         s_hr_source = DEFAULT_HR_SOURCE;
+    }
+    if (s_nav_mode != NAV_MODE_TBT && s_nav_mode != NAV_MODE_GPX) {
+        s_nav_mode = DEFAULT_NAV_MODE;
+    }
+
+    // Repair a stored pair that breaks the exclusivity rule -- possible if the
+    // two keys were written by different firmware versions. The heart-rate
+    // source wins here: silently changing which sensor a rider's data comes
+    // from is a worse surprise than losing turn prompts.
+    if (s_nav_mode == NAV_MODE_TBT && s_hr_source == HR_SOURCE_ANT) {
+        s_nav_mode = NAV_MODE_GPX;
+        if (s_ready) {
+            s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
+        }
     }
 
     // A still-raised flag means the previous boot entered radio bring-up and
@@ -134,6 +155,54 @@ void Settings_SetHrSource(HrSource_t source) {
     if (s_ready) {
         s_prefs.putUChar(KEY_HR_SOURCE, (uint8_t)s_hr_source);
     }
+
+    // Exclusivity: ANT+ leaves no NimBLE host for the TBT GATT server.
+    if (s_hr_source == HR_SOURCE_ANT && s_nav_mode == NAV_MODE_TBT) {
+        s_nav_mode = NAV_MODE_GPX;
+        if (s_ready) {
+            s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
+        }
+    }
+}
+
+NavMode_t Settings_GetNavMode() {
+    return s_nav_mode;
+}
+
+void Settings_SetNavMode(NavMode_t mode) {
+    if (mode == s_nav_mode) {
+        return;
+    }
+
+    s_nav_mode = mode;
+    if (s_ready) {
+        s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
+    }
+
+    // The same rule from the other side: TBT needs the BLE stack up.
+    if (s_nav_mode == NAV_MODE_TBT && s_hr_source == HR_SOURCE_ANT) {
+        s_hr_source = HR_SOURCE_BLE;
+        if (s_ready) {
+            s_prefs.putUChar(KEY_HR_SOURCE, (uint8_t)s_hr_source);
+        }
+    }
+}
+
+const char *Settings_NavModeLabel(NavMode_t mode) {
+    switch (mode) {
+        case NAV_MODE_GPX:
+            return "GPX";
+        case NAV_MODE_TBT:
+        default:
+            return "TBT";
+    }
+}
+
+bool Settings_NavModeIsImplemented(NavMode_t mode) {
+    // No SD card driver, no GPX parser and no breadcrumb renderer exist yet.
+    // The board does have the slot (SDIO on IO38/40 + IO39/41/47/48), so this
+    // is a missing feature rather than a missing capability.
+    return mode != NAV_MODE_GPX;
 }
 
 const char *Settings_HrSourceLabel(HrSource_t source) {

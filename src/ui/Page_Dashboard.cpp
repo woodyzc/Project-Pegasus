@@ -1,6 +1,7 @@
 #include "Page_Dashboard.h"
 
 #include <math.h>
+#include <stdio.h>
 
 #include "../hal/Battery.h"
 #include "../system/DataCenter.h"
@@ -23,6 +24,10 @@ constexpr uint32_t COLOR_VALUE = 0xFFFFFF;   // primary readouts
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
 constexpr uint32_t COLOR_BADGE_TEXT = 0x081015;
 
+// A turn older than this is treated as gone (phone closed, app backgrounded,
+// link dropped without a clean disconnect).
+constexpr uint32_t TBT_STALE_MS = 30000;
+
 // Heart-rate zone bands and their badge colours.
 constexpr uint8_t ZONE2_LOW = 90;
 constexpr uint8_t ZONE3_LOW = 120;
@@ -40,6 +45,8 @@ lv_obj_t *s_hr_label = nullptr;
 lv_obj_t *s_hr_zone_label = nullptr;
 lv_obj_t *s_route_arrow_label = nullptr;
 lv_obj_t *s_route_dir_label = nullptr;
+lv_obj_t *s_route_dist_label = nullptr;
+uint32_t s_tbt_last_ms = 0;
 lv_obj_t *s_battery_label = nullptr;
 lv_timer_t *s_refresh_timer = nullptr;
 
@@ -55,6 +62,7 @@ volatile bool s_gps_dirty = false;
 volatile bool s_hr_dirty = false;
 volatile bool s_imu_dirty = false;
 volatile bool s_battery_dirty = false;
+volatile bool s_tbt_dirty = false;
 
 // Trip accumulator, only ever touched from the Core-1 refresh timer (and
 // Page_Dashboard_ResetTrip(), which the settings page calls from the same core).
@@ -103,6 +111,14 @@ void OnBatteryPublished(const char *topic, const void *data, uint32_t size, void
     s_battery_dirty = true;
 }
 
+void OnTbtPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
+    (void)topic;
+    (void)data;
+    (void)size;
+    (void)user_arg;
+    s_tbt_dirty = true;
+}
+
 // Great-circle distance in metres. The ported demo used
 // TinyGPSPlus::distanceBetween(); this branch has no TinyGPS dependency
 // (platformio.ini uses the SparkFun u-blox library), so compute it directly.
@@ -146,6 +162,53 @@ void UpdateHeartRateZone(uint8_t bpm) {
 
     lv_label_set_text(s_hr_zone_label, zone_name);
     lv_obj_set_style_bg_color(s_hr_zone_label, lv_color_hex(color), 0);
+}
+
+// LVGL's built-in symbol font has no diagonal or u-turn arrows, so the
+// slight/sharp variants collapse onto the plain left/right glyphs and the
+// turn type is carried by the street line instead. Proper maneuver icons
+// would need a custom font or image assets.
+const char *TbtIconSymbol(uint8_t icon_id) {
+    switch (icon_id) {
+        case TBT_ICON_STRAIGHT:      return LV_SYMBOL_UP;
+        case TBT_ICON_TURN_LEFT:
+        case TBT_ICON_SLIGHT_LEFT:
+        case TBT_ICON_SHARP_LEFT:    return LV_SYMBOL_LEFT;
+        case TBT_ICON_TURN_RIGHT:
+        case TBT_ICON_SLIGHT_RIGHT:
+        case TBT_ICON_SHARP_RIGHT:   return LV_SYMBOL_RIGHT;
+        case TBT_ICON_UTURN:
+        case TBT_ICON_ROUNDABOUT:    return LV_SYMBOL_REFRESH;
+        case TBT_ICON_ARRIVE:        return LV_SYMBOL_OK;
+        case TBT_ICON_NONE:
+        default:                     return LV_SYMBOL_UP;
+    }
+}
+
+// Distances follow the same unit setting as speed: showing kilometres to the
+// next turn on a device reading mph would be incoherent.
+void FormatTbtDistance(uint32_t metres, char *out, size_t out_size) {
+    if (Settings_GetSpeedUnit() == SPEED_UNIT_MPH) {
+        const float feet = metres * 3.28084f;
+        if (feet < 1000.0f) {
+            snprintf(out, out_size, "%u ft", (unsigned)(feet + 0.5f));
+        } else {
+            snprintf(out, out_size, "%.1f mi", metres / 1609.344f);
+        }
+        return;
+    }
+    if (metres < 1000) {
+        snprintf(out, out_size, "%u m", (unsigned)metres);
+    } else {
+        snprintf(out, out_size, "%.1f km", metres / 1000.0f);
+    }
+}
+
+void ClearTbt() {
+    lv_label_set_text(s_route_arrow_label, LV_SYMBOL_UP);
+    lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(0x3A4854), 0);
+    lv_label_set_text(s_route_dist_label, "");
+    lv_label_set_text(s_route_dir_label, "NO ROUTE");
 }
 
 void RenderSpeedAndTrip() {
@@ -227,6 +290,33 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         }
     }
 
+    if (s_tbt_dirty) {
+        s_tbt_dirty = false;
+        TBT_Directive_t tbt;
+        if (DataCenter_Pull(TOPIC_NAV_TBT, &tbt, sizeof(tbt))) {
+            if (tbt.icon_id == TBT_ICON_NONE) {
+                ClearTbt();
+                s_tbt_last_ms = 0;
+            } else {
+                char dist[16];
+                FormatTbtDistance(tbt.distance_m, dist, sizeof(dist));
+                lv_label_set_text(s_route_arrow_label, TbtIconSymbol(tbt.icon_id));
+                lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
+                lv_label_set_text(s_route_dist_label, dist);
+                lv_label_set_text(s_route_dir_label,
+                                  tbt.street_name[0] != '\0' ? tbt.street_name : "AHEAD");
+                s_tbt_last_ms = lv_tick_get();
+            }
+        }
+    }
+
+    // Drop a stale turn rather than leaving the rider following an
+    // instruction the phone stopped confirming.
+    if (s_tbt_last_ms != 0 && lv_tick_elaps(s_tbt_last_ms) > TBT_STALE_MS) {
+        ClearTbt();
+        s_tbt_last_ms = 0;
+    }
+
     if (s_imu_dirty) {
         s_imu_dirty = false;
         IMU_Data_t imu;
@@ -252,6 +342,7 @@ Account s_gps_account("Page_Dashboard/GPS", OnGpsPublished);
 Account s_hr_account("Page_Dashboard/HeartRate", OnHeartRatePublished);
 Account s_imu_account("Page_Dashboard/IMU", OnImuPublished);
 Account s_battery_account("Page_Dashboard/Battery", OnBatteryPublished);
+Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 
 } // namespace
 
@@ -341,15 +432,25 @@ void PageDashboard::onViewLoad() {
     lv_obj_align(s_hr_zone_label, LV_ALIGN_TOP_RIGHT, -18, 238);
 
     // ---- Route / turn-by-turn ----
-    // Placeholder: CLAUDE.md §5 plans turn arrows pushed over BLE from the
-    // phone, and nothing publishes them yet. The ported demo cycled through
-    // fake directions on a timer; that is deliberately not carried over, so
-    // the screen never shows a turn that isn't real.
-    MakeLabel(parent, "ROUTE", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -18, 264);
+    // Fed by TOPIC_NAV_TBT from src/navigation/BLE_TBT_Receiver.cpp, which the
+    // phone writes into over BLE (CLAUDE.md §5).
+    MakeLabel(parent, "ROUTE", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -18, 256);
     s_route_arrow_label = MakeLabel(parent, LV_SYMBOL_UP, &lv_font_montserrat_28, COLOR_ACCENT,
-                                    LV_ALIGN_TOP_RIGHT, -18, 278);
-    s_route_dir_label = MakeLabel(parent, "NO ROUTE", &lv_font_montserrat_12, COLOR_VALUE,
-                                  LV_ALIGN_TOP_RIGHT, -18, 300);
+                                    LV_ALIGN_TOP_RIGHT, -18, 268);
+    s_route_dist_label = MakeLabel(parent, "", &lv_font_montserrat_18, COLOR_VALUE,
+                                   LV_ALIGN_TOP_RIGHT, -48, 276);
+
+    // Street names run long; clip with an ellipsis instead of letting the text
+    // run left across the heart-rate column.
+    s_route_dir_label = lv_label_create(parent);
+    lv_obj_set_width(s_route_dir_label, 132);
+    lv_label_set_long_mode(s_route_dir_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_route_dir_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_route_dir_label, lv_color_hex(COLOR_VALUE), 0);
+    lv_obj_align(s_route_dir_label, LV_ALIGN_TOP_RIGHT, -18, 300);
+
+    ClearTbt();
 
     RenderSpeedAndTrip();
 
@@ -357,6 +458,7 @@ void PageDashboard::onViewLoad() {
     DataCenter_Subscribe(TOPIC_HEART_RATE, &s_hr_account);
     DataCenter_Subscribe(TOPIC_IMU_DATA, &s_imu_account);
     DataCenter_Subscribe(TOPIC_BATTERY, &s_battery_account);
+    DataCenter_Subscribe(TOPIC_NAV_TBT, &s_tbt_account);
 
     s_refresh_timer = lv_timer_create(RefreshTimerCallback, 100, nullptr);
 }
@@ -373,6 +475,7 @@ void PageDashboard::onViewUnload() {
     DataCenter_Unsubscribe(TOPIC_HEART_RATE, &s_hr_account);
     DataCenter_Unsubscribe(TOPIC_IMU_DATA, &s_imu_account);
     DataCenter_Unsubscribe(TOPIC_BATTERY, &s_battery_account);
+    DataCenter_Unsubscribe(TOPIC_NAV_TBT, &s_tbt_account);
 
     s_speed_label = nullptr;
     s_speed_unit_label = nullptr;
@@ -383,5 +486,6 @@ void PageDashboard::onViewUnload() {
     s_hr_zone_label = nullptr;
     s_route_arrow_label = nullptr;
     s_route_dir_label = nullptr;
+    s_route_dist_label = nullptr;
     s_battery_label = nullptr;
 }

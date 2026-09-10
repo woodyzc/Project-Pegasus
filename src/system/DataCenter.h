@@ -44,12 +44,43 @@ typedef struct {
     bool on_usb;         // true when the rail reads above any real LiPo, i.e. USB-powered
 } Battery_t;
 
+// Turn-by-turn maneuver icons. Values are wire constants -- the phone app
+// sends these numerically, so append new ones rather than renumbering.
+typedef enum {
+    TBT_ICON_NONE = 0, // no active route
+    TBT_ICON_STRAIGHT = 1,
+    TBT_ICON_TURN_LEFT = 2,
+    TBT_ICON_TURN_RIGHT = 3,
+    TBT_ICON_SLIGHT_LEFT = 4,
+    TBT_ICON_SLIGHT_RIGHT = 5,
+    TBT_ICON_SHARP_LEFT = 6,
+    TBT_ICON_SHARP_RIGHT = 7,
+    TBT_ICON_UTURN = 8,
+    TBT_ICON_ROUNDABOUT = 9,
+    TBT_ICON_ARRIVE = 10,
+    _TBT_ICON_LAST = TBT_ICON_ARRIVE,
+} TBT_Icon_t;
+
+#define TBT_STREET_NAME_MAX 32 // 31 UTF-8 bytes + NUL
+
+// One turn-by-turn directive pushed from the phone (CLAUDE.md §5).
+// Declared here beside the other topic payloads rather than in
+// BLE_TBT_Receiver.h, so DataCenter's topic table can size it without the bus
+// depending on a navigation module, and so any page can consume it by
+// including this header alone.
+typedef struct {
+    uint8_t icon_id;                       // a TBT_Icon_t value
+    uint32_t distance_m;                   // metres to the maneuver
+    char street_name[TBT_STREET_NAME_MAX]; // NUL-terminated, may be empty
+} TBT_Directive_t;
+
 // Well-known topic names (CLAUDE.md §4 examples: "Sensor/HeartRate", "GPS_Info").
 // Add new topics by extending the registration table in DataCenter.cpp.
 extern const char *const TOPIC_GPS_INFO;
 extern const char *const TOPIC_HEART_RATE;
 extern const char *const TOPIC_IMU_DATA;
 extern const char *const TOPIC_BATTERY;
+extern const char *const TOPIC_NAV_TBT;
 
 // Called by a subscriber on every DataCenter_Publish() to that topic, with a
 // fresh copy of the published data (NOT a pointer into DataCenter's internal
