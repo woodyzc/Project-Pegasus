@@ -2,11 +2,15 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 #include "../hal/Battery.h"
 #include "../system/DataCenter.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
+#include "../system/TimeZone.h"
 
 // Visual design ported from the agents/lvgl-ui-layout-speed-odometer-clock
 // branch (c81da8c): dark slate background, one oversized speed readout, and a
@@ -40,6 +44,11 @@ lv_obj_t *s_speed_label = nullptr;
 lv_obj_t *s_speed_unit_label = nullptr;
 lv_obj_t *s_trip_label = nullptr;
 lv_obj_t *s_clock_label = nullptr;
+lv_obj_t *s_clock_caption = nullptr;
+
+// Applying a TZ string calls tzset(), which is not free, so only redo it when
+// the zone actually changes -- which is almost never on a bike.
+const char *s_active_tz = nullptr;
 lv_obj_t *s_incline_label = nullptr;
 lv_obj_t *s_hr_label = nullptr;
 lv_obj_t *s_hr_zone_label = nullptr;
@@ -250,12 +259,39 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             }
             RenderSpeedAndTrip();
 
-            // UTC as the receiver reports it. A local-time offset belongs in
-            // Settings and does not exist yet, so the caption says UTC rather
-            // than showing a number that is silently wrong by hours.
-            if (gps.time_valid) {
+            // Local time, derived from the fix itself: the position picks the
+            // timezone and newlib applies its DST rule. No setting, no
+            // network. Needs a valid fix as well as valid time -- without a
+            // position there is no zone to resolve.
+            if (gps.time_valid && gps.fix_valid) {
+                bool approximate = false;
+                const char *tz = TimeZone_PosixFor(gps.lat, gps.lon, &approximate);
+
+                if (s_active_tz == nullptr || strcmp(s_active_tz, tz) != 0) {
+                    setenv("TZ", tz, 1);
+                    tzset();
+                    s_active_tz = tz;
+                }
+
+                const time_t epoch = (time_t)TimeZone_UtcToEpoch(
+                    gps.year, gps.month, gps.day, gps.hour, gps.minute, gps.second);
+                struct tm local;
+                localtime_r(&epoch, &local);
+
+                lv_label_set_text_fmt(s_clock_label, "%02d:%02d:%02d", local.tm_hour,
+                                      local.tm_min, local.tm_sec);
+
+                // The caption carries the zone abbreviation newlib resolved
+                // (EST, EDT, CST...), so the displayed hour is attributable
+                // rather than just asserted. A guessed zone says so.
+                char zone[8] = {0};
+                strftime(zone, sizeof(zone), "%Z", &local);
+                lv_label_set_text_fmt(s_clock_caption, approximate ? "TIME ~%s" : "TIME %s", zone);
+            } else if (gps.time_valid) {
+                // Time but no fix: UTC is all that can honestly be shown.
                 lv_label_set_text_fmt(s_clock_label, "%02u:%02u:%02u", gps.hour, gps.minute,
                                       gps.second);
+                lv_label_set_text(s_clock_caption, "TIME UTC");
             }
         }
     }
@@ -408,10 +444,11 @@ void PageDashboard::onViewLoad() {
 
     // ---- Clock ----
     // Fed by UBX NAV-PVT, which carries UTC alongside the position, so no RTC
-    // is needed. Stays "--:--:--" until the receiver reports the time fully
-    // resolved.
-    MakeLabel(parent, "TIME (UTC)", &lv_font_montserrat_10, COLOR_CAPTION, LV_ALIGN_TOP_LEFT, 18,
-              196);
+    // is needed -- and the position also chooses the timezone, so the clock
+    // reads local time with no setting to get wrong. Stays "--:--:--" until
+    // the receiver reports the time fully resolved.
+    s_clock_caption = MakeLabel(parent, "TIME", &lv_font_montserrat_10, COLOR_CAPTION,
+                                LV_ALIGN_TOP_LEFT, 18, 196);
     s_clock_label = MakeLabel(parent, "--:--:--", &lv_font_montserrat_18, COLOR_VALUE,
                               LV_ALIGN_TOP_LEFT, 18, 212);
 
@@ -488,6 +525,8 @@ void PageDashboard::onViewUnload() {
     s_speed_unit_label = nullptr;
     s_trip_label = nullptr;
     s_clock_label = nullptr;
+    s_clock_caption = nullptr;
+    s_active_tz = nullptr;
     s_incline_label = nullptr;
     s_hr_label = nullptr;
     s_hr_zone_label = nullptr;
