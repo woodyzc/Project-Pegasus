@@ -3,3 +3,7 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# host test binaries (test/host/Makefile)
+test/host/test_parsebpm
+test/host/test_parsebpm_asan
