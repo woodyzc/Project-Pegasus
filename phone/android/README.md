@@ -54,6 +54,23 @@ The `Last notification:` line shows what the parser made of the most recent
 Maps notification, including the raw title/text when it failed. That is the
 first thing to look at when Maps changes its format.
 
+## How it stays alive
+
+The BLE link lives in `TbtService`, a foreground service, not in the Activity.
+That is not decoration: the phone spends a ride in a pocket, Android destroys
+the Activity, and the link has to keep running. An earlier version owned the
+link from `MainActivity` and published it through a static field, which leaked
+the Activity and left the notification listener writing into an object whose
+owner had been torn down -- prompts would have stopped mid-ride with nothing on
+screen to say why.
+
+The persistent notification in the shade is the price Android charges for
+holding a BLE connection in the background, and it doubles as a status line:
+it shows the current connection state without unlocking the phone.
+
+The service is also started from `onListenerConnected()`, so the link comes up
+after a reboot without anyone opening the app.
+
 ## Wire format
 
 `TbtFrame.kt` encodes it; **`src/navigation/TbtParse.h` in the firmware is the
@@ -90,9 +107,6 @@ never splits a UTF-8 character).
 
 - **English only.** Switching Maps to another language stops the parser
   matching; `ICON_PATTERNS` is where to add phrasing.
-- **No foreground service.** Android may kill the app in the background during
-  a long ride. A foreground service with a persistent notification is the
-  standard fix and is not implemented yet.
 - **No lane guidance, no ETA, no next-next maneuver** — the wire format has
   room for one directive at a time.
 - **Diagonal arrows don't exist on the head unit.** LVGL's built-in symbol

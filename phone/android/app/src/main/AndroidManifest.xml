@@ -16,6 +16,14 @@
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
+    <!-- The link runs in a foreground service so it survives the Activity
+         being destroyed while the phone is in a pocket. API 34 additionally
+         requires declaring the service's type. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- API 33+: without this the service's notification is suppressed. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="false"
         android:label="@string/app_name"
@@ -30,6 +38,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".TbtService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- Bound by the system once the user enables notification access.
              BIND_NOTIFICATION_LISTENER_SERVICE must be the *service's*

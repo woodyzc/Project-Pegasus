@@ -16,8 +16,13 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 
 /**
- * A deliberately plain control panel: grant the two permissions, see whether
- * the link is up, and send a test frame without needing Maps at all.
+ * A deliberately plain control panel: grant permissions, see whether the link
+ * is up, and send a test frame without needing Maps at all.
+ *
+ * It deliberately owns nothing. The BLE link belongs to TbtService so it
+ * survives this screen being destroyed -- which is the normal case, since the
+ * phone spends the ride in a pocket. This class only starts that service and
+ * reads its published state.
  *
  * The test button matters more than it looks -- it separates "the BLE link is
  * broken" from "the notification parsing is broken", which are the two ways
@@ -28,10 +33,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var parseStatus: TextView
     private val handler = Handler(Looper.getMainLooper())
-    private var ble: BleLink? = null
 
     private val refresh = object : Runnable {
         override fun run() {
+            // Polled rather than pushed: the service is the source of truth and
+            // this screen is often not alive to receive a callback.
+            status.text = TbtService.status
             parseStatus.text = "Last notification: ${MapsNotificationListener.lastParse}"
             handler.postDelayed(this, 1000)
         }
@@ -54,7 +61,7 @@ class MainActivity : AppCompatActivity() {
         val testButton = Button(this).apply {
             text = "Send test turn (250 m, right)"
             setOnClickListener {
-                val sent = ble?.send(
+                val sent = TbtService.link?.send(
                     TbtFrame.encode(ManeuverParser.Icon.TURN_RIGHT, 250, "Test Street"),
                     force = true
                 ) ?: false
@@ -64,7 +71,7 @@ class MainActivity : AppCompatActivity() {
 
         val clearButton = Button(this).apply {
             text = "Clear route"
-            setOnClickListener { ble?.send(TbtFrame.clearFrame(), force = true) }
+            setOnClickListener { TbtService.link?.send(TbtFrame.clearFrame(), force = true) }
         }
 
         setContentView(LinearLayout(this).apply {
@@ -77,13 +84,8 @@ class MainActivity : AppCompatActivity() {
             addView(clearButton)
         })
 
-        requestBluetoothPermissions()
-
-        ble = BleLink(this).also {
-            it.onStatus = { message -> status.text = message }
-            MapsNotificationListener.ble = it
-            it.start()
-        }
+        requestRuntimePermissions()
+        TbtService.start(this)
     }
 
     override fun onResume() {
@@ -96,7 +98,7 @@ class MainActivity : AppCompatActivity() {
         handler.removeCallbacks(refresh)
     }
 
-    private fun requestBluetoothPermissions() {
+    private fun requestRuntimePermissions() {
         val needed = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             needed += Manifest.permission.BLUETOOTH_SCAN
@@ -104,6 +106,12 @@ class MainActivity : AppCompatActivity() {
         } else {
             // Pre-12, BLE scanning is gated behind location permission.
             needed += Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Without this the foreground service still runs, but its
+            // notification is suppressed -- so the one visible sign that the
+            // link is alive would silently disappear.
+            needed += Manifest.permission.POST_NOTIFICATIONS
         }
         val missing = needed.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED

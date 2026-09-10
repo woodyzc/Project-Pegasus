@@ -27,7 +27,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  * next one a second later corrects it -- so there is no queue or retry logic.
  */
 @SuppressLint("MissingPermission") // callers check; see MainActivity
-class BleLink(private val context: Context) {
+class BleLink(context: Context) {
+
+    // Defensive: this object is owned by TbtService and outlives every
+    // Activity, so it must never pin one. Taking applicationContext here means
+    // a caller passing an Activity by mistake cannot leak it.
+    private val context: Context = context.applicationContext
 
     companion object {
         private const val TAG = "PegasusBle"

@@ -34,15 +34,16 @@ class MapsNotificationListener : NotificationListenerService() {
         private const val MAPS_PACKAGE = "com.google.android.apps.maps"
 
         @Volatile
-        var ble: BleLink? = null
-
-        @Volatile
         var lastParse: String = "nothing seen yet"
             private set
     }
 
     override fun onListenerConnected() {
         Log.i(TAG, "Notification access granted")
+        // The listener can be bound by the system before the user ever opens
+        // the app -- after a reboot, for instance -- so make sure the link is
+        // up rather than assuming MainActivity started it.
+        TbtService.start(applicationContext)
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
@@ -70,7 +71,7 @@ class MapsNotificationListener : NotificationListenerService() {
             "street='${maneuver.streetName}'\nraw: '$title' / '$text'"
         Log.d(TAG, lastParse)
 
-        ble?.send(
+        TbtService.link?.send(
             TbtFrame.encode(maneuver.iconId, maneuver.distanceMetres, maneuver.streetName)
         )
     }
@@ -80,7 +81,7 @@ class MapsNotificationListener : NotificationListenerService() {
         // Navigation stopped. Clear immediately rather than waiting for the
         // firmware's 30s staleness timeout to notice.
         lastParse = "navigation ended"
-        ble?.send(TbtFrame.clearFrame(), force = true)
+        TbtService.link?.send(TbtFrame.clearFrame(), force = true)
     }
 
     private fun readTitle(n: Notification): String? =
