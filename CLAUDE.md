@@ -11,24 +11,62 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Reference Spec**: For full architectural details, consult `PROJECT_PEGASUS_SPEC_v1.0.md`.
 
 ## 2. Hardware Architecture & Pinout Specifications
+
+> ⚠️ **The board on the bench is NOT the board specified below.** Development
+> currently runs on a **Hosyond ESP32-S3 2.8" (ES3C28P reference design)**,
+> bought as a stand-in until the Waveshare unit arrives. It differs in the
+> display controller and every display/touch pin. `platformio.ini` on the
+> `board/hosyond-esp32-s3-2.8` branch is the authority on what is actually
+> wired; this section describes the *target* hardware.
+>
+> Confirmed on the Hosyond board (vendor docs + `esptool`): ILI9341V panel,
+> SPI on MOSI 11 / SCLK 12 / CS 10 / DC 46, backlight IO45 active-high, no
+> panel reset line; FT6336G touch on I2C SDA 16 / SCL 15, INT 17, **RST 18**;
+> 16MB flash and **8MB octal PSRAM** ("Embedded PSRAM 8MB (AP_3v3)"); battery
+> sense on **GPIO9** through a 2:1 divider with a TP4054 charger; microSD on
+> **SDIO** (CLK 38, CMD 40, DATA 39/41/47/48) — so `SD_MMC`, not the SPI `SD`
+> library.
+>
+> Items below marked *(target board only)* have **not** been confirmed to
+> exist on the Hosyond board. Do not assume they are present.
+
 - **Core MCU & Display**: Waveshare ESP32-S3-Touch-LCD-2.8 (Dual-Core 240MHz, 16MB Flash, PSRAM, 2.8" ST7789 Touch LCD).
 - **GNSS Module**: u-blox MAX-M10S connected via dedicated UART (GPIO43/44).
   - *Constraint*: Force UBX binary protocol only; disable high-overhead NMEA text parsing.
   - *Power*: Retain micro-power RTC backup (~15μA) for <1s hot starts.
-- **IMU Sensor**: Onboard QMI8658 6-axis IMU (I2C).
+- **IMU Sensor** *(target board only)*: Onboard QMI8658 6-axis IMU (I2C).
   - *Uses*: Motion detection, inclination/slope calculation, anti-theft alarm, fall detection, and Any-Motion wake-up triggers.
+  - `Page_Dashboard` already renders grade from `IMU_Data_t.pitch`, so the
+    INCLINE field stays blank until an IMU exists and publishes.
 - **Power & Control**:
-  - Onboard `BAT` Button (GPIO Interrupt): Soft-switch for manual Deep Sleep entry and wake-up.
+  - Onboard `BAT` Button (GPIO Interrupt) *(target board only)*: Soft-switch for manual Deep Sleep entry and wake-up.
   - Power Subsystem: Target ~200μA standby current in Deep Sleep (5–6 months standby on 1000mAh battery).
-- **Audio Output**: Onboard PCM5101 I2S decoder & speaker for key clicks, off-route alerts, and turn prompts.
+- **Audio Output** *(target board only)*: Onboard PCM5101 I2S decoder & speaker for key clicks, off-route alerts, and turn prompts.
 
 ## 3. Wireless Connectivity & Sensor Decoding
-- **Pure Software ANT+ (Primary for ANT+ Straps)**:
+
+> The "ANT+ primary, BLE secondary" arrangement below was **replaced by a
+> mutually exclusive choice**, because the two cannot coexist as built:
+> `SoftANT_Start(false)` hands the BLE controller to `esp32-ant` as a raw ANT
+> modem, leaving no NimBLE host. The user picks one in Settings, and since
+> both are init-time radio configurations, a change only applies on restart.
+>
+> That choice also gates navigation, enforced as a single rule in
+> `Settings.h`: **never (NAV_MODE_TBT and HR_SOURCE_ANT)**. Turn-by-turn is a
+> NimBLE GATT server, so choosing ANT+ forces navigation to GPX, and choosing
+> TBT forces heart rate to BLE. Both setters repair the conflict and the UI
+> reports which setting moved.
+
+- **Pure Software ANT+ (one of two exclusive heart-rate sources)**:
   - Utilize ESP32-S3 2.4GHz PHY via `esp32-ant` software library.
   - Soft-decode 2.4GHz ANT+ broadcast packets in a dedicated FreeRTOS task on Core 0 to extract BPM from Device Type `0x78`.
   - *No external SPI ANT+/NRF24 hardware required*.
-- **BLE Client (Secondary / Galaxy Watch 8)**:
+- **BLE Client (the other exclusive source / Galaxy Watch 8)**:
   - Run `NimBLE-Arduino` on Core 0 for point-to-point connection to standard BLE Heart Rate Service (`0x180D`).
+  - Defaults to this source. ANT+ has never been exercised on hardware, and a
+    hang during its bring-up would strand the user on a dead screen with the
+    setting unreachable — hence also the NVS bring-up watchdog in
+    `Settings_Init()`, which reverts to BLE if a previous boot never completed.
 
 ## 4. Software Architecture & FreeRTOS Core Rules
 - **Core 0 (Background Data Core)**:
@@ -58,7 +96,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Offline Breadcrumb Navigation**: Read `.gpx` files from SD card and render breadcrumb trails on LVGL canvas.
 
 ## 6. Open-Source Reference Repositories (`deps/`)
-Vendored as git submodules for reference (not yet wired into the PlatformIO build). Each submodule's responsibility:
+Vendored as git submodules. Most are reference only, but **`deps/esp32-ant`
+is now a real build dependency**, pulled in via
+`symlink://deps/esp32-ant/components/ant` in `platformio.ini` — so the
+submodule must be initialised (`git submodule update --init`) or the firmware
+will not link. `deps/X-TRACK`'s `PageManager` and `DataCenter` have been
+*ported into* `src/` rather than linked; the submodule remains the reference
+for both. Each submodule's responsibility:
 
 - **`deps/X-TRACK`** ([FASTSHIFT/X-TRACK](https://github.com/FASTSHIFT/X-TRACK)): Extract `DataCenter` (Pub/Sub message bus), `PageManager` page life-cycle management, and breadcrumb-trail rendering.
 - **`deps/NimBLE-Arduino`** ([h2zero/NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)): Low-power BLE client for connecting to the Galaxy Watch 8 / a standard BLE heart-rate strap (`0x180D`), and for receiving turn-by-turn (TBT) navigation data pushed from the phone app.
@@ -74,3 +118,40 @@ Together, `deps/Kalman` + `deps/Arduino-KalmanFilter` + `deps/uBloxGPS` replace 
 1. **Compilation Validation**: Always run `pio run` after creating or modifying code to verify zero build errors.
 2. **Asynchronous & Non-Blocking**: Do NOT use blocking `delay()` calls; rely on FreeRTOS tasks and `vTaskDelay()`.
 3. **Power-Safe Storage**: Before entering Deep Sleep, always flush telemetry buffers and safely unmount the SD card.
+
+## 8. Bench Realities (read before debugging hardware)
+
+These were each discovered the slow way. They are not optional trivia.
+
+- **Serial is unusable over USB-Serial-JTAG on the dev Mac.** Opening
+  `/dev/cu.usbmodem*` toggles CDC control lines that map to `EN`/`GPIO0`, so
+  the host reboots the chip into download mode (`waiting for download`)
+  instead of reading it. `pyserial` asserting DTR/RTS by default holds the
+  chip in reset outright. A "silent board" is far more often this than a
+  firmware fault. Workarounds: wire **UART0 (GPIO43/44)** to a USB-TTL
+  adapter — note that collides with the planned GNSS UART — or **print
+  diagnostics to the LCD panel**, which is what actually worked.
+- **`pio` is not on `PATH`.** Use `~/.platformio/penv/bin/pio`.
+- **Three build flags are load-bearing.** Removing any one produces a
+  confusing failure a long way from the cause:
+  - `-D LV_CONF_INCLUDE_SIMPLE` **and** `-I include` — both, or LVGL compiles
+    against upstream defaults while `src/` sees your `lv_conf.h`. Symptom is a
+    link error on `lv_font_montserrat_24`, not a config warning.
+  - `-D USE_HSPI_PORT` — without it TFT_eSPI's S3 branch shares the Arduino
+    global `SPI` object and `tft.begin()` panics
+    (`esp_reset_reason() == ESP_RST_PANIC`): black screen, endless reboot.
+  - `-D TOUCH_RST_PIN=18` — the FT6336G answers nothing on I2C until its
+    reset line is driven high.
+- **A setting that hangs at boot outlives a reflash**, because it lives in
+  NVS. `Settings_Init()`'s bring-up watchdog exists for exactly this; do not
+  remove it when adding radio modes.
+
+## 9. Companion App (`phone/android/`)
+
+A Kotlin app that scrapes Google Maps' navigation notification and writes
+turn-by-turn frames to the head unit over BLE — Maps exposes no API, so the
+notification is the only route without root. See its own README.
+
+**`src/navigation/TbtParse.h` is the authority on the wire format**; the app's
+`TbtFrame.kt` is an encoder for it, and `TbtFrameTest` pins the two together
+byte for byte. Change one side and that test should be what notices.
