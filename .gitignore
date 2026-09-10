@@ -6,4 +6,6 @@
 
 # host test binaries (test/host/Makefile)
 test/host/test_parsebpm
+test/host/test_ble_hr_parse
 test/host/test_parsebpm_asan
+test/host/test_ble_hr_parse_asan
