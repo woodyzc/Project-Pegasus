@@ -82,10 +82,10 @@
 #define LV_FONT_MONTSERRAT_12 1 /* route direction text */
 #define LV_FONT_MONTSERRAT_14 1 /* title, zone badge */
 #define LV_FONT_MONTSERRAT_18 1 /* clock / incline / bpm readouts */
-/* 24 was the metric value size until the navigation region grew to 60%
- * and the four readouts moved up to 28. Nothing references it now, and
- * LVGL compiles a font whenever its macro is set. */
-#define LV_FONT_MONTSERRAT_24 0
+/* The turn-by-turn road name. Was 14, which left the navigation tile
+ * looking empty; 24 is the largest that still fits a typical street name
+ * across the panel ("Rockingham Rd" is 197px of 228). */
+#define LV_FONT_MONTSERRAT_24 1
 /* 28 was the metric value size until the units moved up onto the caption row
  * and freed the width for 34, then 40. Neither is referenced now. */
 #define LV_FONT_MONTSERRAT_28 0

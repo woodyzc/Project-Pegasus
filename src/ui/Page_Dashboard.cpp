@@ -17,6 +17,7 @@
 #include "../system/TimeZone.h"
 #include "MapView.h"
 #include "Page_Map.h"
+#include "TbtIcons.h"
 
 // Visual design ported from the agents/lvgl-ui-layout-speed-odometer-clock
 // branch (c81da8c): dark slate background, one oversized speed readout, and a
@@ -119,9 +120,13 @@ bool s_nav_is_map = false;
 constexpr size_t INLINE_MAP_POINTS = 256;
 lv_point_t s_map_points[INLINE_MAP_POINTS];
 MapPoint_t s_map_projected[INLINE_MAP_POINTS];
+// An lv_img, not a label: the maneuver arrows are generated bitmaps now
+// (TbtIcons.h). Kept under the old name because every reference to it means
+// the same thing -- the thing in the corner that shows which way to go.
 lv_obj_t *s_route_arrow_label = nullptr;
 lv_obj_t *s_route_dir_label = nullptr;
 lv_obj_t *s_route_dist_label = nullptr;
+lv_obj_t *s_route_dist_unit = nullptr;
 uint32_t s_tbt_last_ms = 0;
 uint32_t s_hr_last_ms = 0;
 lv_obj_t *s_battery_label = nullptr;
@@ -360,50 +365,43 @@ void UpdateHeartRateZone(uint8_t bpm) {
     }
 }
 
-// LVGL's built-in symbol font has no diagonal or u-turn arrows, so the
-// slight/sharp variants collapse onto the plain left/right glyphs and the
-// turn type is carried by the street line instead. Proper maneuver icons
-// would need a custom font or image assets.
-const char *TbtIconSymbol(uint8_t icon_id) {
-    switch (icon_id) {
-        case TBT_ICON_STRAIGHT:      return LV_SYMBOL_UP;
-        case TBT_ICON_TURN_LEFT:
-        case TBT_ICON_SLIGHT_LEFT:
-        case TBT_ICON_SHARP_LEFT:    return LV_SYMBOL_LEFT;
-        case TBT_ICON_TURN_RIGHT:
-        case TBT_ICON_SLIGHT_RIGHT:
-        case TBT_ICON_SHARP_RIGHT:   return LV_SYMBOL_RIGHT;
-        case TBT_ICON_UTURN:
-        case TBT_ICON_ROUNDABOUT:    return LV_SYMBOL_REFRESH;
-        case TBT_ICON_ARRIVE:        return LV_SYMBOL_OK;
-        case TBT_ICON_NONE:
-        default:                     return LV_SYMBOL_UP;
-    }
-}
-
 // Distances follow the same unit setting as speed: showing kilometres to the
 // next turn on a device reading mph would be incoherent.
-void FormatTbtDistance(uint32_t metres, char *out, size_t out_size) {
+// Splits the distance into the number and its unit, which are drawn at very
+// different sizes.
+//
+// They used to be one string at 48pt, and that is what kept the turn arrow
+// small: "200 m" alone needs 155 of the panel's 240px, leaving under 70px
+// beside it. Separating them lets the number keep the biggest face LVGL
+// offers while the unit drops to a caption, and the width that buys goes to
+// the arrow.
+void FormatTbtDistance(uint32_t metres, char *value, size_t value_size, char *unit,
+                       size_t unit_size) {
     // Maps sometimes names the turn without saying how far away it is. The
     // arrow and the street are still worth showing; a fabricated distance is
     // not, so the field says plainly that it does not know.
     if (metres == TBT_DISTANCE_UNKNOWN) {
-        snprintf(out, out_size, "--");
+        snprintf(value, value_size, "--");
+        snprintf(unit, unit_size, "");
         return;
     }
     if (Settings_GetSpeedUnit() == SPEED_UNIT_MPH) {
         const float feet = metres * 3.28084f;
         if (feet < 1000.0f) {
-            snprintf(out, out_size, "%u ft", (unsigned)(feet + 0.5f));
+            snprintf(value, value_size, "%u", (unsigned)(feet + 0.5f));
+            snprintf(unit, unit_size, "ft");
         } else {
-            snprintf(out, out_size, "%.1f mi", metres / 1609.344f);
+            snprintf(value, value_size, "%.1f", metres / 1609.344f);
+            snprintf(unit, unit_size, "mi");
         }
         return;
     }
     if (metres < 1000) {
-        snprintf(out, out_size, "%u m", (unsigned)metres);
+        snprintf(value, value_size, "%u", (unsigned)metres);
+        snprintf(unit, unit_size, "m");
     } else {
-        snprintf(out, out_size, "%.1f km", metres / 1000.0f);
+        snprintf(value, value_size, "%.1f", metres / 1000.0f);
+        snprintf(unit, unit_size, "km");
     }
 }
 
@@ -412,9 +410,10 @@ void ClearTbt() {
     if (s_route_arrow_label == nullptr) {
         return;
     }
-    lv_label_set_text(s_route_arrow_label, LV_SYMBOL_UP);
-    lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(0x3A4854), 0);
+    lv_img_set_src(s_route_arrow_label, TbtIcon(TBT_ICON_NONE));
+    lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(0x3A4854), 0);
     lv_label_set_text(s_route_dist_label, "");
+    lv_label_set_text(s_route_dist_unit, "");
     lv_label_set_text(s_route_dir_label, "NO ROUTE");
 }
 
@@ -549,10 +548,13 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 s_tbt_last_ms = 0;
             } else {
                 char dist[16];
-                FormatTbtDistance(tbt.distance_m, dist, sizeof(dist));
-                lv_label_set_text(s_route_arrow_label, TbtIconSymbol(tbt.icon_id));
-                lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
+                char dist_unit[8];
+                FormatTbtDistance(tbt.distance_m, dist, sizeof(dist), dist_unit,
+                                  sizeof(dist_unit));
+                lv_img_set_src(s_route_arrow_label, TbtIcon(tbt.icon_id));
+                lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
                 lv_label_set_text(s_route_dist_label, dist);
+                lv_label_set_text(s_route_dist_unit, dist_unit);
                 lv_label_set_text(s_route_dir_label,
                                   tbt.street_name[0] != '\0' ? tbt.street_name : "AHEAD");
                 s_tbt_last_ms = lv_tick_get();
@@ -705,34 +707,48 @@ void PageDashboard::onViewLoad() {
         // corner, and an arrow with a distance beside it needs no label.
         s_nav_cell = MakeCell(parent, 0, NAV_Y, FULL_W, NAV_H, "");
 
-        s_route_arrow_label = lv_label_create(s_nav_cell);
-        lv_obj_set_style_text_font(s_route_arrow_label, &lv_font_montserrat_48, 0);
-        lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
-        lv_label_set_text(s_route_arrow_label, LV_SYMBOL_UP);
-        // Right-hand side, with the distance reading into it from the left.
-        // The eye lands on the number first and the arrow sits where the turn
-        // itself will be.
-        // Nudged down by half the status band, so the turn is centred
-        // in the space actually left to it rather than in the whole tile.
-        lv_obj_align(s_route_arrow_label, LV_ALIGN_RIGHT_MID, -PAD, STATUS_H / 2);
+        // ---- Filling the navigation tile ----
+        // 240x184 with the status band across the top. The old layout put a
+        // 64px arrow and a 48pt "200 m" side by side and left most of the
+        // tile empty, because the combined string needed 155px of width and
+        // capped the arrow at whatever was left.
+        //
+        // Splitting the distance (see FormatTbtDistance) frees that width:
+        // the number keeps the largest face LVGL ships and the unit becomes a
+        // caption beneath it, so the arrow can take the whole left column.
+        s_route_arrow_label = lv_img_create(s_nav_cell);
+        lv_img_set_src(s_route_arrow_label, TbtIcon(TBT_ICON_STRAIGHT));
+        // recolor_opa must be full or the recolour is a no-op and an
+        // ALPHA_8BIT image draws in the theme's default, not the accent.
+        lv_obj_set_style_img_recolor_opa(s_route_arrow_label, LV_OPA_COVER, 0);
+        lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
+        lv_obj_align(s_route_arrow_label, LV_ALIGN_TOP_LEFT, PAD, STATUS_H - 2);
 
+        // The number, right of the arrow. Right-aligned so the digits stay
+        // put as the distance counts down and the string shortens.
         s_route_dist_label = lv_label_create(s_nav_cell);
         lv_obj_set_style_text_font(s_route_dist_label, &lv_font_montserrat_48, 0);
         lv_obj_set_style_text_color(s_route_dist_label, lv_color_hex(COLOR_VALUE), 0);
         lv_label_set_text(s_route_dist_label, "");
-        // Bounded rather than free-running: at 48pt a long value such as
-        // "10.5 mi" would otherwise grow straight under the arrow. The width
-        // is what is left after the arrow and its margins.
-        lv_obj_set_width(s_route_dist_label, FULL_W - 72);
-        lv_label_set_long_mode(s_route_dist_label, LV_LABEL_LONG_DOT);
-        lv_obj_align(s_route_dist_label, LV_ALIGN_LEFT_MID, PAD, STATUS_H / 2);
+        lv_obj_set_style_text_align(s_route_dist_label, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_width(s_route_dist_label, FULL_W - TBT_ICON_PX - 3 * PAD);
+        lv_label_set_long_mode(s_route_dist_label, LV_LABEL_LONG_CLIP);
+        lv_obj_align(s_route_dist_label, LV_ALIGN_TOP_RIGHT, -PAD, STATUS_H + 14);
 
-        // The road name is how a rider confirms the turn, so it gets a real
-        // size and the full width of the cell.
+        s_route_dist_unit = lv_label_create(s_nav_cell);
+        lv_obj_set_style_text_font(s_route_dist_unit, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(s_route_dist_unit, lv_color_hex(COLOR_ACCENT), 0);
+        lv_label_set_text(s_route_dist_unit, "");
+        lv_obj_align_to(s_route_dist_unit, s_route_dist_label, LV_ALIGN_OUT_BOTTOM_RIGHT, 0, 2);
+
+        // The road name is how a rider confirms the turn, so it gets the full
+        // width and the biggest size that still fits a typical name: at 24pt
+        // "Rockingham Rd" is 197px of the 228 available. Longer names ellipsize,
+        // which beats shrinking every name to suit the worst one.
         s_route_dir_label = lv_label_create(s_nav_cell);
         lv_obj_set_width(s_route_dir_label, FULL_W - 2 * PAD);
         lv_label_set_long_mode(s_route_dir_label, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(s_route_dir_label, lv_color_hex(COLOR_VALUE), 0);
         lv_obj_align(s_route_dir_label, LV_ALIGN_BOTTOM_LEFT, PAD, -PAD);
     }
@@ -910,6 +926,7 @@ void PageDashboard::onViewUnload() {
     s_route_arrow_label = nullptr;
     s_route_dir_label = nullptr;
     s_route_dist_label = nullptr;
+    s_route_dist_unit = nullptr;
     s_trip_unit_label = nullptr;
     s_incline_cell = nullptr;
     s_nav_cell = nullptr;
