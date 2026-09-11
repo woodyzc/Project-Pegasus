@@ -154,6 +154,16 @@ These were each discovered the slow way. They are not optional trivia.
   misbehaves when a heart-rate peer is actually in range, which makes it look
   like flaky hardware: with no watch nearby nothing connects and the identical
   code registers fine.
+- **PageManager caches a page, so `onViewLoad()` reads the world once.**
+  `IsCached` defaults true, so a page built during `setup()` keeps whatever was
+  true at `Push()` for the life of the boot — it is *not* rebuilt when the
+  rider navigates back to it. Anything a page reads at load time must therefore
+  already be initialised before its `Push()`. This is why `GpxTrack_MountCard()`
+  runs before the first push: it used to run after the radios, and the
+  dashboard showed "No SD card" all session while the ROUTE page — pushed
+  minutes later by the rider — drew the route correctly off the same card.
+  Two screens disagreeing about one piece of hardware is the signature of this
+  bug, not of flaky hardware.
 - **Never advertise while the heart-rate client is connecting.** The two BLE
   modules share one controller, and asking it to advertise while it stops a
   scan and initiates a link makes an HCI command miss its ack deadline. NimBLE
