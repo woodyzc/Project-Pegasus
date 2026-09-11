@@ -194,20 +194,21 @@ void BLE_TBT_Start() {
     // returns early instead of re-entering resetGATT().
     const bool server_ok = s_server->start();
     NoteTbtStep("tbt_srv", server_ok ? 1 : 0);
+    s_start_result = server_ok ? "registered" : "GATT REFUSED";
+}
 
-    const bool adv_ok = server_ok && NimBLEDevice::startAdvertising();
+void BLE_TBT_StartAdvertising() {
+    if (s_server == nullptr) {
+        return; // BLE_TBT_Start() bailed; nothing to advertise
+    }
+
+    const bool adv_ok = NimBLEDevice::startAdvertising();
+    s_advertising = adv_ok;
     NoteTbtStep("tbt_adv", adv_ok ? 1 : 0);
 
-    // Ground truth from the controller, not from our own bookkeeping: whether
-    // the radio is actually emitting. A true here with an empty scan on the
-    // Mac would mean the payload is the problem, not the start.
+    // Ground truth from the controller rather than our own bookkeeping.
     NoteTbtStep("tbt_act", ble_gap_adv_active() ? 1 : 0);
-    s_advertising = adv_ok;
-
-    const bool ok = adv_ok;
-    s_start_result = ok ? "started" : (server_ok ? "adv REFUSED" : "GATT REFUSED");
-
-    (void)ok;
+    s_start_result = adv_ok ? "started" : "adv REFUSED";
 }
 
 bool BLE_TBT_IsConnected() {

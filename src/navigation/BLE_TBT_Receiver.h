@@ -46,7 +46,26 @@
 // The failure only shows when a heart-rate peer is genuinely in range, since
 // otherwise nothing connects and the registration succeeds, so getting this
 // order wrong looks like flaky hardware rather than a bug.
+//
+// This registers the server but does NOT advertise -- see below.
 void BLE_TBT_Start();
+
+// Starts advertising. Call AFTER BLE_HR_Start(), so the two halves of this
+// module straddle it:
+//
+//     BLE_HR_Init();
+//     BLE_TBT_Start();            // register while the GATT table is mutable
+//     BLE_HR_Start();             // discovery scan + connect
+//     BLE_TBT_StartAdvertising(); // advertise once that has settled
+//
+// Registration and advertising have opposite constraints, which is why they
+// are separate calls. Registration must happen before anything connects or the
+// GATT table is locked and NimBLE panics. Advertising must NOT overlap the
+// heart-rate discovery scan: doing both at once puts a scan, an advertisement
+// and a connection attempt on the controller together, and an HCI command that
+// then misses its ack deadline makes NimBLE reset its host -- during which its
+// own stale timer fires into an assert and takes the chip down.
+void BLE_TBT_StartAdvertising();
 
 // True while a phone is connected to the TBT service.
 bool BLE_TBT_IsConnected();

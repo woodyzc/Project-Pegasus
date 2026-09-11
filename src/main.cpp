@@ -152,6 +152,22 @@ void setup() {
             }
 
             BLE_HR_Start();
+
+            // Advertising goes last, and the split from BLE_TBT_Start() is the
+            // point. Registration had to come before any connection existed;
+            // advertising has the opposite constraint and must not overlap the
+            // discovery scan above.
+            //
+            // Running them together puts a scan, an advertisement and a
+            // connection attempt on the controller at once. An HCI command that
+            // misses its ack deadline under that load makes NimBLE reset its
+            // host, and its own timer -- which the reset does not cancel --
+            // then fires during the re-sync and hits assert(0) in
+            // ble_hs_timer_exp. That is a library defect we cannot patch, so
+            // the concurrency that provokes it is what has to go.
+            if (Settings_GetNavMode() == NAV_MODE_TBT) {
+                BLE_TBT_StartAdvertising();
+            }
             break;
     }
 
