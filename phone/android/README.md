@@ -99,15 +99,48 @@ characteristic `a3c87501-…` (write / write-no-response), device name
 `TbtFrameTest` locks the encoder to that layout byte for byte, so if either
 side drifts, that test is what should notice.
 
+## Building
+
+**There is no `gradlew` wrapper here, and this Mac has no system Java, Gradle
+or Android SDK.** The whole toolchain was downloaded into a scratchpad and
+`local.properties` points `sdk.dir` at it. That directory is under `/private/tmp`
+and will not survive forever — if it is gone, the toolchain has to be fetched
+again (JDK 17, Gradle 8.9, Android cmdline-tools, then `sdkmanager` for the
+platform and build-tools).
+
+While it exists, build with:
+
+```sh
+K=/private/tmp/claude-501/-Users-woodyzc-Documents-PlatformIO-Projects-Project-Pegasus/\
+b0f68de9-bcba-44c3-8a01-10c0b8603552/scratchpad/ktool
+
+cd phone/android
+JAVA_HOME="$K/jdk-17.0.20.1+1/Contents/Home" \
+GRADLE_USER_HOME="$K/gradle-home" \
+"$K/gradle-8.9/bin/gradle" --offline testDebugUnitTest assembleDebug
+```
+
+`--offline` matters: the Gradle cache under `gradle-home` already has every
+dependency, and without it the build tries to reach the network.
+
+Output: `app/build/outputs/apk/debug/app-debug.apk`.
+
+Install over USB with debugging enabled:
+
+```sh
+"$K/sdk/platform-tools/adb" install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
 ## Tests
 
 ```
-./gradlew :app:test
+./gradlew :app:test          # or the gradle invocation above
 ```
 
 Pure JVM, no device needed. They cover the parser (phrase precedence, unit
 conversion, refusal to guess) and the encoder (endianness, truncation that
-never splits a UTF-8 character).
+never splits a UTF-8 character). 28 tests as of this writing: 20 in
+`ManeuverParserTest`, 8 in `TbtFrameTest`.
 
 ## Known gaps
 
