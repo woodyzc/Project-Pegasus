@@ -154,6 +154,19 @@ These were each discovered the slow way. They are not optional trivia.
   misbehaves when a heart-rate peer is actually in range, which makes it look
   like flaky hardware: with no watch nearby nothing connects and the identical
   code registers fine.
+- **Never advertise while the heart-rate client is connecting.** The two BLE
+  modules share one controller, and asking it to advertise while it stops a
+  scan and initiates a link makes an HCI command miss its ack deadline. NimBLE
+  answers a missed ack by resetting its host — and `ble_hs_reset()` does not
+  cancel the host timer, so that timer fires during the re-sync and hits
+  `assert(0)` in `ble_hs_timer_exp`. The chip aborts. That last step is a
+  NimBLE defect and we are already on its newest release, so the *load* is the
+  only thing we can remove: `BLE_HR_Client` brackets every connect attempt with
+  `BLE_TBT_PauseAdvertising()` / `BLE_TBT_ResumeAdvertising()`.
+  Scanning while advertising is fine and runs for minutes — it is specifically
+  the connect that must be alone. Registration has the *opposite* constraint
+  (see `BLE_TBT_Receiver.h`), which is why `BLE_TBT_Start()` and
+  `BLE_TBT_StartAdvertising()` are separate calls straddling `BLE_HR_Start()`.
 - **The board records its own crashes, and you can read them.** Serial is
   unusable (above), but `esp_reset_reason()` now surfaces on the Settings page,
   and the `coredump` partition at `0xFF0000` holds a full ELF core dump written
