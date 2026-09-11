@@ -28,6 +28,20 @@ constexpr uint32_t kSuperviseIdleMs = 1000;
 // in which it became findable.
 constexpr uint32_t kRescanGapMs = 2000;
 
+// Scan duty cycle: listen 30ms out of every 100ms.
+//
+// One radio serves both roles here. In turn-by-turn mode this client scans
+// for a heart-rate peer while BLE_TBT_Receiver advertises a GATT server for
+// the phone, and discovery retries with only a 2s gap -- so with no watch
+// broadcasting the scan runs almost continuously. At NimBLE's default, where
+// the window fills the interval, that leaves little radio time for
+// advertising and the phone struggles to find or hold the head unit.
+//
+// 30% still finds a peer quickly: advertisers repeat every few tens of
+// milliseconds to a second, so a 15s scan gets many chances at each.
+constexpr uint16_t kScanIntervalMs = 100;
+constexpr uint16_t kScanWindowMs = 30;
+
 // How long to wait for a clean disconnect at shutdown. Long enough to cover
 // several connection intervals at the slow end of what a watch negotiates.
 constexpr uint32_t kShutdownDisconnectMs = 1500;
@@ -370,6 +384,8 @@ void BLE_HR_Init() {
 
     NimBLEScan *scan = NimBLEDevice::getScan();
     scan->setActiveScan(true);
+    scan->setInterval(kScanIntervalMs);
+    scan->setWindow(kScanWindowMs);
 }
 
 void BLE_HR_Start() {
