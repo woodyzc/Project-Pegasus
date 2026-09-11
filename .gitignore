@@ -13,6 +13,21 @@ test/host/test_*
 !test/host/test_*.c
 !test/host/test_*.h
 
+.DS_Store
+
+# Unused local library copies, ~197MB, deliberately NOT committed.
+#
+# Neither is built. The firmware links LVGL from the registry via lib_deps
+# (.pio/libdeps/esp32s3/lvgl), confirmed in idedata.json, and no source file
+# includes the audio library at all. They are ignored rather than deleted
+# because they are the user's files, but nothing needs them.
+#
+# lib/lvgl is worse than dead weight: PlatformIO's LDF gives lib/ precedence
+# over lib_deps, and this copy is 8.3.10 against the 8.4.0 the build actually
+# uses. A change in LDF mode would silently downgrade LVGL underneath us.
+lib/lvgl/
+lib/ESP32-audioI2S-master/
+
 # Android companion app (phone/android)
 .gradle/
 phone/android/build/
