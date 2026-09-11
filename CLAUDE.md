@@ -164,6 +164,17 @@ These were each discovered the slow way. They are not optional trivia.
   minutes later by the rider — drew the route correctly off the same card.
   Two screens disagreeing about one piece of hardware is the signature of this
   bug, not of flaky hardware.
+- **ANT+ comes up, but has still never received a page.** First live run:
+  `ant_start=1`, `ant_chan=1`, the MAC ticking past 589k, `ev 0` (no search
+  timeout) — the soft-PHY and its TDMA grid are demonstrably running. What is
+  missing is a transmitter. The strap on the bench is a **SOLE** (treadmill
+  brand), which is 5.3kHz analog: a near-field magnetic pulse, not 2.4GHz, and
+  no firmware can bridge that. It works with the user's running machine
+  because the treadmill has an analog receiver coil, and it is invisible to
+  BLE too — a Mac scan found no `0x180D` advertiser. Verifying CLAUDE.md §3
+  needs a real ANT+ strap (Garmin HRM-Dual, Wahoo TICKR). Until one exists,
+  "ANT+ works" is unproven in **both** directions: nothing says it does, and
+  nothing says it doesn't.
 - **Never advertise while the heart-rate client is connecting.** The two BLE
   modules share one controller, and asking it to advertise while it stops a
   scan and initiates a link makes an HCI command miss its ack deadline. NimBLE
