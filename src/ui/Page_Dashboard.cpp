@@ -42,6 +42,14 @@ constexpr uint32_t COLOR_CLIMB_FILL = 0x3A2E12;
 // link dropped without a clean disconnect).
 constexpr uint32_t TBT_STALE_MS = 30000;
 
+// A heart-rate source notifies about once a second, so this much silence means
+// the link is gone or the peer stopped sending -- not a gap between beats.
+//
+// Without it a bpm stayed on screen indefinitely: stop the watch broadcasting
+// and the last reading sat there looking live, which is worse than "--"
+// because a rider has no way to tell it is minutes old.
+constexpr uint32_t HR_STALE_MS = 5000;
+
 // Heart-rate zone bands and their badge colours.
 constexpr uint8_t ZONE2_LOW = 90;
 constexpr uint8_t ZONE3_LOW = 120;
@@ -81,6 +89,7 @@ lv_obj_t *s_route_arrow_label = nullptr;
 lv_obj_t *s_route_dir_label = nullptr;
 lv_obj_t *s_route_dist_label = nullptr;
 uint32_t s_tbt_last_ms = 0;
+uint32_t s_hr_last_ms = 0;
 lv_obj_t *s_battery_label = nullptr;
 lv_timer_t *s_refresh_timer = nullptr;
 
@@ -364,7 +373,22 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         if (DataCenter_Pull(TOPIC_HEART_RATE, &hr, sizeof(hr))) {
             lv_label_set_text_fmt(s_hr_label, "%d", hr.bpm);
             UpdateHeartRateZone(hr.bpm);
+            s_hr_last_ms = lv_tick_get();
         }
+    }
+
+    // Same reasoning as the turn above: a reading nobody is confirming any
+    // more gets dropped rather than left looking current.
+    if (s_hr_last_ms != 0 && lv_tick_elaps(s_hr_last_ms) > HR_STALE_MS) {
+        lv_label_set_text(s_hr_label, "--");
+        // Dim every band: no reading means no zone, and leaving one lit would
+        // still be asserting something about the rider.
+        for (int i = 0; i < 4; i++) {
+            if (s_zone_segments[i] != nullptr) {
+                lv_obj_set_style_bg_opa(s_zone_segments[i], LV_OPA_40, 0);
+            }
+        }
+        s_hr_last_ms = 0;
     }
 
     if (s_battery_dirty) {

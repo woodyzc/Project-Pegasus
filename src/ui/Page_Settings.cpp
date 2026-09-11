@@ -5,6 +5,7 @@
 
 #include "../navigation/GpxTrack.h"
 #include "../navigation/RideLog.h"
+#include "../sensors/BLE_HR_Client.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
 #include "Page_Dashboard.h"
@@ -25,6 +26,7 @@ lv_obj_t *s_unit_value = nullptr;
 lv_obj_t *s_trip_status = nullptr;
 lv_obj_t *s_uptime_value = nullptr;
 lv_obj_t *s_ridelog_value = nullptr;
+lv_obj_t *s_hrlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
 lv_timer_t *s_info_timer = nullptr;
 
@@ -205,6 +207,18 @@ void OnHrSourceClicked(lv_event_t *e) {
 
 void OnRestartClicked(lv_event_t *e) {
     (void)e;
+
+    // Drop the BLE link before resetting, and do it here rather than relying
+    // on the shutdown handler BLE_HR_Start() registers. That handler runs only
+    // if esp_restart() honours it, which was assumed and never verified -- and
+    // the symptom it was meant to fix survived: a restart with the watch
+    // connected left it holding the link, so it stopped advertising and the
+    // scan afterwards found 59 devices and no heart-rate service at all.
+    //
+    // This path is a plain task context with the scheduler running, so the
+    // disconnect has somewhere to complete. It blocks for up to about 1.5s,
+    // which is invisible directly before a reset.
+    BLE_HR_Shutdown();
     ESP.restart();
 }
 
@@ -220,6 +234,14 @@ void InfoTimerCallback(lv_timer_t *timer) {
     // Recording starts on the first fix, which is usually after this page was
     // built, so a value set only at load would read "waiting for fix" for the
     // whole ride and suggest the log was broken when it was working.
+    if (s_hrlink_value != nullptr) {
+        if (Settings_GetHrSource() == HR_SOURCE_ANT) {
+            lv_label_set_text(s_hrlink_value, "Link: ANT+ mode, BLE client off");
+        } else {
+            lv_label_set_text_fmt(s_hrlink_value, "Link: %s", BLE_HR_StatusText());
+        }
+    }
+
     if (s_ridelog_value != nullptr) {
         if (RideLog_IsRecording()) {
             lv_label_set_text_fmt(s_ridelog_value, "Ride log: %s (%u pts)", RideLog_FileName(),
@@ -379,6 +401,24 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_text_font(restart_label, &lv_font_montserrat_12, 0);
     lv_obj_center(restart_label);
 
+    // Live link state, in the card about the heart-rate source rather than
+    // buried at the bottom of DEVICE -- this is where someone looks when the
+    // reading is missing, and it was several screens of scrolling away.
+    //
+    // It earns its place because the dashboard's HEART RATE cell shows "--"
+    // both when nothing is connected and when a connected peer has not sent a
+    // measurement yet, and serial cannot tell them apart on this board.
+    lv_obj_t *shutdown_row = lv_label_create(hr_card);
+    lv_obj_set_style_text_font(shutdown_row, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(shutdown_row, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_text_fmt(shutdown_row, "Last disconnect on restart: %s",
+                          BLE_HR_LastShutdownText());
+
+    s_hrlink_value = lv_label_create(hr_card);
+    lv_obj_set_style_text_font(s_hrlink_value, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_hrlink_value, lv_color_hex(COLOR_VALUE), 0);
+    lv_label_set_text(s_hrlink_value, "Link: --");
+
     RefreshHrSelection();
 
     // ---- Navigation ----
@@ -505,6 +545,7 @@ void PageSettings::onViewUnload() {
     s_trip_status = nullptr;
     s_uptime_value = nullptr;
     s_ridelog_value = nullptr;
+    s_hrlink_value = nullptr;
     s_heap_value = nullptr;
     s_hr_note = nullptr;
     s_nav_note = nullptr;

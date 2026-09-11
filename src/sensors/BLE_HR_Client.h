@@ -49,6 +49,16 @@ void BLE_HR_Init();
 // Preconditions: BLE_HR_Init() and DataCenter_Init() have run.
 void BLE_HR_Start();
 
+// Disconnects cleanly so the peer stops holding the link open. Registered
+// automatically as a shutdown handler by BLE_HR_Start(); exposed for any
+// deliberate teardown path that does not go through esp_restart().
+void BLE_HR_Shutdown();
+
+// What the previous shutdown achieved, read from NVS at init. Distinguishes a
+// goodbye that reached the peer from one that never went out -- which decides
+// whether a peer refusing to advertise afterwards is our fault or its own.
+const char *BLE_HR_LastShutdownText();
+
 // Starts the perpetual passive scan that deps/esp32-ant's coexist mode needs
 // to ride. Call only when ANT+ will run in coexist mode, and only after
 // BLE_HR_Start() has had its chance to discover the peer.
@@ -62,6 +72,11 @@ void OnNotifyCallback(NimBLERemoteCharacteristic *characteristic, uint8_t *data,
 
 // True while a BLE HR peer is connected and subscribed.
 bool BLE_HR_IsConnected();
+
+// One word for the settings page: "connected", "reconnecting", "searching",
+// or a note that only a restart will rescan. Serial is unusable on this board
+// (CLAUDE.md §8), so the panel is the only place this can be seen.
+const char *BLE_HR_StatusText();
 
 // Arbitration hook for the "ANT+ primary, BLE secondary" split in CLAUDE.md §3.
 // Both sources publish to the same Sensor/HeartRate topic, so without this the
