@@ -1,6 +1,7 @@
 #include "GpxTrack.h"
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <SD_MMC.h>
 #include <esp_heap_caps.h>
 #include <string.h>
@@ -32,6 +33,19 @@
 namespace {
 
 bool s_mounted = false;
+const char *s_mount_status = "not tried";
+int s_bus_width = 0;
+
+// Same trick as BLE_TBT_Receiver: the board has no usable serial (CLAUDE.md
+// section 8), so the bring-up trace goes to NVS where esptool can read it back
+// over the USB link that flashes it. Bounded, and only ever written at mount.
+void NoteSdStep(const char *key, uint8_t value) {
+    Preferences prefs;
+    if (prefs.begin("pegasus", false)) {
+        prefs.putUChar(key, value);
+        prefs.end();
+    }
+}
 TrackBuffer_t s_track;
 int32_t *s_lat_store = nullptr;
 int32_t *s_lon_store = nullptr;
@@ -71,18 +85,68 @@ bool GpxTrack_MountCard() {
     // setPins() before begin(): SD_MMC defaults to the ESP32-S3's standard
     // slot pins, which are not the ones this board uses.
     if (!SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_D1_PIN, SD_D2_PIN, SD_D3_PIN)) {
+        s_mount_status = "pin setup refused";
+        NoteSdStep("sd_pins", 0);
+        return false;
+    }
+    NoteSdStep("sd_pins", 1);
+
+    // format_if_empty stays false throughout -- silently formatting a rider's
+    // card would be an unforgivable way to handle a filesystem this code
+    // cannot read.
+    //
+    // Try 4-bit first, then fall back to 1-bit.
+    //
+    // 4-bit needs D1/D2/D3 actually wired and pulled up, and this board is
+    // already known not to match its own documentation (CLAUDE.md section 2 --
+    // it is not even the board the spec describes). 1-bit needs only CLK, CMD
+    // and D0, so it survives a card slot whose upper data lines are absent,
+    // unpulled, or shared with something else. It is roughly four times
+    // slower, which matters not at all here: a GPX is read once at boot and
+    // the ride log writes a point per second.
+    bool four_bit = SD_MMC.begin("/sdcard", false, false);
+    NoteSdStep("sd_4bit", four_bit ? 1 : 0);
+
+    if (!four_bit) {
+        SD_MMC.end();
+        if (!SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_D1_PIN, SD_D2_PIN, SD_D3_PIN)) {
+            s_mount_status = "pin setup refused (1-bit retry)";
+            return false;
+        }
+        const bool one_bit = SD_MMC.begin("/sdcard", true, false);
+        NoteSdStep("sd_1bit", one_bit ? 1 : 0);
+        if (!one_bit) {
+            s_mount_status = "no card, or wrong format (needs FAT32)";
+            return false;
+        }
+        s_bus_width = 1;
+    } else {
+        s_bus_width = 4;
+    }
+
+    const uint8_t type = SD_MMC.cardType();
+    NoteSdStep("sd_type", type);
+    if (type == CARD_NONE) {
+        s_mount_status = "bus came up but no card present";
+        SD_MMC.end();
         return false;
     }
 
-    // mode1bit = false: all four data lines are wired, so use the 4-bit bus.
-    // format_if_empty stays false -- silently formatting a rider's card would
-    // be an unforgivable way to handle a filesystem this code cannot read.
-    if (!SD_MMC.begin("/sdcard", false, false)) {
-        return false;
-    }
+    s_mounted = true;
+    s_mount_status = "mounted";
+    return true;
+}
 
-    s_mounted = (SD_MMC.cardType() != CARD_NONE);
-    return s_mounted;
+const char *GpxTrack_MountStatus() {
+    return s_mount_status;
+}
+
+int GpxTrack_BusWidth() {
+    return s_bus_width;
+}
+
+uint64_t GpxTrack_CardSizeMb() {
+    return s_mounted ? (SD_MMC.cardSize() / (1024ULL * 1024ULL)) : 0;
 }
 
 bool GpxTrack_CardMounted() {

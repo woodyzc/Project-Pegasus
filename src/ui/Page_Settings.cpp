@@ -740,6 +740,20 @@ void PageSettings::onViewLoad() {
     // Ride logging has no controls -- it records whenever a card is present --
     // so this line is the only way to tell whether it is working. Without it a
     // rider would find out at the end of the ride, which is too late.
+    // The mount reason, not just its outcome: "no SD card" reads the same for
+    // a missing card, a bus that would not train and a filesystem we cannot
+    // read, and only one of those is fixed by pushing the card in harder.
+    {
+        char sd[80];
+        if (GpxTrack_CardMounted()) {
+            snprintf(sd, sizeof(sd), "%u MB, %d-bit bus",
+                     (unsigned)GpxTrack_CardSizeMb(), GpxTrack_BusWidth());
+        } else {
+            snprintf(sd, sizeof(sd), "%s", GpxTrack_MountStatus());
+        }
+        MakeInfoRow(info_card, "SD card", sd);
+    }
+
     if (!GpxTrack_CardMounted()) {
         MakeInfoRow(info_card, "Ride log", "no SD card");
     } else if (RideLog_IsRecording()) {

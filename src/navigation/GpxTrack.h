@@ -33,6 +33,19 @@ bool GpxTrack_MountCard();
 // True once the card is mounted.
 bool GpxTrack_CardMounted();
 
+// ---- Why the card did or did not mount ----
+// "No SD card" is the same message for a missing card, a card the bus could
+// not train, and a filesystem we cannot read. These tell them apart on the
+// panel, since serial cannot (CLAUDE.md section 8).
+const char *GpxTrack_MountStatus();
+
+// 4, 1, or 0 if not mounted. A 1 means the 4-bit bus failed and the 1-bit
+// fallback carried it, which is worth seeing: it says D1/D2/D3 are not wired
+// or not pulled up the way the board's documentation claims.
+int GpxTrack_BusWidth();
+
+uint64_t GpxTrack_CardSizeMb();
+
 // Streams `path` (e.g. "/route.gpx") through the GPX parser into the point
 // store, replacing whatever was loaded before. Returns false if the card is
 // not mounted, the file is missing, or it held no usable track points.
