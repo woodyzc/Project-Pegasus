@@ -29,13 +29,50 @@ constexpr lv_coord_t MAP_Y = 36;
 constexpr lv_coord_t MAP_W = 240;
 constexpr lv_coord_t MAP_H = 262;
 
-// The one tile the spike draws. Matches tools/tilegen.py's defaults, so
-// `tilegen.py synth /tmp/MAP` then copying that tree to the card is all the
-// setup there is.
-#define TILE_SPIKE_PATH "/15/8721/12556.bin"
+// The one tile the spike draws.
+//
+// Under /MAP rather than loose at the card root. That is where tilegen.py
+// writes them and where the first bring-up actually put them -- the firmware
+// was looking at the root and reported "not found", which is the correct
+// answer to the wrong question. A prefix is better anyway: thousands of zoom
+// directories scattered beside a rider's .gpx files is not a filesystem
+// anyone wants to look at.
+#define TILE_SPIKE_PATH "/MAP/15/8721/12556.bin"
 
 lv_obj_t *s_tile_img = nullptr;
 lv_obj_t *s_tile_stat = nullptr;
+lv_timer_t *s_tile_timer = nullptr;
+
+// Reports what the tile cost, or why there wasn't one. The failure case names
+// the path it tried: "not found" on its own sent the first bring-up looking in
+// the wrong place, when the answer was one directory away.
+void TileStatTimer(lv_timer_t *timer) {
+    (void)timer;
+    if (s_tile_stat == nullptr) {
+        return;
+    }
+
+    if (!LvglFs_IsReady()) {
+        lv_label_set_text(s_tile_stat, "tile: no fs driver (card not mounted?)");
+        return;
+    }
+
+    const uint32_t bytes = LvglFs_LastReadBytes();
+    if (bytes >= 4096) {
+        const uint32_t us = LvglFs_LastReadUs();
+        lv_label_set_text_fmt(s_tile_stat, "tile %u B in %u ms = %.2f MB/s",
+                              (unsigned)bytes, (unsigned)(us / 1000),
+                              us > 0 ? (double)bytes / (double)us : 0.0);
+        return;
+    }
+
+    if (LvglFs_OpenFailures() > 0) {
+        lv_label_set_text_fmt(s_tile_stat, "tile: not found\n%s",
+                              LvglFs_LastFailedPath());
+        return;
+    }
+    lv_label_set_text(s_tile_stat, "tile: header only, not drawn yet");
+}
 
 // Twice the dashboard's allowance, because this view has roughly twice the
 // area to resolve. Its own arrays rather than the dashboard's: during a page
@@ -180,18 +217,20 @@ void PageMap::onViewLoad() {
     s_tile_stat = lv_label_create(parent);
     lv_obj_set_style_text_font(s_tile_stat, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(s_tile_stat, lv_color_hex(0x61DAFB), 0);
+    lv_obj_set_width(s_tile_stat, 224);
+    lv_label_set_long_mode(s_tile_stat, LV_LABEL_LONG_WRAP);
     lv_obj_align(s_tile_stat, LV_ALIGN_TOP_LEFT, 8, 26);
-    if (!LvglFs_IsReady()) {
-        lv_label_set_text(s_tile_stat, "tile: no fs driver");
-    } else if (LvglFs_LastReadBytes() == 0) {
-        lv_label_set_text(s_tile_stat, "tile: not found");
-    } else {
-        const uint32_t us = LvglFs_LastReadUs();
-        const uint32_t bytes = LvglFs_LastReadBytes();
-        lv_label_set_text_fmt(s_tile_stat, "tile %u B in %u ms = %.2f MB/s",
-                              (unsigned)bytes, (unsigned)(us / 1000),
-                              (double)bytes / (double)us);
-    }
+    lv_label_set_text(s_tile_stat, "tile: waiting");
+
+    // On a timer, not once here.
+    //
+    // lv_img_set_src() reads only the 4-byte header -- LVGL defers the pixels
+    // to draw time, which has not happened yet when this page is being built.
+    // Sampling now reported 4 bytes at best and nothing at worst, and never
+    // the tile. The first tick after the first draw is when the real figure
+    // exists.
+    s_tile_timer = lv_timer_create(TileStatTimer, 500, nullptr);
+    TileStatTimer(nullptr);
 
     lv_obj_t *name = lv_label_create(parent);
     lv_obj_set_style_text_font(name, &lv_font_montserrat_10, 0);
@@ -222,8 +261,17 @@ void PageMap::onViewUnload() {
         lv_timer_del(s_refresh_timer);
         s_refresh_timer = nullptr;
     }
+    // Same reasoning as the refresh timer above: it outlives the widgets
+    // unless torn down here, and would write to freed lv_obj pointers on its
+    // next tick.
+    if (s_tile_timer != nullptr) {
+        lv_timer_del(s_tile_timer);
+        s_tile_timer = nullptr;
+    }
     DataCenter_Unsubscribe(TOPIC_GPS_INFO, &s_gps_account);
 
     s_status_label = nullptr;
     s_scale_label = nullptr;
+    s_tile_img = nullptr;
+    s_tile_stat = nullptr;
 }

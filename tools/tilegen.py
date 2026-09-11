@@ -176,8 +176,8 @@ def cmd_synth(args) -> int:
     print(f"{made} tiles -> {args.out}/{args.zoom}/")
     print(f"total {total} bytes ({total / 1024:.0f} KB), {total // made} bytes each")
     print()
-    print("Copy the whole tree to the SD card, then point the firmware at:")
-    print(f"  /{args.zoom}/{args.x}/{args.y}.bin")
+    print("Copy the MAP directory to the SD card root, then the firmware path is:")
+    print(f"  /MAP/{args.zoom}/{args.x}/{args.y}.bin")
     return 0
 
 

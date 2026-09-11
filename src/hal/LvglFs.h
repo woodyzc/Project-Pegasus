@@ -40,8 +40,20 @@ bool LvglFs_IsReady();
 // map, and whether this board reads one in 30ms or 300ms decides whether
 // tile-backed maps are viable at all. Measuring it was the point of the
 // bring-up spike -- see the "Will it keep up?" section of the scope.
+// The LARGEST single-file read since boot, not the most recent.
+//
+// High-water rather than last, because lv_img_set_src() only reads the 4-byte
+// header -- LVGL defers the pixels to draw time. A "most recent" figure
+// sampled when a page is built therefore reports 4 bytes, or nothing at all,
+// and never the tile. The largest read is always the one that matters.
 uint32_t LvglFs_LastReadUs();
 uint32_t LvglFs_LastReadBytes();
+
+// How many opens failed, and the path the last failure tried. "Not found" is
+// useless without the path it looked for -- that was the whole of the first
+// bring-up failure, and the path was wrong by one directory.
+uint32_t LvglFs_OpenFailures();
+const char *LvglFs_LastFailedPath();
 
 #ifdef __cplusplus
 }

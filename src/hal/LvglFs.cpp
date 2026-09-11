@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <SD_MMC.h>
+#include <string.h>
 #include <lvgl.h>
 
 namespace {
@@ -14,6 +15,8 @@ bool s_ready = false;
 // would report the last small chunk rather than the cost of the tile.
 volatile uint32_t s_read_us = 0;
 volatile uint32_t s_read_bytes = 0;
+volatile uint32_t s_open_failures = 0;
+char s_failed_path[64] = {0};
 uint32_t s_open_us = 0;
 uint32_t s_open_bytes = 0;
 
@@ -35,6 +38,9 @@ void *FsOpen(lv_fs_drv_t *drv, const char *path, lv_fs_mode_t mode) {
     }
     if (!*file || file->isDirectory()) {
         delete file;
+        s_open_failures++;
+        strncpy(s_failed_path, path, sizeof(s_failed_path) - 1);
+        s_failed_path[sizeof(s_failed_path) - 1] = '\0';
         return nullptr;
     }
 
@@ -51,8 +57,11 @@ lv_fs_res_t FsClose(lv_fs_drv_t *drv, void *file_p) {
     file->close();
     delete file;
 
-    // Publish only on close, so a reader never sees a half-finished total.
-    if (s_open_bytes > 0) {
+    // Publish on close, and only if this beat the previous best. LVGL opens
+    // the same file twice for an image -- once for the 4-byte header at
+    // set_src, once for the pixels at draw -- and a plain "most recent" would
+    // leave whichever happened last on screen.
+    if (s_open_bytes > s_read_bytes) {
         s_read_us = s_open_us;
         s_read_bytes = s_open_bytes;
     }
@@ -126,4 +135,12 @@ uint32_t LvglFs_LastReadUs() {
 
 uint32_t LvglFs_LastReadBytes() {
     return s_read_bytes;
+}
+
+uint32_t LvglFs_OpenFailures() {
+    return s_open_failures;
+}
+
+const char *LvglFs_LastFailedPath() {
+    return s_failed_path;
 }
