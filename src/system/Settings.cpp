@@ -342,10 +342,17 @@ const char *Settings_NavModeLabel(NavMode_t mode) {
 }
 
 bool Settings_NavModeIsImplemented(NavMode_t mode) {
-    // No SD card driver, no GPX parser and no breadcrumb renderer exist yet.
-    // The board does have the slot (SDIO on IO38/40 + IO39/41/47/48), so this
-    // is a missing feature rather than a missing capability.
-    return mode != NAV_MODE_GPX;
+    // Both modes now exist. GPX was the outstanding one and this function
+    // used to return false for it, back when there was no card driver, no
+    // parser and no renderer. All three landed -- SD_MMC in GpxTrack.cpp on
+    // the board's SDIO pins, GpxParse.c, and MapView -- and the claim went
+    // stale without anything forcing it to be revisited.
+    //
+    // Kept rather than deleted: it is the hook that stops a half-built mode
+    // being offered as if it worked, which is a mistake worth being able to
+    // make cheaply again.
+    (void)mode;
+    return true;
 }
 
 const char *Settings_HrSourceLabel(HrSource_t source) {

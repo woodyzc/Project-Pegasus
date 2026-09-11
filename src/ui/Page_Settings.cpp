@@ -166,9 +166,21 @@ void RefreshNavSelection() {
     if (!Settings_NavModeIsImplemented(current)) {
         // Say so rather than let the rider discover an empty ROUTE panel on
         // the road.
-        lv_label_set_text(s_nav_note, "GPX breadcrumbs are not built yet: no turn prompts "
-                                      "will be shown in this mode.");
+        lv_label_set_text(s_nav_note, "Not built yet: no navigation will be shown in this mode.");
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
+    } else if (current == NAV_MODE_GPX && !GpxTrack_CardMounted()) {
+        // The one failure a rider can actually fix, and it is silent
+        // otherwise: GPX with no card shows an empty map and no explanation.
+        lv_label_set_text(s_nav_note, "No SD card. Insert one with a .gpx in its root "
+                                      "folder, then restart.");
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
+    } else if (current == NAV_MODE_GPX && GpxTrack_PointCount() == 0) {
+        lv_label_set_text(s_nav_note, "Card mounted, but no .gpx found in its root folder.");
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
+    } else if (current == NAV_MODE_GPX && current == s_nav_mode_at_load) {
+        lv_label_set_text_fmt(s_nav_note, "Active: %s, %u points.", GpxTrack_LoadedName(),
+                              (unsigned)GpxTrack_PointCount());
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_CAPTION), 0);
     } else if (current != s_nav_mode_at_load) {
         lv_label_set_text(s_nav_note, "Saved. Restart to apply.");
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_ACCENT), 0);
