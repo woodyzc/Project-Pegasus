@@ -7,6 +7,7 @@
 #include "../navigation/GpxTrack.h"
 #include "../navigation/RideLog.h"
 #include "../sensors/BLE_HR_Client.h"
+#include "../sensors/SoftANT.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
@@ -322,7 +323,12 @@ void InfoTimerCallback(lv_timer_t *timer) {
     // whole ride and suggest the log was broken when it was working.
     if (s_hrlink_value != nullptr) {
         if (Settings_GetHrSource() == HR_SOURCE_ANT) {
-            lv_label_set_text(s_hrlink_value, "Link: ANT+ mode, BLE client off");
+            // "ANT+ mode, BLE client off" told the rider nothing they could
+            // act on. ANT+ has never run on this hardware, so the first
+            // question is always whether the radio came up at all, and the
+            // second is whether any strap is being heard.
+            lv_label_set_text_fmt(s_hrlink_value, "ANT+: %s, %u pages",
+                                  SoftANT_StatusText(), (unsigned)SoftANT_PageCount());
         } else {
             lv_label_set_text_fmt(s_hrlink_value, "Link: %s", BLE_HR_StatusText());
         }

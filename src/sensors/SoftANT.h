@@ -50,3 +50,22 @@ uint8_t ParseBPM(uint8_t *payload);
 
 // True while an ANT+ HRM channel is currently tracking a strap.
 bool SoftANT_IsTracking();
+
+// ---- Diagnostics ----
+// ANT+ has never run on this hardware, and every failure inside SoftANT_Task
+// currently reports to Serial, which this board cannot deliver (CLAUDE.md
+// section 8). Without these, "no heart rate in ANT+ mode" is one blank field
+// and no way to tell a dead radio from an absent strap. Same lesson as the BLE
+// bring-up: make the board able to say what happened before asking it to do
+// something new.
+
+// One of: "not started", "radio unavailable (...)", "channel open failed (N)",
+// "searching for strap", "tracking #N".
+const char *SoftANT_StatusText();
+
+// ANT+ pages accepted from an HRM since boot. Non-zero proves the 2.4GHz
+// soft-decode works end to end, even if the rate later goes stale.
+uint32_t SoftANT_PageCount();
+
+// The strap's ANT device number once paired, else 0.
+uint16_t SoftANT_DeviceNumber();

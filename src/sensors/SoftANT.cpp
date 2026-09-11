@@ -3,6 +3,8 @@
 #include <Arduino.h>
 
 #include "../system/DataCenter.h"
+#include <Preferences.h>
+
 #include "ant_node.h"
 
 namespace {
@@ -25,6 +27,23 @@ constexpr uint32_t kSupervisorPeriodMs = 1000;
 constexpr uint32_t kTaskStackSize = 4096;
 constexpr UBaseType_t kTaskPriority = 3;
 constexpr BaseType_t kTaskCore = 0; // Core 0: Background Data Core (CLAUDE.md §4)
+
+const char *s_status = "not started";
+
+// Bring-up trace to NVS, readable with esptool over USB. Same reason as the
+// BLE and SD traces: this board has no usable serial, and ANT+ has never run
+// on it, so the first attempt needs to leave evidence behind.
+void NoteAntStep(const char *key, uint8_t value) {
+    Preferences prefs;
+    if (prefs.begin("pegasus", false)) {
+        prefs.putUChar(key, value);
+        prefs.end();
+    }
+}
+
+char s_status_buf[48];
+volatile uint32_t s_page_count = 0;
+volatile uint16_t s_device_num = 0;
 
 void PublishHeartRate(uint8_t bpm) {
     HeartRate_t hr;
@@ -59,6 +78,7 @@ void OnAntData(ant_node_t *node, const ant_node_rx_t *rx, const uint8_t page[8],
     }
 
     s_last_page_ms = millis();
+    s_page_count++;
     PublishHeartRate(bpm);
 }
 
@@ -69,6 +89,10 @@ void OnAntPaired(ant_node_t *node, uint8_t channel, const ant_node_device_t *dev
     (void)user;
     Serial.printf("[SoftANT] HRM %u %s\n", dev->device_num,
                   remembered ? "reconnected (from NVS)" : "paired");
+    s_device_num = dev->device_num;
+    snprintf(s_status_buf, sizeof(s_status_buf), "tracking #%u%s", dev->device_num,
+             remembered ? " (saved)" : "");
+    s_status = s_status_buf;
 }
 
 } // namespace
@@ -135,17 +159,29 @@ void SoftANT_Task(void *pvParameters) {
         // Nothing is running -- most likely a BLE host owns the controller
         // (ANT_ESPPHY_ERR_BT) and we were started without coexist mode.
         Serial.println("[SoftANT] radio unavailable, ANT+ disabled");
+        // ANT_ESPPHY_ERR_BT here means a BLE host still owns the controller,
+        // which is the failure worth naming: it is a sequencing mistake in
+        // main.cpp, not a missing strap.
+        snprintf(s_status_buf, sizeof(s_status_buf), "radio unavailable (%s)",
+                 ant_espphy_status_str(status));
+        s_status = s_status_buf;
+        NoteAntStep("ant_start", 0);
         s_started = false;
         vTaskDelete(nullptr);
         return;
     }
     s_started = true;
+    NoteAntStep("ant_start", 1);
+    s_status = "searching for strap";
 
     // Channel 0, any HRM (device_num 0 => the strap remembered in NVS if there
     // is one, else the first one heard, which then becomes the remembered one).
     uint8_t rc = ant_node_open_antplus_slave(&s_node, 0, ANTPLUS_DEVTYPE_HRM, 0, ANTPLUS_PERIOD_HRM);
+    NoteAntStep("ant_chan", rc == 0 ? 1 : 0);
     if (rc != 0) {
         Serial.printf("[SoftANT] open HRM channel failed, ANT response %u\n", rc);
+        snprintf(s_status_buf, sizeof(s_status_buf), "channel open failed (%u)", rc);
+        s_status = s_status_buf;
     }
 
     // Supervisory loop. The actual page capture happens on the library's task
@@ -160,6 +196,18 @@ void SoftANT_Task(void *pvParameters) {
             PublishHeartRate(0); // 0 bpm = no live strap
         }
     }
+}
+
+const char *SoftANT_StatusText() {
+    return s_status;
+}
+
+uint32_t SoftANT_PageCount() {
+    return s_page_count;
+}
+
+uint16_t SoftANT_DeviceNumber() {
+    return s_device_num;
 }
 
 void SoftANT_Start(bool coexist_with_ble) {
