@@ -73,8 +73,11 @@
 #define LV_FONT_MONTSERRAT_12 1 /* route direction text */
 #define LV_FONT_MONTSERRAT_14 1 /* title, zone badge */
 #define LV_FONT_MONTSERRAT_18 1 /* clock / incline / bpm readouts */
-#define LV_FONT_MONTSERRAT_24 1 /* trip distance */
-#define LV_FONT_MONTSERRAT_28 1 /* route arrow glyph */
+/* 24 was the metric value size until the navigation region grew to 60%
+ * and the four readouts moved up to 28. Nothing references it now, and
+ * LVGL compiles a font whenever its macro is set. */
+#define LV_FONT_MONTSERRAT_24 0
+#define LV_FONT_MONTSERRAT_28 1 /* metric readouts, route arrow glyph */
 #define LV_FONT_MONTSERRAT_48 1 /* primary speed readout */
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 

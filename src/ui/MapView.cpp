@@ -36,9 +36,12 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     lv_obj_set_size(view->container, w, h);
     lv_obj_set_pos(view->container, x, y);
     lv_obj_set_style_bg_color(view->container, lv_color_hex(COLOR_MAP_BG), 0);
-    lv_obj_set_style_border_color(view->container, lv_color_hex(0x24313D), 0);
-    lv_obj_set_style_border_width(view->container, 1, 0);
-    lv_obj_set_style_radius(view->container, 4, 0);
+    // Borderless and square, because both callers give it the full width of
+    // the panel: a frame here would draw a line right at the screen edge,
+    // which is the one place the layout deliberately has none. The hairlines
+    // that divide it from its neighbours are the caller's to place.
+    lv_obj_set_style_border_width(view->container, 0, 0);
+    lv_obj_set_style_radius(view->container, 0, 0);
     lv_obj_set_style_pad_all(view->container, 0, 0);
     // Clip rather than scroll: a trail point can project far outside the
     // viewport, and LVGL would otherwise grow a scrollable area around it and

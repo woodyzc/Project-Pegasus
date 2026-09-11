@@ -167,9 +167,13 @@ lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, l
     lv_obj_set_size(cell, w, h);
     lv_obj_set_pos(cell, x, y);
     lv_obj_set_style_bg_color(cell, lv_color_hex(COLOR_CELL_BG), 0);
-    lv_obj_set_style_border_color(cell, lv_color_hex(COLOR_CELL_BORDER), 0);
-    lv_obj_set_style_border_width(cell, 1, 0);
-    lv_obj_set_style_radius(cell, 4, 0);
+    // No border and no rounding: widgets tile the panel and are divided by a
+    // single shared hairline between neighbours (MakeSeparator below). A
+    // border per cell draws two lines down every internal join and four more
+    // around the outside, which on a 240px panel is a lot of the screen spent
+    // on frames.
+    lv_obj_set_style_border_width(cell, 0, 0);
+    lv_obj_set_style_radius(cell, 0, 0);
     lv_obj_set_style_pad_all(cell, 0, 0);
     lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -177,8 +181,23 @@ lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, l
     lv_label_set_text(label, caption);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 6, 4);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 6, 5);
     return cell;
+}
+
+// One hairline between two tiles. Only ever drawn on an internal join --
+// never around the outside, so widgets run into the screen edge cleanly.
+lv_obj_t *MakeSeparator(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
+                        lv_coord_t h) {
+    lv_obj_t *line = lv_obj_create(parent);
+    lv_obj_set_size(line, w, h);
+    lv_obj_set_pos(line, x, y);
+    lv_obj_set_style_bg_color(line, lv_color_hex(COLOR_CELL_BORDER), 0);
+    lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(line, 0, 0);
+    lv_obj_set_style_radius(line, 0, 0);
+    lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+    return line;
 }
 
 // The unit set small beside its value rather than on its own line: a 240px
@@ -456,6 +475,42 @@ void PageDashboard::onViewLoad() {
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
+    // ---- Geometry ----
+    // Every position below derives from these, so the layout cannot drift out
+    // of agreement with itself. The panel is 240x320 and the widgets now use
+    // all of it: the previous layout inset everything by 18px a side, which
+    // spent 15% of a 240px-wide screen on nothing.
+    // Widgets tile the panel edge to edge with no margin and no gap; a single
+    // hairline divides neighbours, and none is drawn where a widget meets the
+    // screen edge. Every position derives from these so the tiling stays
+    // exact -- a one-pixel disagreement shows as a seam or an overlap.
+    const lv_coord_t SCREEN_W = 240;
+    const lv_coord_t SCREEN_H = 320;
+    const lv_coord_t PAD = 6; // inside a tile, between its edge and its text
+
+    // Navigation gets 60% of the panel and starts at the very top: the status
+    // line (gear, clock, battery) sits directly over it with no rule between
+    // them, so the two read as one region rather than two stacked widgets.
+    const lv_coord_t NAV_Y = 0;
+    const lv_coord_t NAV_H = (SCREEN_H * 60) / 100;            // 192
+    const lv_coord_t FULL_W = SCREEN_W;
+
+    // Height the status line occupies inside the navigation region. Not a
+    // widget of its own any more -- just the band the turn content keeps
+    // clear of.
+    const lv_coord_t STATUS_H = 28;
+
+    const lv_coord_t ZONE_H = 8;
+    const lv_coord_t CELL_W = SCREEN_W / 2;                    // 120
+    const lv_coord_t COL1 = 0;
+    const lv_coord_t COL2 = CELL_W;                            // 120
+
+    const lv_coord_t ZONE_Y = SCREEN_H - ZONE_H;               // 312
+    const lv_coord_t ROW1 = NAV_Y + NAV_H;                     // 192
+    const lv_coord_t CELL_H = (ZONE_Y - ROW1) / 2;             // 60
+    const lv_coord_t ROW2 = ROW1 + CELL_H;                     // 252
+
+
     // ---- Layout ----
     // Navigation dominates: on a bike, the next turn or where the trail goes
     // is what a glance is for. Metrics sit underneath in equal cells, each
@@ -465,10 +520,77 @@ void PageDashboard::onViewLoad() {
     // told the rider nothing they did not already know -- and that freed a
     // whole cell for a metric.
 
-    // ---- Header ----
+    // ---- Navigation slot: one slot, two possible occupants ----
+    s_nav_is_map = (Settings_GetNavMode() == NAV_MODE_GPX);
+
+    if (s_nav_is_map) {
+        // GPX gets the actual map, inline, at the size the glance deserves.
+        MapView_Create(&s_map_view, parent, 0, NAV_Y, FULL_W, NAV_H, s_map_points,
+                       s_map_projected, INLINE_MAP_POINTS);
+        s_nav_cell = s_map_view.container;
+        MapView_FitTrack(&s_map_view);
+
+        // Tapping it opens the full-screen map, where the trail gets the
+        // whole panel.
+        lv_obj_add_flag(s_nav_cell, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_nav_cell, OnMapClicked, LV_EVENT_CLICKED, this);
+
+        if (GpxTrack_PointCount() == 0) {
+            lv_obj_t *empty = lv_label_create(s_nav_cell);
+            // Say which of the two reasons applies: a missing card and an
+            // unreadable one need different things from the rider.
+            lv_label_set_text(empty, GpxTrack_CardMounted() ? "No .gpx on card" : "No SD card");
+            lv_obj_set_style_text_font(empty, &lv_font_montserrat_12, 0);
+            lv_obj_set_style_text_color(empty, lv_color_hex(COLOR_CAPTION), 0);
+            lv_obj_center(empty);
+        }
+    } else {
+        // TBT gets the turn, which is all the phone sends and all a junction
+        // needs. It carries the largest face on the screen now: it is the one
+        // time-critical thing here.
+        // No caption: the status line now occupies this tile's top-left
+        // corner, and an arrow with a distance beside it needs no label.
+        s_nav_cell = MakeCell(parent, 0, NAV_Y, FULL_W, NAV_H, "");
+
+        s_route_arrow_label = lv_label_create(s_nav_cell);
+        lv_obj_set_style_text_font(s_route_arrow_label, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
+        lv_label_set_text(s_route_arrow_label, LV_SYMBOL_UP);
+        // Right-hand side, with the distance reading into it from the left.
+        // The eye lands on the number first and the arrow sits where the turn
+        // itself will be.
+        // Nudged down by half the status band, so the turn is centred
+        // in the space actually left to it rather than in the whole tile.
+        lv_obj_align(s_route_arrow_label, LV_ALIGN_RIGHT_MID, -PAD, STATUS_H / 2);
+
+        s_route_dist_label = lv_label_create(s_nav_cell);
+        lv_obj_set_style_text_font(s_route_dist_label, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_color(s_route_dist_label, lv_color_hex(COLOR_VALUE), 0);
+        lv_label_set_text(s_route_dist_label, "");
+        // Bounded rather than free-running: at 48pt a long value such as
+        // "10.5 mi" would otherwise grow straight under the arrow. The width
+        // is what is left after the arrow and its margins.
+        lv_obj_set_width(s_route_dist_label, FULL_W - 72);
+        lv_label_set_long_mode(s_route_dist_label, LV_LABEL_LONG_DOT);
+        lv_obj_align(s_route_dist_label, LV_ALIGN_LEFT_MID, PAD, STATUS_H / 2);
+
+        // The road name is how a rider confirms the turn, so it gets a real
+        // size and the full width of the cell.
+        s_route_dir_label = lv_label_create(s_nav_cell);
+        lv_obj_set_width(s_route_dir_label, FULL_W - 2 * PAD);
+        lv_label_set_long_mode(s_route_dir_label, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_route_dir_label, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_align(s_route_dir_label, LV_ALIGN_BOTTOM_LEFT, PAD, -PAD);
+    }
+
+    // ---- Status line ----
+    // Created after the navigation slot on purpose: it sits over the top of
+    // it, and the navigation tile is opaque, so building it first would put
+    // these behind it.
     lv_obj_t *settings_btn = lv_btn_create(parent);
-    lv_obj_set_size(settings_btn, 36, 26);
-    lv_obj_align(settings_btn, LV_ALIGN_TOP_LEFT, 6, 4);
+    lv_obj_set_size(settings_btn, 34, 24);
+    lv_obj_align(settings_btn, LV_ALIGN_TOP_LEFT, 3, 2);
     lv_obj_set_style_bg_color(settings_btn, lv_color_hex(0x1D2A36), 0);
     lv_obj_set_style_bg_color(settings_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
     lv_obj_set_style_radius(settings_btn, 6, 0);
@@ -497,75 +619,15 @@ void PageDashboard::onViewLoad() {
     // monitor in hal/Battery.cpp -- not HeartRate_t.battery, which is the
     // strap's.
     s_battery_label = MakeLabel(parent, LV_SYMBOL_BATTERY_FULL " --%", &lv_font_montserrat_12,
-                                COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -8, 8);
+                                COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -PAD, 7);
 
-    // ---- Navigation slot: one slot, two possible occupants ----
-    const lv_coord_t NAV_Y = 34;
-    const lv_coord_t NAV_H = 146;
-    s_nav_is_map = (Settings_GetNavMode() == NAV_MODE_GPX);
-
-    if (s_nav_is_map) {
-        // GPX gets the actual map, inline, at the size the glance deserves.
-        MapView_Create(&s_map_view, parent, 18, NAV_Y, 204, NAV_H, s_map_points, s_map_projected,
-                       INLINE_MAP_POINTS);
-        s_nav_cell = s_map_view.container;
-        MapView_FitTrack(&s_map_view);
-
-        // Tapping it opens the full-screen map, where the trail gets the
-        // whole panel.
-        lv_obj_add_flag(s_nav_cell, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(s_nav_cell, OnMapClicked, LV_EVENT_CLICKED, this);
-
-        if (GpxTrack_PointCount() == 0) {
-            lv_obj_t *empty = lv_label_create(s_nav_cell);
-            // Say which of the two reasons applies: a missing card and an
-            // unreadable one need different things from the rider.
-            lv_label_set_text(empty, GpxTrack_CardMounted() ? "No .gpx on card" : "No SD card");
-            lv_obj_set_style_text_font(empty, &lv_font_montserrat_12, 0);
-            lv_obj_set_style_text_color(empty, lv_color_hex(COLOR_CAPTION), 0);
-            lv_obj_center(empty);
-        }
-    } else {
-        // TBT gets the turn, which is all the phone sends and all a junction
-        // needs. It carries the largest face on the screen now: it is the one
-        // time-critical thing here.
-        s_nav_cell = MakeCell(parent, 18, NAV_Y, 204, NAV_H, "NEXT TURN");
-
-        s_route_arrow_label = lv_label_create(s_nav_cell);
-        lv_obj_set_style_text_font(s_route_arrow_label, &lv_font_montserrat_48, 0);
-        lv_obj_set_style_text_color(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
-        lv_label_set_text(s_route_arrow_label, LV_SYMBOL_UP);
-        lv_obj_align(s_route_arrow_label, LV_ALIGN_LEFT_MID, 14, -6);
-
-        s_route_dist_label = lv_label_create(s_nav_cell);
-        lv_obj_set_style_text_font(s_route_dist_label, &lv_font_montserrat_48, 0);
-        lv_obj_set_style_text_color(s_route_dist_label, lv_color_hex(COLOR_VALUE), 0);
-        lv_label_set_text(s_route_dist_label, "");
-        lv_obj_align(s_route_dist_label, LV_ALIGN_LEFT_MID, 74, -6);
-
-        // The road name is how a rider confirms the turn, so it gets a real
-        // size and the full width of the cell.
-        s_route_dir_label = lv_label_create(s_nav_cell);
-        lv_obj_set_width(s_route_dir_label, 188);
-        lv_label_set_long_mode(s_route_dir_label, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(s_route_dir_label, lv_color_hex(COLOR_VALUE), 0);
-        lv_obj_align(s_route_dir_label, LV_ALIGN_BOTTOM_LEFT, 8, -8);
-    }
 
     // ---- Four metrics, two by two ----
     // Speed is one of them now rather than a hero: worth reading, but not at
     // the cost of the turn that is actually approaching.
-    const lv_coord_t CELL_W = 100;
-    const lv_coord_t CELL_H = 54;
-    const lv_coord_t COL1 = 18;
-    const lv_coord_t COL2 = 122;
-    const lv_coord_t ROW1 = 186;
-    const lv_coord_t ROW2 = 244;
-
     lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, CELL_W, CELL_H, "SPEED");
     s_speed_label = lv_label_create(speed_cell);
-    lv_obj_set_style_text_font(s_speed_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_speed_label, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_speed_label, lv_color_hex(COLOR_VALUE), 0);
     lv_label_set_text(s_speed_label, "--");
     lv_obj_align(s_speed_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
@@ -575,7 +637,7 @@ void PageDashboard::onViewLoad() {
 
     lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, CELL_W, CELL_H, "TRIP");
     s_trip_label = lv_label_create(trip_cell);
-    lv_obj_set_style_text_font(s_trip_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_trip_label, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_trip_label, lv_color_hex(COLOR_VALUE), 0);
     lv_label_set_text(s_trip_label, "0.00");
     lv_obj_align(s_trip_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
@@ -584,7 +646,7 @@ void PageDashboard::onViewLoad() {
 
     s_incline_cell = MakeCell(parent, COL1, ROW2, CELL_W, CELL_H, "INCLINE");
     s_incline_label = lv_label_create(s_incline_cell);
-    lv_obj_set_style_text_font(s_incline_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_incline_label, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_incline_label, lv_color_hex(COLOR_ACCENT), 0);
     lv_label_set_text(s_incline_label, "--");
     lv_obj_align(s_incline_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
@@ -593,12 +655,22 @@ void PageDashboard::onViewLoad() {
 
     lv_obj_t *hr_cell = MakeCell(parent, COL2, ROW2, CELL_W, CELL_H, "HEART RATE");
     s_hr_label = lv_label_create(hr_cell);
-    lv_obj_set_style_text_font(s_hr_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_hr_label, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_hr_label, lv_color_hex(COLOR_VALUE), 0);
     lv_label_set_text(s_hr_label, "--");
     lv_obj_align(s_hr_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
     lv_obj_t *hr_unit = MakeUnit(hr_cell, "bpm");
     lv_obj_align_to(hr_unit, s_hr_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
+
+    // ---- Dividing lines ----
+    // Internal joins only. Nothing is drawn at x=0, x=239, y=0 or y=319, so
+    // each widget runs into the screen edge with no frame around it.
+    MakeSeparator(parent, 0, ROW1 - 1, SCREEN_W, 1);      // navigation / metrics
+    MakeSeparator(parent, 0, ROW2 - 1, SCREEN_W, 1);      // between metric rows
+    MakeSeparator(parent, 0, ZONE_Y - 1, SCREEN_W, 1);    // metrics / zone bar
+    // One vertical line down the metric block only -- the navigation slot and
+    // the zone bar above and below it are full width and must not be cut.
+    MakeSeparator(parent, COL2 - 1, ROW1, 1, ROW2 + CELL_H - ROW1);
 
     // ---- Heart-rate zone bar ----
     // Four bands matching the thresholds above; the active one is lit and the
@@ -608,13 +680,15 @@ void PageDashboard::onViewLoad() {
     // the lit segment already says which zone -- and it did not fit: at y=310
     // with a ~13px glyph it ran past the 320px panel and showed as a shape
     // clipped by the bottom edge.
-    const lv_coord_t SEG_W = 204 / 4;
+    const lv_coord_t SEG_W = SCREEN_W / 4;
     static const uint32_t ZONE_COLORS[4] = {COLOR_ZONE_LOW, COLOR_ZONE_LOW, COLOR_ZONE_MID,
                                             COLOR_ZONE_HIGH};
     for (int i = 0; i < 4; i++) {
         lv_obj_t *segment = lv_obj_create(parent);
-        lv_obj_set_size(segment, SEG_W - 3, 6);
-        lv_obj_set_pos(segment, (lv_coord_t)(18 + i * SEG_W), 304);
+        // Touching, not spaced: the four colours already separate them, and
+        // the bar reads as one gauge rather than four buttons.
+        lv_obj_set_size(segment, SEG_W, ZONE_H);
+        lv_obj_set_pos(segment, (lv_coord_t)(i * SEG_W), ZONE_Y);
         lv_obj_set_style_bg_color(segment, lv_color_hex(ZONE_COLORS[i]), 0);
         lv_obj_set_style_bg_opa(segment, LV_OPA_40, 0);
         lv_obj_set_style_border_width(segment, 0, 0);
