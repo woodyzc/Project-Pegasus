@@ -47,6 +47,19 @@ class BleLink(context: Context) {
          * are dropped separately, so in practice this rarely bites.
          */
         const val MIN_WRITE_INTERVAL_MS = 150L
+
+        // Re-send an unchanged turn at least this often.
+        //
+        // The head unit drops a turn it has not heard about for 30 seconds
+        // (TBT_STALE_MS in Page_Dashboard.cpp), so silence is not neutral --
+        // it actively clears the display. Suppressing every identical frame
+        // meant a rider stopped at a light, where the turn and the distance
+        // do not change, went quiet and had the turn blanked while waiting at
+        // the junction to make it.
+        //
+        // Well inside the firmware's window, so a couple of lost writes still
+        // do not clear a live route.
+        const val KEEPALIVE_INTERVAL_MS = 10_000L
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -182,7 +195,13 @@ class BleLink(context: Context) {
         val now = System.currentTimeMillis()
         if (!force) {
             if (now - lastWriteAt < MIN_WRITE_INTERVAL_MS) return false
-            if (lastFrame != null && lastFrame.contentEquals(frame)) return false
+            // Identical frames are suppressed, but only until the keepalive
+            // is due: the head unit reads continued silence as "no route".
+            if (lastFrame != null && lastFrame.contentEquals(frame) &&
+                (now - lastWriteAt) < KEEPALIVE_INTERVAL_MS
+            ) {
+                return false
+            }
         }
 
         val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
