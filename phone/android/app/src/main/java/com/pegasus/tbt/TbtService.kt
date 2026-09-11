@@ -160,6 +160,16 @@ class TbtService : Service() {
         // rebind the notification listener regardless, but nothing starts the
         // link again while this is false.
         if (intent?.action == ACTION_STOP || !isEnabled(this)) {
+            // Persist the choice here rather than only in stopByUser. The
+            // notification's Stop action is a PendingIntent straight to this
+            // service, so it never passed through stopByUser and never cleared
+            // the flag -- the service stopped, and then the next
+            // onListenerConnected() read a flag that still said "enabled" and
+            // started it again. Pressing Stop appeared to do nothing.
+            //
+            // Every route to stopping now means the same thing, which is the
+            // property the flag was introduced to have.
+            setEnabled(this, false)
             status = "Stopped by user"
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
