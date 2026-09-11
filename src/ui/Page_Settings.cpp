@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <WiFi.h> // WiFi.macAddress() -- reads the eFused MAC, no radio started
 
+#include "../navigation/GpxTrack.h"
+#include "../navigation/RideLog.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
 #include "Page_Dashboard.h"
@@ -22,6 +24,7 @@ lv_obj_t *s_brightness_value = nullptr;
 lv_obj_t *s_unit_value = nullptr;
 lv_obj_t *s_trip_status = nullptr;
 lv_obj_t *s_uptime_value = nullptr;
+lv_obj_t *s_ridelog_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
 lv_timer_t *s_info_timer = nullptr;
 
@@ -213,6 +216,18 @@ void InfoTimerCallback(lv_timer_t *timer) {
                           (unsigned long)((seconds / 60UL) % 60UL), (unsigned long)(seconds % 60UL));
     lv_label_set_text_fmt(s_heap_value, "%u KB free / PSRAM %u KB free",
                           (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getFreePsram() / 1024));
+
+    // Recording starts on the first fix, which is usually after this page was
+    // built, so a value set only at load would read "waiting for fix" for the
+    // whole ride and suggest the log was broken when it was working.
+    if (s_ridelog_value != nullptr) {
+        if (RideLog_IsRecording()) {
+            lv_label_set_text_fmt(s_ridelog_value, "Ride log: %s (%u pts)", RideLog_FileName(),
+                                  (unsigned)RideLog_PointCount());
+        } else {
+            lv_label_set_text(s_ridelog_value, "Ride log: waiting for fix");
+        }
+    }
 }
 
 lv_obj_t *MakeInfoRow(lv_obj_t *card, const char *label, const char *value) {
@@ -459,6 +474,19 @@ void PageSettings::onViewLoad() {
     MakeInfoRow(info_card, "MAC", WiFi.macAddress().c_str());
     MakeInfoRow(info_card, "Build", __DATE__ " " __TIME__);
 
+    // Ride logging has no controls -- it records whenever a card is present --
+    // so this line is the only way to tell whether it is working. Without it a
+    // rider would find out at the end of the ride, which is too late.
+    if (!GpxTrack_CardMounted()) {
+        MakeInfoRow(info_card, "Ride log", "no SD card");
+    } else if (RideLog_IsRecording()) {
+        snprintf(buf, sizeof(buf), "%s (%u pts)", RideLog_FileName(),
+                 (unsigned)RideLog_PointCount());
+        s_ridelog_value = MakeInfoRow(info_card, "Ride log", buf);
+    } else {
+        s_ridelog_value = MakeInfoRow(info_card, "Ride log", "waiting for fix");
+    }
+
     s_uptime_value = MakeInfoRow(info_card, "Uptime", "--");
     s_heap_value = MakeInfoRow(info_card, "Memory", "--");
 
@@ -476,6 +504,7 @@ void PageSettings::onViewUnload() {
     s_unit_value = nullptr;
     s_trip_status = nullptr;
     s_uptime_value = nullptr;
+    s_ridelog_value = nullptr;
     s_heap_value = nullptr;
     s_hr_note = nullptr;
     s_nav_note = nullptr;

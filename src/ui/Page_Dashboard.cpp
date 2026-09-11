@@ -10,6 +10,7 @@
 #include "../system/DataCenter.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
+#include "../system/Trip.h"
 #include "../navigation/GpxTrack.h"
 #include "../navigation/TbtParse.h"
 #include "../system/TimeZone.h"
@@ -98,13 +99,6 @@ volatile bool s_imu_dirty = false;
 volatile bool s_battery_dirty = false;
 volatile bool s_tbt_dirty = false;
 
-// Trip accumulator, only ever touched from the Core-1 refresh timer (and
-// Page_Dashboard_ResetTrip(), which the settings page calls from the same core).
-double s_trip_km = 0.0;
-double s_prev_lat = 0.0;
-double s_prev_lon = 0.0;
-bool s_has_prev_fix = false;
-
 // Last speed we were handed, kept so a unit change can re-render immediately
 // instead of waiting for the next GPS publish.
 float s_last_speed_kmh = 0.0f;
@@ -151,21 +145,6 @@ void OnTbtPublished(const char *topic, const void *data, uint32_t size, void *us
     (void)size;
     (void)user_arg;
     s_tbt_dirty = true;
-}
-
-// Great-circle distance in metres. The ported demo used
-// TinyGPSPlus::distanceBetween(); this branch has no TinyGPS dependency
-// (platformio.ini uses the SparkFun u-blox library), so compute it directly.
-double DistanceMetres(double lat1, double lon1, double lat2, double lon2) {
-    constexpr double kEarthRadiusM = 6371000.0;
-    constexpr double kDegToRad = M_PI / 180.0;
-
-    const double dlat = (lat2 - lat1) * kDegToRad;
-    const double dlon = (lon2 - lon1) * kDegToRad;
-    const double a = sin(dlat / 2.0) * sin(dlat / 2.0) +
-                     cos(lat1 * kDegToRad) * cos(lat2 * kDegToRad) * sin(dlon / 2.0) *
-                         sin(dlon / 2.0);
-    return 2.0 * kEarthRadiusM * atan2(sqrt(a), sqrt(1.0 - a));
 }
 
 // A helper so the caption/value pairs below stay one line each at the call site.
@@ -300,7 +279,7 @@ void RenderSpeedAndTrip() {
         lv_label_set_text_fmt(s_speed_label, "%.1f", Settings_SpeedFromKmh(s_last_speed_kmh));
     }
     lv_label_set_text(s_speed_unit_label, Settings_SpeedUnitLabel());
-    lv_label_set_text_fmt(s_trip_label, "%.2f", Settings_DistanceFromKm((float)s_trip_km));
+    lv_label_set_text_fmt(s_trip_label, "%.2f", Settings_DistanceFromKm((float)Trip_Km()));
     if (s_trip_unit_label != nullptr) {
         lv_label_set_text(s_trip_unit_label, Settings_DistanceUnitLabel());
     }
@@ -319,21 +298,10 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             s_last_speed_kmh = gps.speed * 3.6f;
             s_has_speed = true;
 
-            // The receiver's own validity flag, not a guess from the
-            // coordinates: before a fix, lat/lon are legitimately 0,0. The
-            // 1km/tick ceiling still drops the single bogus jump a cold fix
-            // can produce as it settles.
-            if (gps.fix_valid) {
-                if (s_has_prev_fix) {
-                    const double step_m = DistanceMetres(s_prev_lat, s_prev_lon, gps.lat, gps.lon);
-                    if (step_m < 1000.0) {
-                        s_trip_km += step_m / 1000.0;
-                    }
-                }
-                s_prev_lat = gps.lat;
-                s_prev_lon = gps.lon;
-                s_has_prev_fix = true;
-            }
+            // Distance is no longer accumulated here. Trip owns it and reads
+            // the same GPS topic directly, so the odometer keeps counting
+            // while the rider is looking at the map or the settings page --
+            // this callback only runs when the dashboard is the loaded page.
             RenderSpeedAndTrip();
 
             // The inline map follows the rider on the same publish that moves
@@ -480,8 +448,7 @@ Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 } // namespace
 
 void Page_Dashboard_ResetTrip() {
-    s_trip_km = 0.0;
-    s_has_prev_fix = false;
+    Trip_Reset();
     if (s_trip_label != nullptr) {
         RenderSpeedAndTrip();
     }

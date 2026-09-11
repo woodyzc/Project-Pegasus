@@ -6,6 +6,7 @@
 #include "hal/Touch.h"
 #include "navigation/BLE_TBT_Receiver.h"
 #include "navigation/GpxTrack.h"
+#include "navigation/RideLog.h"
 #include "sensors/BLE_HR_Client.h"
 #include "sensors/GPS_Reader.h"
 #include "sensors/SoftANT.h"
@@ -13,6 +14,7 @@
 #include "system/LvglTask.h"
 #include "system/PageManager/PageManager.h"
 #include "system/Settings.h"
+#include "system/Trip.h"
 #include "ui/Page_Dashboard.h"
 #include "ui/Page_Map.h"
 #include "ui/Page_Settings.h"
@@ -105,14 +107,18 @@ void setup() {
     // user's choice instead of falling back to BLE.
     Settings_NoteRadioBringUpOk();
 
-    // Offline breadcrumbs. Only in GPX mode: mounting a card and reading a
-    // multi-megabyte file costs time and PSRAM that TBT mode has no use for.
-    // A missing card is not an error -- it just means no trail.
-    if (Settings_GetNavMode() == NAV_MODE_GPX) {
-        if (GpxTrack_MountCard()) {
-            GpxTrack_LoadFirstAvailable();
-        }
+    // The card is now mounted whatever the navigation mode, because ride
+    // logging writes to it in both. Loading a route is still GPX-only: that is
+    // the part that costs time and PSRAM, and TBT mode has no use for it.
+    // A missing card is not an error -- it just means no trail and no log.
+    if (GpxTrack_MountCard() && Settings_GetNavMode() == NAV_MODE_GPX) {
+        GpxTrack_LoadFirstAvailable();
     }
+
+    // Both read GPS through DataCenter, so they are independent of which page
+    // the rider happens to be looking at.
+    Trip_Init();
+    RideLog_Init();
 
     // TODO(Phase 1 Task 1.3+): remaining Core 0 tasks publishing into
     // DataCenter (GPS_Info, Sensor/IMU) -- Page_Dashboard is already
@@ -120,7 +126,10 @@ void setup() {
 }
 
 void loop() {
-    // Intentionally empty: Core 1's UI work runs in lvgl_task(); Core 0
-    // background tasks (GPS/ANT+/BLE/power) land here in later Phase 1 tasks.
+    // Core 1's UI work runs in lvgl_task() and Core 0's sensors in their own
+    // tasks, so this is only for work that must not sit in either: persisting
+    // the trip odometer costs an NVS write of tens of milliseconds, which
+    // would stall the GPS task if it ran in the publish callback.
+    Trip_Service();
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
