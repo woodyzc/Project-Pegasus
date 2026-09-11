@@ -23,6 +23,9 @@
 #                         through GpxParse.c)
 #   * test_trip_accum   - which GPS steps count towards trip distance
 #                         (compiles the real src/system/TripAccum.c)
+#   * test_hr_zone      - heart-rate training zones by reserve, checked
+#                         against the rider's own phone (compiles the real
+#                         src/system/HrZone.c)
 #
 #   cd test/host && make          # build + run everything
 #   cd test/host && make asan     # same under ASan/UBSan
@@ -40,7 +43,7 @@ SUFFIX ?=
 BINS := test_parsebpm$(SUFFIX) test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) \
         test_ubx_parse$(SUFFIX) test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) \
         test_track_buffer$(SUFFIX) test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) \
-        test_trip_accum$(SUFFIX)
+        test_trip_accum$(SUFFIX) test_hr_zone$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -79,6 +82,9 @@ test_gpx_write$(SUFFIX): test_gpx_write.c $(NAV)/GpxWrite.c $(NAV)/GpxParse.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
 
 test_trip_accum$(SUFFIX): test_trip_accum.c $(SYSTEM)/TripAccum.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^ -lm
+
+test_hr_zone$(SUFFIX): test_hr_zone.c $(SYSTEM)/HrZone.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^ -lm
 
 # Both suites under the sanitizers.

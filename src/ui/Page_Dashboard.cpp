@@ -8,6 +8,7 @@
 
 #include "../hal/Battery.h"
 #include "../system/DataCenter.h"
+#include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
 #include "../system/Trip.h"
@@ -50,13 +51,16 @@ constexpr uint32_t TBT_STALE_MS = 30000;
 // because a rider has no way to tell it is minutes old.
 constexpr uint32_t HR_STALE_MS = 5000;
 
-// Heart-rate zone bands and their badge colours.
-constexpr uint8_t ZONE2_LOW = 90;
-constexpr uint8_t ZONE3_LOW = 120;
-constexpr uint8_t ZONE4_LOW = 150;
-constexpr uint32_t COLOR_ZONE_LOW = 0x7EF0A5;
-constexpr uint32_t COLOR_ZONE_MID = 0x7BC8FF;
-constexpr uint32_t COLOR_ZONE_HIGH = 0xFFD166;
+// One colour per training zone, ramped neutral to red so the bar reads as
+// effort rising rather than as five unrelated bands. The boundaries themselves
+// live in HrZone.h, scaled to the rider's own resting and maximum rate.
+const uint32_t ZONE_COLORS[HR_ZONE_COUNT] = {
+    0x93A4B8, // 1  low intensity   -- the caption grey: barely working
+    0x7EF0A5, // 2  weight control
+    0x7BC8FF, // 3  aerobic
+    0xFFD166, // 4  anaerobic
+    0xFF6B6B, // 5  maximum
+};
 
 lv_obj_t *s_speed_label = nullptr;
 lv_obj_t *s_speed_unit_label = nullptr;
@@ -71,7 +75,17 @@ const char *s_active_tz = nullptr;
 lv_obj_t *s_incline_label = nullptr;
 lv_obj_t *s_hr_label = nullptr;
 lv_obj_t *s_incline_cell = nullptr;
-lv_obj_t *s_zone_segments[4] = {nullptr, nullptr, nullptr, nullptr};
+lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+
+// A thin tick riding along the bar at the rider's exact position. The lit
+// segment says which zone; this says where inside it, which is the difference
+// between holding the bottom of zone 4 and about to fall out of the top.
+lv_obj_t *s_zone_marker = nullptr;
+
+// Bar geometry, recorded when the bar is built so the marker can be placed
+// without the layout constants leaking out of onViewLoad.
+lv_coord_t s_zone_bar_w = 0;
+constexpr lv_coord_t ZONE_MARKER_W = 3;
 
 // The navigation slot holds one of two things depending on the chosen mode:
 // a turn card in TBT, or a live breadcrumb map in GPX. Only one is created,
@@ -219,22 +233,39 @@ lv_obj_t *MakeUnit(lv_obj_t *cell, const char *text) {
     return label;
 }
 
-void UpdateHeartRateZone(uint8_t bpm) {
-    int zone = 0; // 0-based index into the four bands
-    if (bpm >= ZONE4_LOW) {
-        zone = 3;
-    } else if (bpm >= ZONE3_LOW) {
-        zone = 2;
-    } else if (bpm >= ZONE2_LOW) {
-        zone = 1;
+// Dims every band and hides the marker: no reading means no zone, and leaving
+// one lit would still be asserting something about the rider.
+void ClearHeartRateZone() {
+    for (int i = 0; i < HR_ZONE_COUNT; i++) {
+        if (s_zone_segments[i] != nullptr) {
+            lv_obj_set_style_bg_opa(s_zone_segments[i], LV_OPA_40, 0);
+        }
     }
+    if (s_zone_marker != nullptr) {
+        lv_obj_add_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void UpdateHeartRateZone(uint8_t bpm) {
+    const uint8_t rest = Settings_GetHrRestBpm();
+    const uint8_t max = Settings_GetHrMaxBpm();
+    const int zone = HrZone_Index(bpm, rest, max);
 
     // The lit segment is the readout: colour and position carry the zone at a
     // glance on a bouncing bike, where the words "Zone 3" do not.
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < HR_ZONE_COUNT; i++) {
         if (s_zone_segments[i] != nullptr) {
             lv_obj_set_style_bg_opa(s_zone_segments[i], (i == zone) ? LV_OPA_COVER : LV_OPA_40, 0);
         }
+    }
+
+    if (s_zone_marker != nullptr) {
+        // Inset by the marker's own width so it stays fully on the panel at
+        // both ends instead of hanging half off at rest and at maximum.
+        const double position = HrZone_Fraction(bpm, rest, max);
+        const lv_coord_t travel = s_zone_bar_w - ZONE_MARKER_W;
+        lv_obj_set_x(s_zone_marker, (lv_coord_t)lround(position * (double)travel));
+        lv_obj_clear_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -381,13 +412,7 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     // more gets dropped rather than left looking current.
     if (s_hr_last_ms != 0 && lv_tick_elaps(s_hr_last_ms) > HR_STALE_MS) {
         lv_label_set_text(s_hr_label, "--");
-        // Dim every band: no reading means no zone, and leaving one lit would
-        // still be asserting something about the rider.
-        for (int i = 0; i < 4; i++) {
-            if (s_zone_segments[i] != nullptr) {
-                lv_obj_set_style_bg_opa(s_zone_segments[i], LV_OPA_40, 0);
-            }
-        }
+        ClearHeartRateZone();
         s_hr_last_ms = 0;
     }
 
@@ -697,29 +722,55 @@ void PageDashboard::onViewLoad() {
     MakeSeparator(parent, COL2 - 1, ROW1, 1, ROW2 + CELL_H - ROW1);
 
     // ---- Heart-rate zone bar ----
-    // Four bands matching the thresholds above; the active one is lit and the
-    // rest dimmed. Colour and position carry the reading, no word to parse.
+    // Five bands from HrZone.h, scaled to the rider's own resting and maximum
+    // rate; the active one is lit and the rest dimmed. Colour and position
+    // carry the reading, no word to parse.
     //
     // A chevron used to sit under the active band as well. It was redundant --
     // the lit segment already says which zone -- and it did not fit: at y=310
     // with a ~13px glyph it ran past the 320px panel and showed as a shape
-    // clipped by the bottom edge.
-    const lv_coord_t SEG_W = SCREEN_W / 4;
-    static const uint32_t ZONE_COLORS[4] = {COLOR_ZONE_LOW, COLOR_ZONE_LOW, COLOR_ZONE_MID,
-                                            COLOR_ZONE_HIGH};
-    for (int i = 0; i < 4; i++) {
+    // clipped by the bottom edge. The marker below is inside the bar instead,
+    // where there is room for it.
+    //
+    // Each segment is as wide as its own share of the reserve rather than a
+    // fifth of the bar, because the bands are deliberately unequal: zone 4
+    // spans 30% of the reserve and zone 5 only 10%. Equal segments would put
+    // the marker in a different zone than the lit one.
+    s_zone_bar_w = SCREEN_W;
+    double cumulative = 0.0;
+    lv_coord_t seg_x = 0;
+    for (int i = 0; i < HR_ZONE_COUNT; i++) {
+        cumulative += HrZone_SpanFraction(i);
+        // Width taken as the gap to the next rounded edge, so rounding can
+        // never open a seam between segments or overrun the last one: the
+        // fractions sum to 1.0, so the final edge lands exactly on SCREEN_W.
+        const lv_coord_t next_x = (lv_coord_t)lround(cumulative * (double)SCREEN_W);
+
         lv_obj_t *segment = lv_obj_create(parent);
-        // Touching, not spaced: the four colours already separate them, and
-        // the bar reads as one gauge rather than four buttons.
-        lv_obj_set_size(segment, SEG_W, ZONE_H);
-        lv_obj_set_pos(segment, (lv_coord_t)(i * SEG_W), ZONE_Y);
+        // Touching, not spaced: the five colours already separate them, and
+        // the bar reads as one gauge rather than five buttons.
+        lv_obj_set_size(segment, next_x - seg_x, ZONE_H);
+        lv_obj_set_pos(segment, seg_x, ZONE_Y);
         lv_obj_set_style_bg_color(segment, lv_color_hex(ZONE_COLORS[i]), 0);
         lv_obj_set_style_bg_opa(segment, LV_OPA_40, 0);
         lv_obj_set_style_border_width(segment, 0, 0);
         lv_obj_set_style_radius(segment, 2, 0);
         lv_obj_clear_flag(segment, LV_OBJ_FLAG_SCROLLABLE);
         s_zone_segments[i] = segment;
+
+        seg_x = next_x;
     }
+
+    // Created after the segments so it draws on top of them.
+    s_zone_marker = lv_obj_create(parent);
+    lv_obj_set_size(s_zone_marker, ZONE_MARKER_W, ZONE_H);
+    lv_obj_set_pos(s_zone_marker, 0, ZONE_Y);
+    lv_obj_set_style_bg_color(s_zone_marker, lv_color_hex(COLOR_VALUE), 0);
+    lv_obj_set_style_bg_opa(s_zone_marker, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_zone_marker, 0, 0);
+    lv_obj_set_style_radius(s_zone_marker, 0, 0);
+    lv_obj_clear_flag(s_zone_marker, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN); // nothing to point at yet
 
     if (!s_nav_is_map) {
         ClearTbt();
@@ -765,8 +816,10 @@ void PageDashboard::onViewUnload() {
     s_incline_cell = nullptr;
     s_nav_cell = nullptr;
     s_nav_is_map = false;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < HR_ZONE_COUNT; i++) {
         s_zone_segments[i] = nullptr;
     }
+    s_zone_marker = nullptr;
+    s_zone_bar_w = 0;
     s_battery_label = nullptr;
 }

@@ -6,6 +6,7 @@
 #include "../navigation/GpxTrack.h"
 #include "../navigation/RideLog.h"
 #include "../sensors/BLE_HR_Client.h"
+#include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
 #include "Page_Dashboard.h"
@@ -35,6 +36,14 @@ constexpr int HR_SOURCE_COUNT = 2;
 lv_obj_t *s_hr_btns[HR_SOURCE_COUNT] = {nullptr, nullptr};
 lv_obj_t *s_hr_note = nullptr;
 HrSource_t s_hr_source_at_load = HR_SOURCE_BLE;
+
+lv_obj_t *s_hr_rest_value = nullptr;
+lv_obj_t *s_hr_max_value = nullptr;
+lv_obj_t *s_hr_zone_table = nullptr;
+
+// One beat per press is too slow for a 50-beat correction on a touchscreen,
+// and ten overshoots. Five matches how precisely either number is known.
+constexpr int HR_BPM_STEP = 5;
 
 constexpr int NAV_MODE_COUNT = 2; // index i == NavMode_t value i (TBT=0, GPX=1)
 lv_obj_t *s_nav_btns[NAV_MODE_COUNT] = {nullptr, nullptr};
@@ -203,6 +212,69 @@ void OnHrSourceClicked(lv_event_t *e) {
                               Settings_NavModeLabel(Settings_GetNavMode()));
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
     }
+}
+
+// Re-reads both numbers from Settings rather than tracking them locally, so
+// the display shows what was actually stored after clamping -- press "-" at
+// the bottom of the range and the value visibly stops rather than drifting
+// away from what the zones are computed from.
+void RefreshHrZoneCard() {
+    const uint8_t rest = Settings_GetHrRestBpm();
+    const uint8_t max = Settings_GetHrMaxBpm();
+
+    if (s_hr_rest_value != nullptr) {
+        lv_label_set_text_fmt(s_hr_rest_value, "%d", (int)rest);
+    }
+    if (s_hr_max_value != nullptr) {
+        lv_label_set_text_fmt(s_hr_max_value, "%d", (int)max);
+    }
+
+    // The resulting bands, spelled out. Two abstract numbers become five
+    // concrete ranges the rider can check against their phone, which is the
+    // only way to tell that the pair was entered correctly.
+    if (s_hr_zone_table != nullptr) {
+        char table[96] = {0};
+        size_t used = 0;
+        for (int zone = 0; zone < HR_ZONE_COUNT; zone++) {
+            const int written =
+                snprintf(table + used, sizeof(table) - used, "%sZ%d %d-%d", (zone > 0) ? "\n" : "",
+                         zone + 1, (int)HrZone_LowerBpm(zone, rest, max),
+                         (int)HrZone_UpperBpm(zone, rest, max));
+            if (written <= 0 || (size_t)written >= sizeof(table) - used) {
+                break;
+            }
+            used += (size_t)written;
+        }
+        lv_label_set_text(s_hr_zone_table, table);
+    }
+}
+
+// Kept inside 0..255 before narrowing: the setters clamp, but a step that
+// underflowed the cast would arrive there as a large number and clamp to the
+// top of the range instead of the bottom -- the button would jump the value
+// the wrong way at the end of its travel.
+uint8_t SteppedBpm(uint8_t current, int step) {
+    const int next = (int)current + step;
+    if (next < 0) {
+        return 0;
+    }
+    if (next > 255) {
+        return 255;
+    }
+    return (uint8_t)next;
+}
+
+// user_data carries the signed step, so one handler serves both buttons.
+void OnHrRestStep(lv_event_t *e) {
+    const int step = (int)(intptr_t)lv_event_get_user_data(e);
+    Settings_SetHrRestBpm(SteppedBpm(Settings_GetHrRestBpm(), step));
+    RefreshHrZoneCard();
+}
+
+void OnHrMaxStep(lv_event_t *e) {
+    const int step = (int)(intptr_t)lv_event_get_user_data(e);
+    Settings_SetHrMaxBpm(SteppedBpm(Settings_GetHrMaxBpm(), step));
+    RefreshHrZoneCard();
 }
 
 void OnRestartClicked(lv_event_t *e) {
@@ -421,6 +493,79 @@ void PageSettings::onViewLoad() {
 
     RefreshHrSelection();
 
+    // ---- Heart-rate zones ----
+    // Unlike the source above, these take effect immediately: they are only
+    // arithmetic applied to a reading, with no radio to reconfigure. The
+    // dashboard is cached rather than rebuilt when this page closes, but it
+    // does not need rebuilding -- the bar's proportions come from the fixed
+    // reserve fractions, and the zone lookup re-reads these numbers for every
+    // reading. The next beat lands in the new bands.
+    lv_obj_t *zone_card = MakeCard(body, "HEART RATE ZONES");
+
+    struct {
+        const char *caption;
+        lv_obj_t **value;
+        lv_event_cb_t handler;
+    } const rows[] = {
+        {"Resting", &s_hr_rest_value, OnHrRestStep},
+        {"Maximum", &s_hr_max_value, OnHrMaxStep},
+    };
+
+    for (const auto &row : rows) {
+        lv_obj_t *line = lv_obj_create(zone_card);
+        lv_obj_set_size(line, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_opa(line, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(line, 0, 0);
+        lv_obj_set_style_pad_all(line, 0, 0);
+        lv_obj_set_style_pad_column(line, 6, 0);
+        lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(line, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(line, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+
+        lv_obj_t *caption = lv_label_create(line);
+        lv_label_set_text(caption, row.caption);
+        lv_obj_set_style_text_font(caption, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(caption, lv_color_hex(COLOR_CAPTION), 0);
+        lv_obj_set_flex_grow(caption, 1);
+
+        *row.value = lv_label_create(line);
+        lv_obj_set_style_text_font(*row.value, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(*row.value, lv_color_hex(COLOR_VALUE), 0);
+        lv_label_set_text(*row.value, "--"); // filled by RefreshHrZoneCard below
+
+        // Wide enough to hit on a bouncing bike, which is the only input this
+        // device has.
+        static const char *const STEP_LABELS[2] = {LV_SYMBOL_MINUS, LV_SYMBOL_PLUS};
+        const int steps[2] = {-HR_BPM_STEP, HR_BPM_STEP};
+        for (int i = 0; i < 2; i++) {
+            lv_obj_t *btn = lv_btn_create(line);
+            lv_obj_set_size(btn, 40, 34);
+            lv_obj_set_style_radius(btn, 8, 0);
+            lv_obj_set_style_bg_color(btn, lv_color_hex(0x24313D), 0);
+            lv_obj_set_style_bg_color(btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+            lv_obj_set_style_shadow_width(btn, 0, 0);
+            lv_obj_add_event_cb(btn, row.handler, LV_EVENT_CLICKED, (void *)(intptr_t)steps[i]);
+
+            lv_obj_t *label = lv_label_create(btn);
+            lv_label_set_text(label, STEP_LABELS[i]);
+            lv_obj_center(label);
+        }
+    }
+
+    lv_obj_t *zone_hint = lv_label_create(zone_card);
+    lv_label_set_text(zone_hint, "Bands by heart-rate reserve, matching the phone:");
+    lv_obj_set_style_text_font(zone_hint, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(zone_hint, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_long_mode(zone_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(zone_hint, LV_PCT(100));
+
+    s_hr_zone_table = lv_label_create(zone_card);
+    lv_obj_set_style_text_font(s_hr_zone_table, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_hr_zone_table, lv_color_hex(COLOR_VALUE), 0);
+
+    RefreshHrZoneCard();
+
     // ---- Navigation ----
     // Coupled to the heart-rate source by the one exclusivity rule in
     // Settings.h; both selectors repair the other and say what moved.
@@ -548,6 +693,9 @@ void PageSettings::onViewUnload() {
     s_hrlink_value = nullptr;
     s_heap_value = nullptr;
     s_hr_note = nullptr;
+    s_hr_rest_value = nullptr;
+    s_hr_max_value = nullptr;
+    s_hr_zone_table = nullptr;
     s_nav_note = nullptr;
     for (int i = 0; i < HR_SOURCE_COUNT; i++) {
         s_hr_btns[i] = nullptr;

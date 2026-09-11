@@ -80,6 +80,22 @@ void Settings_NoteRadioBringUpOk();
 // True when this boot fell back to BLE because the previous one didn't finish.
 bool Settings_DidHrSourceFallBack();
 
+// ---- Heart-rate zone personalisation ----
+// The resting and maximum rate that HrZone.h needs to place a reading in a
+// zone. Defaults are the rider's own measured pair, so the bands agree with
+// the phone on a device that has never been configured.
+//
+// These are clamped rather than merely stored, because every zone boundary
+// divides by (max - rest): a pair that inverted, or that closed to nothing,
+// would make the whole table undefined. Each setter clamps its OWN value
+// against the other and never moves the other one -- unlike the HR-source and
+// nav-mode pair above, where one genuinely cannot be honoured without changing
+// its partner. Here the rider asked for one number, so the other stays put.
+uint8_t Settings_GetHrRestBpm();
+uint8_t Settings_GetHrMaxBpm();
+void Settings_SetHrRestBpm(uint8_t bpm);
+void Settings_SetHrMaxBpm(uint8_t bpm);
+
 // Unit-aware conversion helpers, so pages never hardcode a unit.
 float Settings_SpeedFromKmh(float kmh);
 float Settings_DistanceFromKm(float km);

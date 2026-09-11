@@ -12,6 +12,8 @@ constexpr char KEY_SPEED_UNIT[] = "unit";
 constexpr char KEY_HR_SOURCE[] = "hrsrc";
 constexpr char KEY_RADIO_PENDING[] = "radiopend";
 constexpr char KEY_NAV_MODE[] = "navmode";
+constexpr char KEY_HR_REST[] = "hrrest";
+constexpr char KEY_HR_MAX[] = "hrmax";
 
 constexpr uint8_t DEFAULT_BRIGHTNESS = 100;
 constexpr float KM_TO_MILES = 0.621371f;
@@ -27,6 +29,26 @@ constexpr HrSource_t DEFAULT_HR_SOURCE = HR_SOURCE_BLE;
 // destination, not a working feature.
 constexpr NavMode_t DEFAULT_NAV_MODE = NAV_MODE_TBT;
 
+// The rider's own measured pair, the same one HrZone.h's worked example uses.
+// A default of nothing would be worse than a default that belongs to someone:
+// the zone bar has to draw on first boot, and 51/174 at least produces the
+// bands this device was checked against.
+constexpr uint8_t DEFAULT_HR_REST = 51;
+constexpr uint8_t DEFAULT_HR_MAX = 174;
+
+// Outer bounds for each, wide enough for any rider and narrow enough to reject
+// a byte that NVS never actually stored (a fresh key reads back as 0).
+constexpr uint8_t HR_REST_MIN = 30;
+constexpr uint8_t HR_REST_MAX = 120;
+constexpr uint8_t HR_MAX_MIN = 90;
+constexpr uint8_t HR_MAX_MAX = 220;
+
+// Closest the two are allowed to get. One beat of reserve keeps the arithmetic
+// defined but gives five zones to divide between it, so several would span no
+// beats at all and the bar would lie about where the rider is. Twenty leaves
+// every zone at least two beats wide.
+constexpr uint8_t HR_MIN_RESERVE = 20;
+
 Preferences s_prefs;
 bool s_ready = false;
 
@@ -35,6 +57,18 @@ SpeedUnit_t s_speed_unit = SPEED_UNIT_KMH;
 HrSource_t s_hr_source = DEFAULT_HR_SOURCE;
 NavMode_t s_nav_mode = DEFAULT_NAV_MODE;
 bool s_hr_fell_back = false;
+uint8_t s_hr_rest = DEFAULT_HR_REST;
+uint8_t s_hr_max = DEFAULT_HR_MAX;
+
+uint8_t ClampTo(uint8_t value, uint8_t low, uint8_t high) {
+    if (value < low) {
+        return low;
+    }
+    if (value > high) {
+        return high;
+    }
+    return value;
+}
 
 } // namespace
 
@@ -49,6 +83,8 @@ void Settings_Init() {
         s_speed_unit = (SpeedUnit_t)s_prefs.getUChar(KEY_SPEED_UNIT, SPEED_UNIT_KMH);
         s_hr_source = (HrSource_t)s_prefs.getUChar(KEY_HR_SOURCE, DEFAULT_HR_SOURCE);
         s_nav_mode = (NavMode_t)s_prefs.getUChar(KEY_NAV_MODE, DEFAULT_NAV_MODE);
+        s_hr_rest = s_prefs.getUChar(KEY_HR_REST, DEFAULT_HR_REST);
+        s_hr_max = s_prefs.getUChar(KEY_HR_MAX, DEFAULT_HR_MAX);
     }
 
     if (s_brightness > 100) {
@@ -64,6 +100,18 @@ void Settings_Init() {
     }
     if (s_nav_mode != NAV_MODE_TBT && s_nav_mode != NAV_MODE_GPX) {
         s_nav_mode = DEFAULT_NAV_MODE;
+    }
+
+    // Range first, then the relationship between the two. Firmware older than
+    // these keys leaves them absent and they read back as the defaults, but a
+    // value written by a future build with different bounds would land here,
+    // and so would a half-finished write. Falling back to the default pair
+    // beats drawing a bar whose zones have no width.
+    s_hr_rest = ClampTo(s_hr_rest, HR_REST_MIN, HR_REST_MAX);
+    s_hr_max = ClampTo(s_hr_max, HR_MAX_MIN, HR_MAX_MAX);
+    if (s_hr_max < s_hr_rest + HR_MIN_RESERVE) {
+        s_hr_rest = DEFAULT_HR_REST;
+        s_hr_max = DEFAULT_HR_MAX;
     }
 
     // Repair a stored pair that breaks the exclusivity rule -- possible if the
@@ -139,6 +187,47 @@ void Settings_SetSpeedUnit(SpeedUnit_t unit) {
     s_speed_unit = unit;
     if (s_ready) {
         s_prefs.putUChar(KEY_SPEED_UNIT, (uint8_t)s_speed_unit);
+    }
+}
+
+uint8_t Settings_GetHrRestBpm() {
+    return s_hr_rest;
+}
+
+uint8_t Settings_GetHrMaxBpm() {
+    return s_hr_max;
+}
+
+void Settings_SetHrRestBpm(uint8_t bpm) {
+    // Clamped against the maximum as well as the fixed bounds, so the pair can
+    // never close up. The rider gets the nearest usable value rather than a
+    // rejected edit with no feedback.
+    uint8_t next = ClampTo(bpm, HR_REST_MIN, HR_REST_MAX);
+    if (next + HR_MIN_RESERVE > s_hr_max) {
+        next = (uint8_t)(s_hr_max - HR_MIN_RESERVE);
+    }
+    if (next == s_hr_rest) {
+        return; // no NVS write for a no-op: this runs off a stepper
+    }
+
+    s_hr_rest = next;
+    if (s_ready) {
+        s_prefs.putUChar(KEY_HR_REST, s_hr_rest);
+    }
+}
+
+void Settings_SetHrMaxBpm(uint8_t bpm) {
+    uint8_t next = ClampTo(bpm, HR_MAX_MIN, HR_MAX_MAX);
+    if (next < s_hr_rest + HR_MIN_RESERVE) {
+        next = (uint8_t)(s_hr_rest + HR_MIN_RESERVE);
+    }
+    if (next == s_hr_max) {
+        return;
+    }
+
+    s_hr_max = next;
+    if (s_ready) {
+        s_prefs.putUChar(KEY_HR_MAX, s_hr_max);
     }
 }
 
