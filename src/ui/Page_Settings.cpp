@@ -375,6 +375,39 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_pad_row(body, 10, 0);
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
 
+    // ---- Why we last restarted ----
+    // First card, and only when there is bad news. A board in a reboot loop
+    // gives you a few seconds of UI per boot, so the one thing worth reading
+    // has to be at the top of the scroll rather than at the bottom under the
+    // chip details. It disappears once a boot ends cleanly, so it is never
+    // clutter on a healthy device.
+    if (Settings_LastResetWasAbnormal()) {
+        lv_obj_t *reset_card = MakeCard(body, "LAST RESTART");
+
+        lv_obj_t *reason = lv_label_create(reset_card);
+        lv_label_set_text(reason, Settings_LastResetText());
+        lv_obj_set_style_text_font(reason, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(reason, lv_color_hex(COLOR_DANGER), 0);
+
+        lv_obj_t *count = lv_label_create(reset_card);
+        lv_label_set_text_fmt(count, "Boot %u since last power-on",
+                              (unsigned)Settings_BootCount());
+        lv_obj_set_style_text_font(count, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_color(count, lv_color_hex(COLOR_CAPTION), 0);
+        lv_label_set_long_mode(count, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(count, LV_PCT(100));
+
+        lv_obj_t *hint = lv_label_create(reset_card);
+        lv_label_set_text(hint,
+                          "Panic is a crash in the firmware. A watchdog means "
+                          "something blocked. Brownout is the power supply, "
+                          "not the code. Unplug to reset the count.");
+        lv_obj_set_style_text_font(hint, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_color(hint, lv_color_hex(COLOR_CAPTION), 0);
+        lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(hint, LV_PCT(100));
+    }
+
     // ---- Brightness ----
     lv_obj_t *bright_card = MakeCard(body, "DISPLAY BRIGHTNESS");
     s_brightness_value = lv_label_create(bright_card);
@@ -657,6 +690,12 @@ void PageSettings::onViewLoad() {
     MakeInfoRow(info_card, "PSRAM", buf);
 
     MakeInfoRow(info_card, "MAC", WiFi.macAddress().c_str());
+
+    // Also here, unconditionally, so a normal reason can be checked on a
+    // healthy board without waiting for it to misbehave.
+    snprintf(buf, sizeof(buf), "%s (boot %u)", Settings_LastResetText(),
+             (unsigned)Settings_BootCount());
+    MakeInfoRow(info_card, "Last reset", buf);
     MakeInfoRow(info_card, "Build", __DATE__ " " __TIME__);
 
     // Ride logging has no controls -- it records whenever a card is present --

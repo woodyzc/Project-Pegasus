@@ -96,6 +96,24 @@ uint8_t Settings_GetHrMaxBpm();
 void Settings_SetHrRestBpm(uint8_t bpm);
 void Settings_SetHrMaxBpm(uint8_t bpm);
 
+// ---- Reset diagnostics ----
+// Why the previous run ended, and how many times the device has come up since
+// the last real power-on. Serial is unusable on this board (CLAUDE.md section
+// 8), so the panel is the only place a reset reason can reach a human, and
+// without one a reboot loop is indistinguishable from a hang.
+//
+// The count is what makes it useful: a single "Panic" after a manual reflash
+// says nothing, whereas "Panic, boot 47" says the device is looping and names
+// the cause. It resets on a genuine power-on, so unplugging clears it.
+const char *Settings_LastResetText();
+uint32_t Settings_BootCount();
+
+// True when the previous run ended in a way the firmware should be ashamed of
+// -- a panic, a watchdog or a brownout, as opposed to a power-on, a reflash or
+// a deliberate restart. Lets the UI show the diagnostic prominently only when
+// there is something to report.
+bool Settings_LastResetWasAbnormal();
+
 // Unit-aware conversion helpers, so pages never hardcode a unit.
 float Settings_SpeedFromKmh(float kmh);
 float Settings_DistanceFromKm(float km);

@@ -1,6 +1,7 @@
 #include "Settings.h"
 
 #include <Preferences.h>
+#include <esp_system.h>
 
 #include "../hal/Display.h"
 
@@ -14,6 +15,7 @@ constexpr char KEY_RADIO_PENDING[] = "radiopend";
 constexpr char KEY_NAV_MODE[] = "navmode";
 constexpr char KEY_HR_REST[] = "hrrest";
 constexpr char KEY_HR_MAX[] = "hrmax";
+constexpr char KEY_BOOT_COUNT[] = "boots";
 
 constexpr uint8_t DEFAULT_BRIGHTNESS = 100;
 constexpr float KM_TO_MILES = 0.621371f;
@@ -59,6 +61,31 @@ NavMode_t s_nav_mode = DEFAULT_NAV_MODE;
 bool s_hr_fell_back = false;
 uint8_t s_hr_rest = DEFAULT_HR_REST;
 uint8_t s_hr_max = DEFAULT_HR_MAX;
+const char *s_reset_text = "?";
+bool s_reset_abnormal = false;
+uint32_t s_boot_count = 0;
+
+// Short enough for a settings row, specific enough to act on. The three that
+// matter here are Panic (a crash in our code), the two watchdogs (something
+// blocked or an ISR overran) and Brownout (the supply sagged, which on this
+// board means USB current rather than firmware).
+const char *ResetReasonText(esp_reset_reason_t reason, bool *abnormal) {
+    *abnormal = false;
+    switch (reason) {
+        case ESP_RST_POWERON:  return "Power-on";
+        case ESP_RST_EXT:      return "External pin";
+        case ESP_RST_SW:       return "Restart";        // our own esp_restart()
+        case ESP_RST_DEEPSLEEP:return "Deep sleep";
+        case ESP_RST_SDIO:     return "SDIO";
+        case ESP_RST_PANIC:    *abnormal = true; return "PANIC (crash)";
+        case ESP_RST_INT_WDT:  *abnormal = true; return "Interrupt watchdog";
+        case ESP_RST_TASK_WDT: *abnormal = true; return "Task watchdog";
+        case ESP_RST_WDT:      *abnormal = true; return "Other watchdog";
+        case ESP_RST_BROWNOUT: *abnormal = true; return "Brownout (power)";
+        case ESP_RST_UNKNOWN:
+        default:               return "Unknown";
+    }
+}
 
 uint8_t ClampTo(uint8_t value, uint8_t low, uint8_t high) {
     if (value < low) {
@@ -125,6 +152,21 @@ void Settings_Init() {
         }
     }
 
+    // ---- Reset diagnostics ----
+    // Read before anything else can restart us. A genuine power-on starts the
+    // count again, so pulling the USB lead is how you clear it; every other
+    // reason means the previous run ended without being asked to, and the
+    // count is what separates one bad boot from a loop.
+    const esp_reset_reason_t reason = esp_reset_reason();
+    s_reset_text = ResetReasonText(reason, &s_reset_abnormal);
+
+    if (s_ready) {
+        s_boot_count = (reason == ESP_RST_POWERON) ? 1 : s_prefs.getUInt(KEY_BOOT_COUNT, 0) + 1;
+        s_prefs.putUInt(KEY_BOOT_COUNT, s_boot_count);
+    } else {
+        s_boot_count = 1;
+    }
+
     // A still-raised flag means the previous boot entered radio bring-up and
     // never came out. Fall back to BLE and persist it, so the device comes up
     // usable instead of repeating whatever hung -- otherwise the bad choice
@@ -154,6 +196,18 @@ void Settings_NoteRadioBringUpOk() {
 
 bool Settings_DidHrSourceFallBack() {
     return s_hr_fell_back;
+}
+
+const char *Settings_LastResetText() {
+    return s_reset_text;
+}
+
+uint32_t Settings_BootCount() {
+    return s_boot_count;
+}
+
+bool Settings_LastResetWasAbnormal() {
+    return s_reset_abnormal;
 }
 
 uint8_t Settings_GetBrightness() {
