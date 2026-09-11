@@ -50,3 +50,22 @@ void BLE_TBT_Start();
 
 // True while a phone is connected to the TBT service.
 bool BLE_TBT_IsConnected();
+
+// ---- Diagnostics, because "the app cannot find it" has many causes ----
+// The phone filters on TBT_SERVICE_UUID being in the advertisement, so the
+// first question is always whether this device is advertising at all. Serial
+// cannot answer it (CLAUDE.md section 8) and neither can the phone, which only
+// ever reports the absence. These put the answer on the panel.
+
+// True if the radio is advertising right now.
+bool BLE_TBT_IsAdvertising();
+
+// What the initial NimBLEDevice::startAdvertising() returned, as text. The
+// return value used to be discarded, which meant a refusal to advertise was
+// indistinguishable from a phone that simply never connected.
+const char *BLE_TBT_StartResultText();
+
+// How many times the supervisor has had to restart advertising. Non-zero means
+// something is stopping it behind our back, which is worth knowing even though
+// the supervisor papers over it.
+uint32_t BLE_TBT_RestartCount();

@@ -61,6 +61,39 @@ class TbtCallbacks : public NimBLECharacteristicCallbacks {
 ServerCallbacks s_server_callbacks;
 TbtCallbacks s_characteristic_callbacks;
 
+const char *s_start_result = "not started";
+volatile uint32_t s_restart_count = 0;
+
+// Re-asserts advertising if it is ever found stopped.
+//
+// The phone can only report the absence of the device, so an advertisement
+// that quietly stops looks identical to a phone that never scanned. Several
+// things can stop it: the controller drops it when a connection is
+// established, a GATT reset takes it down on purpose, and BLE_HR_Start() runs
+// a scan and a connection right after this module starts advertising.
+//
+// Rather than reason about which of those applies on any given boot, check.
+// Five seconds is far below the time it takes a rider to notice a missing turn
+// prompt, and the check is two reads when nothing is wrong.
+void TbtSupervisorTask(void *pv) {
+    (void)pv;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+        // A connected phone is the one legitimate reason not to advertise:
+        // NimBLE stops on connect and our onDisconnect restarts it.
+        if (s_connected) {
+            continue;
+        }
+
+        NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+        if (advertising != nullptr && !advertising->isAdvertising()) {
+            s_restart_count++;
+            NimBLEDevice::startAdvertising();
+        }
+    }
+}
+
 } // namespace
 
 void BLE_TBT_Start() {
@@ -91,9 +124,34 @@ void BLE_TBT_Start() {
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(TBT_SERVICE_UUID);
     advertising->enableScanResponse(true);
-    NimBLEDevice::startAdvertising();
+
+    // The phone's ScanFilter matches on TBT_SERVICE_UUID, and a 128-bit UUID
+    // costs 18 of the 31 bytes an advertisement gets. Scan response is enabled
+    // above so the name has somewhere to go if the two do not fit together --
+    // the UUID is the half that must stay in the advertisement, because it is
+    // the half being filtered on.
+    const bool ok = NimBLEDevice::startAdvertising();
+    s_start_result = ok ? "started" : "REFUSED";
+
+    // Kept alive for the life of the device, so it is created once here rather
+    // than from a page that can be unloaded. Core 0, with the other radio
+    // work (CLAUDE.md section 4); 2KB is ample for two calls and no locals.
+    xTaskCreatePinnedToCore(TbtSupervisorTask, "tbt_adv", 2048, nullptr, 1, nullptr, 0);
 }
 
 bool BLE_TBT_IsConnected() {
     return s_connected;
+}
+
+bool BLE_TBT_IsAdvertising() {
+    NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
+    return advertising != nullptr && advertising->isAdvertising();
+}
+
+const char *BLE_TBT_StartResultText() {
+    return s_start_result;
+}
+
+uint32_t BLE_TBT_RestartCount() {
+    return s_restart_count;
 }

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <WiFi.h> // WiFi.macAddress() -- reads the eFused MAC, no radio started
 
+#include "../navigation/BLE_TBT_Receiver.h"
 #include "../navigation/GpxTrack.h"
 #include "../navigation/RideLog.h"
 #include "../sensors/BLE_HR_Client.h"
@@ -28,6 +29,7 @@ lv_obj_t *s_trip_status = nullptr;
 lv_obj_t *s_uptime_value = nullptr;
 lv_obj_t *s_ridelog_value = nullptr;
 lv_obj_t *s_hrlink_value = nullptr;
+lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
 lv_timer_t *s_info_timer = nullptr;
 
@@ -314,6 +316,22 @@ void InfoTimerCallback(lv_timer_t *timer) {
         }
     }
 
+    // The phone can only ever report that it did not find the head unit, which
+    // is the same message whether the board is silent or the phone is. This is
+    // the other half of that conversation.
+    if (s_tbtlink_value != nullptr) {
+        if (Settings_GetNavMode() != NAV_MODE_TBT) {
+            lv_label_set_text(s_tbtlink_value, "TBT: off (GPX mode)");
+        } else if (BLE_TBT_IsConnected()) {
+            lv_label_set_text(s_tbtlink_value, "TBT: phone connected");
+        } else {
+            lv_label_set_text_fmt(s_tbtlink_value, "TBT: %s, advertising %s%s",
+                                  BLE_TBT_StartResultText(),
+                                  BLE_TBT_IsAdvertising() ? "YES" : "NO",
+                                  BLE_TBT_RestartCount() > 0 ? " (restarted)" : "");
+        }
+    }
+
     if (s_ridelog_value != nullptr) {
         if (RideLog_IsRecording()) {
             lv_label_set_text_fmt(s_ridelog_value, "Ride log: %s (%u pts)", RideLog_FileName(),
@@ -524,6 +542,15 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_text_color(s_hrlink_value, lv_color_hex(COLOR_VALUE), 0);
     lv_label_set_text(s_hrlink_value, "Link: --");
 
+    // Sits in the heart-rate card because that is where the radio status
+    // already lives, and both links share the one NimBLE stack.
+    s_tbtlink_value = lv_label_create(hr_card);
+    lv_obj_set_style_text_font(s_tbtlink_value, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_tbtlink_value, lv_color_hex(COLOR_VALUE), 0);
+    lv_label_set_long_mode(s_tbtlink_value, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_tbtlink_value, LV_PCT(100));
+    lv_label_set_text(s_tbtlink_value, "TBT: --");
+
     RefreshHrSelection();
 
     // ---- Heart-rate zones ----
@@ -730,6 +757,7 @@ void PageSettings::onViewUnload() {
     s_uptime_value = nullptr;
     s_ridelog_value = nullptr;
     s_hrlink_value = nullptr;
+    s_tbtlink_value = nullptr;
     s_heap_value = nullptr;
     s_hr_note = nullptr;
     s_hr_rest_value = nullptr;
