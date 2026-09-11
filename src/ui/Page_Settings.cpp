@@ -327,11 +327,11 @@ void InfoTimerCallback(lv_timer_t *timer) {
             // act on. ANT+ has never run on this hardware, so the first
             // question is always whether the radio came up at all, and the
             // second is whether any strap is being heard.
-            // ticks / any / hrm, in that order, because that is the order
-            // the questions get answered: is the engine running, does it hear
-            // ANT at all, and is any of it a heart-rate strap.
+            // "rx" rather than "any": the one open channel is device type
+            // 0x78, so this counts heart-rate masters only. Nothing else on
+            // the band can reach it. See SoftANT.h.
             lv_label_set_text_fmt(s_hrlink_value,
-                                  "ANT+: %s\nticks %lu, any %lu, hrm %lu, ev %u",
+                                  "ANT+: %s\nticks %lu, rx %lu, hrm %lu, ev %u",
                                   SoftANT_StatusText(), (unsigned long)SoftANT_Ticks(),
                                   (unsigned long)SoftANT_RawPages(),
                                   (unsigned long)SoftANT_PageCount(),

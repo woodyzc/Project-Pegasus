@@ -80,9 +80,19 @@ uint16_t SoftANT_DeviceNumber();
 // string claimed.
 uint32_t SoftANT_Ticks();
 
-// ANT pages received from ANY device, before SoftANT filters for device type
-// 0x78. Non-zero with zero HRM pages means the radio hears ANT traffic fine
-// and whatever is nearby simply is not a heart-rate strap.
+// Pages delivered on our one open channel, counted before the decode.
+//
+// NOT "any ANT device", which is what this looked like at first glance and is
+// worth being precise about: SoftANT_Task opens a single channel configured
+// for device type 0x78, so a wildcard device_num means "any HRM", not "any
+// ANT master". Nothing else on the band can ever reach this counter, and no
+// promiscuous mode exists in ant_node to change that.
+//
+// So the useful split is narrower than it looks: non-zero here with zero from
+// SoftANT_PageCount() means a strap WAS acquired but its pages did not decode
+// or reported 0 bpm. Both at zero means no ANT+ heart-rate master was ever
+// heard -- which cannot, on its own, distinguish an empty band from a PHY
+// that does not receive.
 uint32_t SoftANT_RawPages();
 
 // Last channel event reported by the library (ant_message.h codes). The one
