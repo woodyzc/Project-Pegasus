@@ -84,14 +84,24 @@ lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, 
 // difference between holding the bottom of zone 4 and being about to fall out
 // of the top.
 //
-// Drawn on a canvas because LVGL 8 has no triangle: its symbol font carries
-// chevrons and arrows but no solid wedge, and a rotated object only works for
-// images. The canvas is painted once at build time and then just moved, so the
-// polygon fill is not on the refresh path.
-lv_obj_t *s_zone_marker = nullptr;
+// LVGL 8 has no triangle to draw with: the symbol font carries chevrons and
+// arrows but no solid wedge, and a rotated object only works for images. This
+// was briefly an lv_canvas polygon, which made the board reboot -- a canvas in
+// LV_IMG_CF_TRUE_COLOR_ALPHA needs LV_COLOR_SCREEN_TRANSP, and with that off
+// (it is, and it is a whole-display rendering mode, not something to turn on
+// for one 15px marker) the software renderer's alpha-blend paths are compiled
+// out from under it.
+//
+// So: four stacked rows, each narrower than the last, in a transparent
+// container that moves as one. Plain lv_obj rectangles, the same thing every
+// other widget on this page is made of, with no rendering mode behind them
+// that can be absent.
 constexpr lv_coord_t ZONE_MARKER_W = 15;
 constexpr lv_coord_t ZONE_MARKER_H = 8;
-lv_color_t s_zone_marker_buf[LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(ZONE_MARKER_W, ZONE_MARKER_H)];
+constexpr lv_coord_t ZONE_MARKER_ROWS = 4;
+constexpr lv_coord_t ZONE_MARKER_ROW_H = ZONE_MARKER_H / ZONE_MARKER_ROWS; // 2
+constexpr lv_coord_t ZONE_MARKER_STEP = 4; // width lost per row, so 15/11/7/3
+lv_obj_t *s_zone_marker = nullptr;
 
 // Bar geometry, recorded when the bar is built so the marker can be placed
 // without the layout constants leaking out of onViewLoad.
@@ -326,14 +336,14 @@ void UpdateHeartRateZone(uint8_t bpm) {
         // so a position measured in reserve would drift out of the lit segment.
         const double position = HrZone_EqualWidthFraction(bpm, rest, max);
 
-        // Place the APEX on the position and hang the canvas either side of
-        // it, rather than sliding the whole canvas across a shortened travel.
+        // Place the APEX on the position and hang the marker either side of
+        // it, rather than sliding the whole marker across a shortened travel.
         // The shortened travel is the tempting version and it is wrong: it
         // compresses the marker's range to 225px while the segments still
         // divide 240, so by zone 4 the triangle points a segment to the left
         // of the one that is lit.
         //
-        // Clamping the canvas instead of the apex confines the error to the
+        // Clamping the marker instead of the apex confines the error to the
         // two ends, where the triangle would otherwise hang off the panel:
         // at rest and at maximum the apex sits half a triangle inside the
         // edge, and both are still well within their own segment.
@@ -835,27 +845,29 @@ void PageDashboard::onViewLoad() {
     }
 
     // The triangle, in its own row above the colours so it never covers the
-    // band it is pointing at.
-    s_zone_marker = lv_canvas_create(parent);
-    lv_canvas_set_buffer(s_zone_marker, s_zone_marker_buf, ZONE_MARKER_W, ZONE_MARKER_H,
-                         LV_IMG_CF_TRUE_COLOR_ALPHA);
+    // band it is pointing at. Widest row at the top, apex at the bottom.
+    s_zone_marker = lv_obj_create(parent);
+    lv_obj_set_size(s_zone_marker, ZONE_MARKER_W, ZONE_MARKER_H);
     lv_obj_set_pos(s_zone_marker, 0, ZONE_MARK_Y);
-    lv_canvas_fill_bg(s_zone_marker, lv_color_black(), LV_OPA_TRANSP);
+    lv_obj_set_style_bg_opa(s_zone_marker, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_zone_marker, 0, 0);
+    lv_obj_set_style_pad_all(s_zone_marker, 0, 0);
+    lv_obj_clear_flag(s_zone_marker, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Apex at the bottom centre, pointing down at the bar. Painted once: the
-    // marker moves by position, and white reads against all five bands.
-    {
-        lv_draw_rect_dsc_t dsc;
-        lv_draw_rect_dsc_init(&dsc);
-        dsc.bg_color = lv_color_hex(COLOR_VALUE);
-        dsc.bg_opa = LV_OPA_COVER;
-        const lv_point_t points[3] = {
-            {0, 0},
-            {ZONE_MARKER_W - 1, 0},
-            {ZONE_MARKER_W / 2, ZONE_MARKER_H - 1},
-        };
-        lv_canvas_draw_polygon(s_zone_marker, points, 3, &dsc);
+    for (lv_coord_t row = 0; row < ZONE_MARKER_ROWS; row++) {
+        const lv_coord_t w = ZONE_MARKER_W - row * ZONE_MARKER_STEP;
+        lv_obj_t *step = lv_obj_create(s_zone_marker);
+        lv_obj_set_size(step, w, ZONE_MARKER_ROW_H);
+        // Centred on the container, so the apex lands on its middle column.
+        lv_obj_set_pos(step, (ZONE_MARKER_W - w) / 2, row * ZONE_MARKER_ROW_H);
+        // White: it has to read against all five bands and the background.
+        lv_obj_set_style_bg_color(step, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_set_style_bg_opa(step, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(step, 0, 0);
+        lv_obj_set_style_radius(step, 0, 0);
+        lv_obj_clear_flag(step, LV_OBJ_FLAG_SCROLLABLE);
     }
+
     lv_obj_add_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN); // nothing to point at yet
 
     if (!s_nav_is_map) {

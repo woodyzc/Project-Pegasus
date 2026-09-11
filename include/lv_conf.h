@@ -65,6 +65,15 @@
 #define LV_USE_SLIDER 1 /* Page_Settings: brightness */
 #define LV_USE_SWITCH 1 /* Page_Settings: units toggle */
 
+/* Off deliberately, and it is a trap worth naming. The zone-bar triangle was
+ * briefly an lv_canvas polygon and the board rebooted: a canvas in
+ * LV_IMG_CF_TRUE_COLOR_ALPHA needs LV_COLOR_SCREEN_TRANSP (above, 0), and
+ * without it the software renderer's alpha-blend paths are compiled out from
+ * under the canvas. Turning that on to fix a 15px marker would change blending
+ * for every widget on the display. The marker is stacked rectangles instead.
+ * Leaving this at 0 makes the mistake a link error rather than a reboot. */
+#define LV_USE_CANVAS 0
+
 /* Font sizes used by Page_Dashboard's layout. Every size referenced from C++
  * must be enabled here: LVGL compiles each lv_font_montserrat_*.c behind an
  * #if on these macros, so a missing one links as
