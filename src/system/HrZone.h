@@ -53,8 +53,23 @@ int HrZone_Index(uint8_t bpm, uint8_t rest_bpm, uint8_t max_bpm);
 // sized by HrZone_SpanFraction().
 double HrZone_Fraction(uint8_t bpm, uint8_t rest_bpm, uint8_t max_bpm);
 
-// Width of `zone` as a fraction of the whole bar. The five sum to 1.0.
+// Width of `zone` as a fraction of the whole bar, if the bar is drawn with
+// each zone sized to the beats it actually spans. The five sum to 1.0.
 double HrZone_SpanFraction(int zone);
+
+// Where `bpm` sits along a bar whose five zones are all drawn the SAME width,
+// 0.0 at rest and 1.0 at max.
+//
+// This exists because the two ways of drawing the bar need different maths,
+// and mixing them puts the marker in the wrong place. HrZone_Fraction is
+// linear in bpm, which is right when each segment is as wide as its own span.
+// Give every zone a fifth of the bar instead and that breaks: zone 4 covers
+// 30% of the reserve but only 20% of the bar, so a marker placed by reserve
+// drifts out of the segment that is lit. This maps the reading to its zone
+// first and then to the position within it, so marker and lit segment always
+// agree -- at the cost of the marker moving at different speeds per zone,
+// which is the honest trade for equal segments.
+double HrZone_EqualWidthFraction(uint8_t bpm, uint8_t rest_bpm, uint8_t max_bpm);
 
 // Lowest and highest bpm in `zone`, matching what the phone displays: the
 // lower edge is one beat above the previous zone's upper edge, so the bands

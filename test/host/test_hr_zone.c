@@ -132,10 +132,41 @@ int main(void) {
     }
     printf("done\n");
 
+    printf("- an equal-width bar puts the marker in the segment that is lit: ");
+    {
+        check_close(HrZone_EqualWidthFraction(REST, REST, MAX), 0.0, 1e-9, "rest at the left");
+        check_close(HrZone_EqualWidthFraction(MAX, REST, MAX), 1.0, 1e-9, "max at the right");
+
+        // The property the whole function exists for: whatever the reading,
+        // the marker lands inside the fifth of the bar belonging to its own
+        // zone. Every beat from well below rest to well above max.
+        for (int bpm = 0; bpm <= 255; bpm++) {
+            const int zone = HrZone_Index((uint8_t)bpm, REST, MAX);
+            const double at = HrZone_EqualWidthFraction((uint8_t)bpm, REST, MAX);
+            const double left = (double)zone / (double)HR_ZONE_COUNT;
+            const double right = (double)(zone + 1) / (double)HR_ZONE_COUNT;
+            if (!(at >= left - 1e-9 && at <= right + 1e-9)) {
+                char label[64];
+                snprintf(label, sizeof(label), "bpm %d lands in zone %d's segment", bpm, zone + 1);
+                check(0, label);
+            } else {
+                check(1, "marker within its zone's segment");
+            }
+        }
+
+        // Reserve-space placement would NOT satisfy that, which is why the two
+        // are separate functions. Zone 4 tops out at 90% of reserve but its
+        // segment ends at 80% of an equal-width bar.
+        check(HrZone_Fraction(HrZone_UpperBpm(3, REST, MAX), REST, MAX) > 0.8,
+              "reserve placement really does fall outside the equal segment");
+    }
+    printf("done\n");
+
     printf("- a nonsensical rest/max pair is refused, not divided by: ");
     check_int(HrZone_Index(120, 180, 170), 0, "max below rest");
     check_int(HrZone_Index(120, 60, 60), 0, "max equal to rest");
     check_close(HrZone_Fraction(120, 60, 60), 0.0, 1e-9, "fraction stays at zero");
+    check_close(HrZone_EqualWidthFraction(120, 60, 60), 0.0, 1e-9, "equal-width stays at zero");
     check_int(HrZone_SpanFraction(-1) == 0.0, 1, "negative zone");
     check_int(HrZone_SpanFraction(HR_ZONE_COUNT) == 0.0, 1, "zone past the end");
     printf("done\n");

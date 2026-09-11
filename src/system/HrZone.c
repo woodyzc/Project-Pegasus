@@ -59,6 +59,30 @@ double HrZone_SpanFraction(int zone) {
     return HR_ZONE_UPPER_FRACTION[zone] - lower;
 }
 
+double HrZone_EqualWidthFraction(uint8_t bpm, uint8_t rest_bpm, uint8_t max_bpm) {
+    if (!Usable(rest_bpm, max_bpm)) {
+        return 0.0;
+    }
+
+    const int zone = HrZone_Index(bpm, rest_bpm, max_bpm);
+    const double span = HrZone_SpanFraction(zone);
+    const double lower = (zone == 0) ? 0.0 : HR_ZONE_UPPER_FRACTION[zone - 1];
+
+    // How far through its own zone the reading is, 0..1. A zone of no width
+    // cannot be divided by, and the reading is at its start by definition.
+    double within = (span > 0.0) ? (HrZone_Fraction(bpm, rest_bpm, max_bpm) - lower) / span : 0.0;
+    if (within < 0.0) {
+        within = 0.0;
+    }
+    if (within > 1.0) {
+        within = 1.0;
+    }
+
+    // Each zone owns an equal slice of the bar, and the reading sits that far
+    // into its own slice.
+    return ((double)zone + within) / (double)HR_ZONE_COUNT;
+}
+
 uint8_t HrZone_LowerBpm(int zone, uint8_t rest_bpm, uint8_t max_bpm) {
     if (zone <= 0 || zone >= HR_ZONE_COUNT || !Usable(rest_bpm, max_bpm)) {
         return rest_bpm;

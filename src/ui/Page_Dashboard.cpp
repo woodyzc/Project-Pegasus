@@ -51,15 +51,17 @@ constexpr uint32_t TBT_STALE_MS = 30000;
 // because a rider has no way to tell it is minutes old.
 constexpr uint32_t HR_STALE_MS = 5000;
 
-// One colour per training zone, ramped neutral to red so the bar reads as
-// effort rising rather than as five unrelated bands. The boundaries themselves
-// live in HrZone.h, scaled to the rider's own resting and maximum rate.
+// One colour per training zone: blue, green, yellow, red, purple. Saturated
+// rather than the pastels the rest of the panel uses, because this bar is read
+// in sunlight at a glance and a washed-out band is the one thing it cannot
+// afford. The boundaries themselves live in HrZone.h, scaled to the rider's
+// own resting and maximum rate.
 const uint32_t ZONE_COLORS[HR_ZONE_COUNT] = {
-    0x93A4B8, // 1  low intensity   -- the caption grey: barely working
-    0x7EF0A5, // 2  weight control
-    0x7BC8FF, // 3  aerobic
-    0xFFD166, // 4  anaerobic
-    0xFF6B6B, // 5  maximum
+    0x0A84FF, // 1  low intensity    blue
+    0x30D158, // 2  weight control   green
+    0xFFD60A, // 3  aerobic          yellow
+    0xFF3B30, // 4  anaerobic        red
+    0xBF5AF2, // 5  maximum          purple
 };
 
 lv_obj_t *s_speed_label = nullptr;
@@ -77,15 +79,23 @@ lv_obj_t *s_hr_label = nullptr;
 lv_obj_t *s_incline_cell = nullptr;
 lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
-// A thin tick riding along the bar at the rider's exact position. The lit
-// segment says which zone; this says where inside it, which is the difference
-// between holding the bottom of zone 4 and about to fall out of the top.
+// A triangle riding above the bar, pointing down at the rider's position. The
+// lit segment says which zone; this says where inside it, which is the
+// difference between holding the bottom of zone 4 and being about to fall out
+// of the top.
+//
+// Drawn on a canvas because LVGL 8 has no triangle: its symbol font carries
+// chevrons and arrows but no solid wedge, and a rotated object only works for
+// images. The canvas is painted once at build time and then just moved, so the
+// polygon fill is not on the refresh path.
 lv_obj_t *s_zone_marker = nullptr;
+constexpr lv_coord_t ZONE_MARKER_W = 15;
+constexpr lv_coord_t ZONE_MARKER_H = 8;
+lv_color_t s_zone_marker_buf[LV_CANVAS_BUF_SIZE_TRUE_COLOR_ALPHA(ZONE_MARKER_W, ZONE_MARKER_H)];
 
 // Bar geometry, recorded when the bar is built so the marker can be placed
 // without the layout constants leaking out of onViewLoad.
 lv_coord_t s_zone_bar_w = 0;
-constexpr lv_coord_t ZONE_MARKER_W = 3;
 
 // The navigation slot holds one of two things depending on the chosen mode:
 // a turn card in TBT, or a live breadcrumb map in GPX. Only one is created,
@@ -301,11 +311,30 @@ void UpdateHeartRateZone(uint8_t bpm) {
     }
 
     if (s_zone_marker != nullptr) {
-        // Inset by the marker's own width so it stays fully on the panel at
-        // both ends instead of hanging half off at rest and at maximum.
-        const double position = HrZone_Fraction(bpm, rest, max);
-        const lv_coord_t travel = s_zone_bar_w - ZONE_MARKER_W;
-        lv_obj_set_x(s_zone_marker, (lv_coord_t)lround(position * (double)travel));
+        // EqualWidthFraction, not Fraction: the segments are all one width now,
+        // so a position measured in reserve would drift out of the lit segment.
+        const double position = HrZone_EqualWidthFraction(bpm, rest, max);
+
+        // Place the APEX on the position and hang the canvas either side of
+        // it, rather than sliding the whole canvas across a shortened travel.
+        // The shortened travel is the tempting version and it is wrong: it
+        // compresses the marker's range to 225px while the segments still
+        // divide 240, so by zone 4 the triangle points a segment to the left
+        // of the one that is lit.
+        //
+        // Clamping the canvas instead of the apex confines the error to the
+        // two ends, where the triangle would otherwise hang off the panel:
+        // at rest and at maximum the apex sits half a triangle inside the
+        // edge, and both are still well within their own segment.
+        const lv_coord_t apex = (lv_coord_t)lround(position * (double)s_zone_bar_w);
+        lv_coord_t x = apex - ZONE_MARKER_W / 2;
+        if (x < 0) {
+            x = 0;
+        }
+        if (x > s_zone_bar_w - ZONE_MARKER_W) {
+            x = s_zone_bar_w - ZONE_MARKER_W;
+        }
+        lv_obj_set_x(s_zone_marker, x);
         lv_obj_clear_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -583,27 +612,35 @@ void PageDashboard::onViewLoad() {
     const lv_coord_t SCREEN_H = 320;
     const lv_coord_t PAD = 6; // inside a tile, between its edge and its text
 
-    // Navigation gets 60% of the panel and starts at the very top: the status
-    // line (gear, clock, battery) sits directly over it with no rule between
-    // them, so the two read as one region rather than two stacked widgets.
+    // The vertical budget is now measured from the bottom up, because the two
+    // regions down there have hard minimums and navigation does not. A metric
+    // cell cannot go below 60px without the 40px value colliding with its
+    // caption, and the zone block needs 16 to give the marker a row of its own
+    // above the colours. Navigation takes what is left, which is 184 -- it was
+    // a flat 60% of the panel (192) until the marker needed those 8px.
+    const lv_coord_t ZONE_BAR_H = 8;                           // the colour bands
+    const lv_coord_t ZONE_MARK_H = 8;                          // the triangle above them
+    const lv_coord_t CELL_H = 60;
+    const lv_coord_t CELL_W = SCREEN_W / 2;                    // 120
+    const lv_coord_t COL1 = 0;
+    const lv_coord_t COL2 = CELL_W;                            // 120
+
+    const lv_coord_t ZONE_BAR_Y = SCREEN_H - ZONE_BAR_H;       // 312
+    const lv_coord_t ZONE_MARK_Y = ZONE_BAR_Y - ZONE_MARK_H;   // 304
+    const lv_coord_t ROW2 = ZONE_MARK_Y - CELL_H;              // 244
+    const lv_coord_t ROW1 = ROW2 - CELL_H;                     // 184
+
+    // Navigation starts at the very top: the status line (gear, clock,
+    // battery) sits directly over it with no rule between them, so the two
+    // read as one region rather than two stacked widgets.
     const lv_coord_t NAV_Y = 0;
-    const lv_coord_t NAV_H = (SCREEN_H * 60) / 100;            // 192
+    const lv_coord_t NAV_H = ROW1 - NAV_Y;                     // 184
     const lv_coord_t FULL_W = SCREEN_W;
 
     // Height the status line occupies inside the navigation region. Not a
     // widget of its own any more -- just the band the turn content keeps
     // clear of.
     const lv_coord_t STATUS_H = 28;
-
-    const lv_coord_t ZONE_H = 8;
-    const lv_coord_t CELL_W = SCREEN_W / 2;                    // 120
-    const lv_coord_t COL1 = 0;
-    const lv_coord_t COL2 = CELL_W;                            // 120
-
-    const lv_coord_t ZONE_Y = SCREEN_H - ZONE_H;               // 312
-    const lv_coord_t ROW1 = NAV_Y + NAV_H;                     // 192
-    const lv_coord_t CELL_H = (ZONE_Y - ROW1) / 2;             // 60
-    const lv_coord_t ROW2 = ROW1 + CELL_H;                     // 252
 
 
     // ---- Layout ----
@@ -747,41 +784,35 @@ void PageDashboard::onViewLoad() {
     // each widget runs into the screen edge with no frame around it.
     MakeSeparator(parent, 0, ROW1 - 1, SCREEN_W, 1);      // navigation / metrics
     MakeSeparator(parent, 0, ROW2 - 1, SCREEN_W, 1);      // between metric rows
-    MakeSeparator(parent, 0, ZONE_Y - 1, SCREEN_W, 1);    // metrics / zone bar
+    MakeSeparator(parent, 0, ZONE_MARK_Y - 1, SCREEN_W, 1); // metrics / zone block
     // One vertical line down the metric block only -- the navigation slot and
     // the zone bar above and below it are full width and must not be cut.
     MakeSeparator(parent, COL2 - 1, ROW1, 1, ROW2 + CELL_H - ROW1);
 
-    // ---- Heart-rate zone bar ----
+    // ---- Heart-rate zone block ----
     // Five bands from HrZone.h, scaled to the rider's own resting and maximum
     // rate; the active one is lit and the rest dimmed. Colour and position
     // carry the reading, no word to parse.
     //
-    // A chevron used to sit under the active band as well. It was redundant --
-    // the lit segment already says which zone -- and it did not fit: at y=310
-    // with a ~13px glyph it ran past the 320px panel and showed as a shape
-    // clipped by the bottom edge. The marker below is inside the bar instead,
-    // where there is room for it.
-    //
-    // Each segment is as wide as its own share of the reserve rather than a
-    // fifth of the bar, because the bands are deliberately unequal: zone 4
-    // spans 30% of the reserve and zone 5 only 10%. Equal segments would put
-    // the marker in a different zone than the lit one.
+    // Equal fifths, not one segment per span. The bands really are unequal in
+    // beats -- zone 4 covers 30% of the reserve and zone 5 only 10% -- and
+    // drawing that honestly gave a bar of 72/24/48/72/24px in which the narrow
+    // zones were hard to tell apart at a glance. Five equal blocks read as a
+    // scale. The cost is that the marker can no longer be placed by reserve,
+    // which is what HrZone_EqualWidthFraction is for.
     s_zone_bar_w = SCREEN_W;
-    double cumulative = 0.0;
     lv_coord_t seg_x = 0;
     for (int i = 0; i < HR_ZONE_COUNT; i++) {
-        cumulative += HrZone_SpanFraction(i);
-        // Width taken as the gap to the next rounded edge, so rounding can
-        // never open a seam between segments or overrun the last one: the
-        // fractions sum to 1.0, so the final edge lands exactly on SCREEN_W.
-        const lv_coord_t next_x = (lv_coord_t)lround(cumulative * (double)SCREEN_W);
+        // Edge-to-edge arithmetic rather than a fixed width per segment, so
+        // the five always cover exactly SCREEN_W even when it does not divide
+        // by five. No seams, no overrun on the last one.
+        const lv_coord_t next_x = (lv_coord_t)(((i + 1) * SCREEN_W) / HR_ZONE_COUNT);
 
         lv_obj_t *segment = lv_obj_create(parent);
         // Touching, not spaced: the five colours already separate them, and
         // the bar reads as one gauge rather than five buttons.
-        lv_obj_set_size(segment, next_x - seg_x, ZONE_H);
-        lv_obj_set_pos(segment, seg_x, ZONE_Y);
+        lv_obj_set_size(segment, next_x - seg_x, ZONE_BAR_H);
+        lv_obj_set_pos(segment, seg_x, ZONE_BAR_Y);
         lv_obj_set_style_bg_color(segment, lv_color_hex(ZONE_COLORS[i]), 0);
         lv_obj_set_style_bg_opa(segment, LV_OPA_40, 0);
         lv_obj_set_style_border_width(segment, 0, 0);
@@ -792,15 +823,28 @@ void PageDashboard::onViewLoad() {
         seg_x = next_x;
     }
 
-    // Created after the segments so it draws on top of them.
-    s_zone_marker = lv_obj_create(parent);
-    lv_obj_set_size(s_zone_marker, ZONE_MARKER_W, ZONE_H);
-    lv_obj_set_pos(s_zone_marker, 0, ZONE_Y);
-    lv_obj_set_style_bg_color(s_zone_marker, lv_color_hex(COLOR_VALUE), 0);
-    lv_obj_set_style_bg_opa(s_zone_marker, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_zone_marker, 0, 0);
-    lv_obj_set_style_radius(s_zone_marker, 0, 0);
-    lv_obj_clear_flag(s_zone_marker, LV_OBJ_FLAG_SCROLLABLE);
+    // The triangle, in its own row above the colours so it never covers the
+    // band it is pointing at.
+    s_zone_marker = lv_canvas_create(parent);
+    lv_canvas_set_buffer(s_zone_marker, s_zone_marker_buf, ZONE_MARKER_W, ZONE_MARKER_H,
+                         LV_IMG_CF_TRUE_COLOR_ALPHA);
+    lv_obj_set_pos(s_zone_marker, 0, ZONE_MARK_Y);
+    lv_canvas_fill_bg(s_zone_marker, lv_color_black(), LV_OPA_TRANSP);
+
+    // Apex at the bottom centre, pointing down at the bar. Painted once: the
+    // marker moves by position, and white reads against all five bands.
+    {
+        lv_draw_rect_dsc_t dsc;
+        lv_draw_rect_dsc_init(&dsc);
+        dsc.bg_color = lv_color_hex(COLOR_VALUE);
+        dsc.bg_opa = LV_OPA_COVER;
+        const lv_point_t points[3] = {
+            {0, 0},
+            {ZONE_MARKER_W - 1, 0},
+            {ZONE_MARKER_W / 2, ZONE_MARKER_H - 1},
+        };
+        lv_canvas_draw_polygon(s_zone_marker, points, 3, &dsc);
+    }
     lv_obj_add_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN); // nothing to point at yet
 
     if (!s_nav_is_map) {
