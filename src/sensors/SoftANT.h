@@ -69,3 +69,22 @@ uint32_t SoftANT_PageCount();
 
 // The strap's ANT device number once paired, else 0.
 uint16_t SoftANT_DeviceNumber();
+
+// ---- Is the radio deaf, or is nothing transmitting? ----
+// "searching for strap, 0 pages" cannot tell those apart, and they need
+// opposite responses: one is our bug, the other is a strap that is not on.
+// These three come straight out of the library's own engine.
+
+// MAC ticks run. Advancing means the ANT engine and its TDMA grid are alive.
+// Frozen at 0 means the soft-PHY never started turning, whatever the status
+// string claimed.
+uint32_t SoftANT_Ticks();
+
+// ANT pages received from ANY device, before SoftANT filters for device type
+// 0x78. Non-zero with zero HRM pages means the radio hears ANT traffic fine
+// and whatever is nearby simply is not a heart-rate strap.
+uint32_t SoftANT_RawPages();
+
+// Last channel event reported by the library (ant_message.h codes). The one
+// worth recognising is a search timeout: the channel gave up looking.
+uint8_t SoftANT_LastEvent();

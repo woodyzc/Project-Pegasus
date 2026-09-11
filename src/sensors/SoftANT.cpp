@@ -44,6 +44,19 @@ void NoteAntStep(const char *key, uint8_t value) {
 char s_status_buf[48];
 volatile uint32_t s_page_count = 0;
 volatile uint16_t s_device_num = 0;
+volatile uint8_t s_last_event = 0;
+
+// Every ANT page the node delivered, before the device-type filter below. The
+// difference between this and s_page_count is the whole diagnosis when nothing
+// shows up: traffic heard but not from an HRM, versus nothing heard at all.
+volatile uint32_t s_raw_pages = 0;
+
+void OnAntEvent(ant_node_t *node, uint8_t channel, uint8_t event, void *user) {
+    (void)node;
+    (void)channel;
+    (void)user;
+    s_last_event = event;
+}
 
 void PublishHeartRate(uint8_t bpm) {
     HeartRate_t hr;
@@ -66,6 +79,8 @@ void PublishHeartRate(uint8_t bpm) {
 void OnAntData(ant_node_t *node, const ant_node_rx_t *rx, const uint8_t page[8], void *user) {
     (void)node;
     (void)user;
+
+    s_raw_pages++;
 
     // Device Type 0x78 (ANTPLUS_DEVTYPE_HRM == 120) -- heart-rate straps only.
     if (rx->device_type != ANTPLUS_DEVTYPE_HRM) {
@@ -117,6 +132,7 @@ void SoftANT_Task(void *pvParameters) {
 
     ant_node_config_t cfg = {};
     cfg.on_data = OnAntData;
+    cfg.on_event = OnAntEvent;
     cfg.on_paired = OnAntPaired;
     // Remember the paired strap in NVS so the head unit reconnects to its own
     // strap on the next boot instead of re-searching (and instead of latching
@@ -208,6 +224,18 @@ uint32_t SoftANT_PageCount() {
 
 uint16_t SoftANT_DeviceNumber() {
     return s_device_num;
+}
+
+uint32_t SoftANT_Ticks() {
+    return s_started ? s_node.ticks : 0;
+}
+
+uint32_t SoftANT_RawPages() {
+    return s_raw_pages;
+}
+
+uint8_t SoftANT_LastEvent() {
+    return s_last_event;
 }
 
 void SoftANT_Start(bool coexist_with_ble) {

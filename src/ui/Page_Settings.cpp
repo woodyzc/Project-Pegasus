@@ -327,8 +327,15 @@ void InfoTimerCallback(lv_timer_t *timer) {
             // act on. ANT+ has never run on this hardware, so the first
             // question is always whether the radio came up at all, and the
             // second is whether any strap is being heard.
-            lv_label_set_text_fmt(s_hrlink_value, "ANT+: %s, %u pages",
-                                  SoftANT_StatusText(), (unsigned)SoftANT_PageCount());
+            // ticks / any / hrm, in that order, because that is the order
+            // the questions get answered: is the engine running, does it hear
+            // ANT at all, and is any of it a heart-rate strap.
+            lv_label_set_text_fmt(s_hrlink_value,
+                                  "ANT+: %s\nticks %lu, any %lu, hrm %lu, ev %u",
+                                  SoftANT_StatusText(), (unsigned long)SoftANT_Ticks(),
+                                  (unsigned long)SoftANT_RawPages(),
+                                  (unsigned long)SoftANT_PageCount(),
+                                  (unsigned)SoftANT_LastEvent());
         } else {
             lv_label_set_text_fmt(s_hrlink_value, "Link: %s", BLE_HR_StatusText());
         }
