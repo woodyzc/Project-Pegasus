@@ -182,9 +182,12 @@ lv_obj_t *MakeLabel(lv_obj_t *parent, const char *text, const lv_font_t *font, u
 
 // Cell internals, shared by the caption, the unit and the value so the three
 // line up by construction rather than by three call sites agreeing.
+// Both margins are as tight as they are because the value font grew to fill
+// what they gave up: an 11px caption at y=2 and a 44px value 1px off the
+// bottom of a 60px cell leaves the two boxes 2px apart.
 constexpr lv_coord_t CELL_PAD = 6;         // left and right inset
-constexpr lv_coord_t CELL_CAPTION_Y = 5;   // caption and unit baseline row
-constexpr lv_coord_t CELL_VALUE_Y = -3;    // value, up from the cell's bottom
+constexpr lv_coord_t CELL_CAPTION_Y = 2;   // caption and unit baseline row
+constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
 
 // One bordered cell: caption at the top, value at the bottom. Cells bound
 // their contents, so a long value cannot drift into a neighbour -- which is
@@ -229,7 +232,19 @@ lv_obj_t *MakeSeparator(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t
     return line;
 }
 
-// The number itself, as large as a 60px cell permits.
+// The number itself, as large as a 60px cell permits. 40 is the ceiling, and
+// both dimensions of the cell set it. Vertically, line_height 44 against an
+// 11px caption leaves 2px; 42 makes them touch. Horizontally, measured against
+// the real glyph widths rather than a digit count, since "1" and "." are much
+// narrower than "8" -- inside 108px of usable width:
+//
+//     SPEED    "105.3"    96px
+//     TRIP     "99.99"   108px   <- the binding case, exactly at the limit
+//     INCLINE  "-12.5"    85px
+//     HR       "188"      66px
+//
+// The trip is why RenderSpeedAndTrip drops to one decimal at 100km: "123.45"
+// wants 119px and would run out of the cell.
 //
 // Both this and MakeUnit place their label with lv_obj_align rather than
 // lv_obj_align_to, and that difference is load-bearing. align_to positions
@@ -240,7 +255,7 @@ lv_obj_t *MakeSeparator(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t
 lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
     lv_obj_t *label = lv_label_create(cell);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_34, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_40, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
     return label;
@@ -358,7 +373,12 @@ void RenderSpeedAndTrip() {
         lv_label_set_text_fmt(s_speed_label, "%.1f", Settings_SpeedFromKmh(s_last_speed_kmh));
     }
     lv_label_set_text(s_speed_unit_label, Settings_SpeedUnitLabel());
-    lv_label_set_text_fmt(s_trip_label, "%.2f", Settings_DistanceFromKm((float)Trip_Km()));
+    // Two decimals until three digits are needed, then one. At 40px "123.45"
+    // is 119px in a cell that can show 108, so the choice is between dropping
+    // a decimal and dropping a digit -- and 10m resolution stops being worth
+    // anything a long way before 100km. Under 100 nothing changes.
+    const float trip = Settings_DistanceFromKm((float)Trip_Km());
+    lv_label_set_text_fmt(s_trip_label, (trip >= 100.0f) ? "%.1f" : "%.2f", trip);
     if (s_trip_unit_label != nullptr) {
         lv_label_set_text(s_trip_unit_label, Settings_DistanceUnitLabel());
     }

@@ -78,12 +78,15 @@
  * LVGL compiles a font whenever its macro is set. */
 #define LV_FONT_MONTSERRAT_24 0
 /* 28 was the metric value size until the units moved up onto the caption row
- * and freed the width for 34. Nothing references it now. */
+ * and freed the width for 34, then 40. Neither is referenced now. */
 #define LV_FONT_MONTSERRAT_28 0
-/* The four metric readouts. 34 is the largest that fits a 60px cell under a
- * caption: its line_height is 38, leaving 3px clear below an 11px caption set
- * at y=5, with the value sitting 3px off the bottom. */
-#define LV_FONT_MONTSERRAT_34 1
+#define LV_FONT_MONTSERRAT_34 0
+/* The four metric readouts, and the largest size a 60px cell can hold under a
+ * caption. line_height is 44; the 11px caption sits at y=2 and the value 1px
+ * off the bottom, which leaves the two boxes 2px apart. 42 (line_height 46)
+ * makes them touch. See the width table in Page_Dashboard's MakeValue for the
+ * other half of the fit -- the cell is only 120px wide. */
+#define LV_FONT_MONTSERRAT_40 1
 #define LV_FONT_MONTSERRAT_48 1 /* primary speed readout */
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
