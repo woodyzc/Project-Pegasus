@@ -83,6 +83,26 @@ void setup() {
     s_page_manager.Register(&s_page_dashboard, PAGE_NAME_DASHBOARD);
     s_page_manager.Register(&s_page_settings, PAGE_NAME_SETTINGS);
     s_page_manager.Register(&s_page_map, PAGE_NAME_MAP);
+
+    // ---- The card must be up BEFORE the first page is pushed ----
+    // The card is mounted whatever the navigation mode, because ride logging
+    // writes to it in both. Loading a route is GPX-only: that is the part that
+    // costs time and PSRAM, and TBT mode has no use for it. A missing card is
+    // not an error -- it just means no trail and no log.
+    //
+    // This used to sit after the radios, near the end of setup(), and the
+    // dashboard was left permanently reading "No SD card" on a board whose
+    // card was fine. PageManager caches a page once loaded, so the dashboard
+    // built its map against whatever was true at Push() and never looked
+    // again -- while the ROUTE page, pushed by the rider much later, saw the
+    // mounted card and drew the route correctly. Same card, two answers.
+    //
+    // Unlike the radios there is no reason to defer this: mounting is fast and
+    // does not block for 15s the way BLE_HR_Start() does.
+    if (GpxTrack_MountCard() && Settings_GetNavMode() == NAV_MODE_GPX) {
+        GpxTrack_LoadFirstAvailable();
+    }
+
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);
     s_page_manager.Push(PAGE_NAME_DASHBOARD);
 
@@ -174,14 +194,6 @@ void setup() {
     // Got through radio bring-up: clear the flag so the next boot honours the
     // user's choice instead of falling back to BLE.
     Settings_NoteRadioBringUpOk();
-
-    // The card is now mounted whatever the navigation mode, because ride
-    // logging writes to it in both. Loading a route is still GPX-only: that is
-    // the part that costs time and PSRAM, and TBT mode has no use for it.
-    // A missing card is not an error -- it just means no trail and no log.
-    if (GpxTrack_MountCard() && Settings_GetNavMode() == NAV_MODE_GPX) {
-        GpxTrack_LoadFirstAvailable();
-    }
 
     // Both read GPS through DataCenter, so they are independent of which page
     // the rider happens to be looking at.
