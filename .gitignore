@@ -15,16 +15,19 @@ test/host/test_*
 
 .DS_Store
 
-# Unused local library copies, ~197MB, deliberately NOT committed.
+# Deleted, and kept ignored so they cannot come back by accident.
 #
-# Neither is built. The firmware links LVGL from the registry via lib_deps
-# (.pio/libdeps/esp32s3/lvgl), confirmed in idedata.json, and no source file
-# includes the audio library at all. They are ignored rather than deleted
-# because they are the user's files, but nothing needs them.
+# These were 197MB of unused local library copies. Neither was built: the
+# firmware links LVGL from the registry via lib_deps, and no source file
+# includes the audio library at all. Both are re-obtainable -- LVGL is a
+# declared dependency and PlatformIO refetches it; the audio library is an
+# upstream archive.
 #
-# lib/lvgl is worse than dead weight: PlatformIO's LDF gives lib/ precedence
-# over lib_deps, and this copy is 8.3.10 against the 8.4.0 the build actually
-# uses. A change in LDF mode would silently downgrade LVGL underneath us.
+# lib/lvgl was worse than dead weight. PlatformIO's LDF gives lib/ precedence
+# over lib_deps, and that copy was 8.3.10 -- which does not even satisfy the
+# `lvgl/lvgl @ ^8.3.11` this project declares, and sat against the 8.4.0 the
+# build actually uses. A change in LDF mode would have silently downgraded
+# LVGL underneath us, below the floor platformio.ini asks for.
 lib/lvgl/
 lib/ESP32-audioI2S-master/
 
