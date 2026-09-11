@@ -180,6 +180,12 @@ lv_obj_t *MakeLabel(lv_obj_t *parent, const char *text, const lv_font_t *font, u
     return label;
 }
 
+// Cell internals, shared by the caption, the unit and the value so the three
+// line up by construction rather than by three call sites agreeing.
+constexpr lv_coord_t CELL_PAD = 6;         // left and right inset
+constexpr lv_coord_t CELL_CAPTION_Y = 5;   // caption and unit baseline row
+constexpr lv_coord_t CELL_VALUE_Y = -3;    // value, up from the cell's bottom
+
 // One bordered cell: caption at the top, value at the bottom. Cells bound
 // their contents, so a long value cannot drift into a neighbour -- which is
 // exactly how the clock ended up on top of the incline figure when these were
@@ -204,7 +210,7 @@ lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, l
     lv_label_set_text(label, caption);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 6, 5);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, CELL_PAD, CELL_CAPTION_Y);
     return cell;
 }
 
@@ -223,13 +229,33 @@ lv_obj_t *MakeSeparator(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t
     return line;
 }
 
-// The unit set small beside its value rather than on its own line: a 240px
-// panel cannot spend a whole row on "km/h".
+// The number itself, as large as a 60px cell permits.
+//
+// Both this and MakeUnit place their label with lv_obj_align rather than
+// lv_obj_align_to, and that difference is load-bearing. align_to positions
+// once, against the other label's size at that instant; an alignment set by
+// lv_obj_align is stored on the object and re-applied every time the label
+// resizes. These labels change width constantly -- 9.5 to 10.5, "km/h" to
+// "mph" -- so a one-shot placement silently goes stale.
+lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
+    lv_obj_t *label = lv_label_create(cell);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_34, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
+    return label;
+}
+
+// The unit sits on the caption row, at the opposite end of the cell: "SPEED"
+// on the left, "km/h" on the right, both in the same small grey. It used to
+// hang off the right of the value, which cost the number the width it needed
+// and pinned the label to a moving target.
 lv_obj_t *MakeUnit(lv_obj_t *cell, const char *text) {
     lv_obj_t *label = lv_label_create(cell);
     lv_label_set_text(label, text);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -CELL_PAD, CELL_CAPTION_Y);
     return label;
 }
 
@@ -674,42 +700,27 @@ void PageDashboard::onViewLoad() {
     // ---- Four metrics, two by two ----
     // Speed is one of them now rather than a hero: worth reading, but not at
     // the cost of the turn that is actually approaching.
+    //
+    // Each value gets the cell's full width now that no unit sits beside it,
+    // which is what pays for the jump from 28 to 34. The widest thing any of
+    // them has to hold is a six-character trip ("123.45"), and at 34 that
+    // comes to about 104px inside 108px of usable width.
     lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, CELL_W, CELL_H, "SPEED");
-    s_speed_label = lv_label_create(speed_cell);
-    lv_obj_set_style_text_font(s_speed_label, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_speed_label, lv_color_hex(COLOR_VALUE), 0);
-    lv_label_set_text(s_speed_label, "--");
-    lv_obj_align(s_speed_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
+    s_speed_label = MakeValue(speed_cell, "--", COLOR_VALUE);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
     lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_align_to(s_speed_unit_label, s_speed_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
 
     lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, CELL_W, CELL_H, "TRIP");
-    s_trip_label = lv_label_create(trip_cell);
-    lv_obj_set_style_text_font(s_trip_label, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_trip_label, lv_color_hex(COLOR_VALUE), 0);
-    lv_label_set_text(s_trip_label, "0.00");
-    lv_obj_align(s_trip_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
+    s_trip_label = MakeValue(trip_cell, "0.00", COLOR_VALUE);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
-    lv_obj_align_to(s_trip_unit_label, s_trip_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
 
     s_incline_cell = MakeCell(parent, COL1, ROW2, CELL_W, CELL_H, "INCLINE");
-    s_incline_label = lv_label_create(s_incline_cell);
-    lv_obj_set_style_text_font(s_incline_label, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_incline_label, lv_color_hex(COLOR_ACCENT), 0);
-    lv_label_set_text(s_incline_label, "--");
-    lv_obj_align(s_incline_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
-    lv_obj_t *incline_unit = MakeUnit(s_incline_cell, "%");
-    lv_obj_align_to(incline_unit, s_incline_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
+    s_incline_label = MakeValue(s_incline_cell, "--", COLOR_ACCENT);
+    MakeUnit(s_incline_cell, "%");
 
     lv_obj_t *hr_cell = MakeCell(parent, COL2, ROW2, CELL_W, CELL_H, "HEART RATE");
-    s_hr_label = lv_label_create(hr_cell);
-    lv_obj_set_style_text_font(s_hr_label, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_hr_label, lv_color_hex(COLOR_VALUE), 0);
-    lv_label_set_text(s_hr_label, "--");
-    lv_obj_align(s_hr_label, LV_ALIGN_BOTTOM_LEFT, 6, -3);
-    lv_obj_t *hr_unit = MakeUnit(hr_cell, "bpm");
-    lv_obj_align_to(hr_unit, s_hr_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
+    s_hr_label = MakeValue(hr_cell, "--", COLOR_VALUE);
+    MakeUnit(hr_cell, "bpm");
 
     // ---- Dividing lines ----
     // Internal joins only. Nothing is drawn at x=0, x=239, y=0 or y=319, so
