@@ -78,6 +78,17 @@
 #define LV_FONT_MONTSERRAT_48 1 /* primary speed readout */
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
+/* lv_label_set_text_fmt() goes through LVGL's own printf, not the C library's,
+ * and that one drops float support unless this is set: "%.2f" came out on the
+ * panel as the single character "f". It is used by the trip distance, the
+ * speed, the incline and the map scale -- every decimal figure on the device.
+ *
+ * LVGL's built-in implementation rather than LV_SPRINTF_CUSTOM with newlib's
+ * snprintf: whether newlib here was built with float formatting depends on the
+ * nano-format setting in the ESP-IDF underneath, which is not ours to
+ * guarantee, and this path has no such dependency. */
+#define LV_SPRINTF_USE_FLOAT 1
+
 #define LV_USE_THEME_DEFAULT 1
 #define LV_THEME_DEFAULT_DARK 1
 #define LV_THEME_DEFAULT_GROW 1

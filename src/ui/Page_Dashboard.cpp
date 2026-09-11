@@ -63,7 +63,6 @@ const char *s_active_tz = nullptr;
 lv_obj_t *s_incline_label = nullptr;
 lv_obj_t *s_hr_label = nullptr;
 lv_obj_t *s_incline_cell = nullptr;
-lv_obj_t *s_zone_marker = nullptr;
 lv_obj_t *s_zone_segments[4] = {nullptr, nullptr, nullptr, nullptr};
 
 // The navigation slot holds one of two things depending on the chosen mode:
@@ -202,17 +201,12 @@ void UpdateHeartRateZone(uint8_t bpm) {
         zone = 1;
     }
 
-    // A marker sliding along a coloured bar rather than a text badge: the
-    // position reads at a glance on a bouncing bike, where the words
-    // "Zone 3" do not.
+    // The lit segment is the readout: colour and position carry the zone at a
+    // glance on a bouncing bike, where the words "Zone 3" do not.
     for (int i = 0; i < 4; i++) {
         if (s_zone_segments[i] != nullptr) {
             lv_obj_set_style_bg_opa(s_zone_segments[i], (i == zone) ? LV_OPA_COVER : LV_OPA_40, 0);
         }
-    }
-    if (s_zone_marker != nullptr) {
-        const lv_coord_t seg_w = 204 / 4;
-        lv_obj_set_x(s_zone_marker, (lv_coord_t)(18 + zone * seg_w + seg_w / 2 - 4));
     }
 }
 
@@ -462,8 +456,6 @@ void PageDashboard::onViewLoad() {
     lv_obj_set_style_bg_opa(parent, LV_OPA_COVER, 0);
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
-    MakeLabel(parent, "PEGASUS", &lv_font_montserrat_14, COLOR_CAPTION, LV_ALIGN_TOP_MID, 0, 14);
-
     // ---- Layout ----
     // Navigation dominates: on a bike, the next turn or where the trail goes
     // is what a glance is for. Metrics sit underneath in equal cells, each
@@ -609,8 +601,13 @@ void PageDashboard::onViewLoad() {
     lv_obj_align_to(hr_unit, s_hr_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -4);
 
     // ---- Heart-rate zone bar ----
-    // Four bands matching the thresholds above, with a marker under the active
-    // one. Colour and position carry the reading; no word to parse.
+    // Four bands matching the thresholds above; the active one is lit and the
+    // rest dimmed. Colour and position carry the reading, no word to parse.
+    //
+    // A chevron used to sit under the active band as well. It was redundant --
+    // the lit segment already says which zone -- and it did not fit: at y=310
+    // with a ~13px glyph it ran past the 320px panel and showed as a shape
+    // clipped by the bottom edge.
     const lv_coord_t SEG_W = 204 / 4;
     static const uint32_t ZONE_COLORS[4] = {COLOR_ZONE_LOW, COLOR_ZONE_LOW, COLOR_ZONE_MID,
                                             COLOR_ZONE_HIGH};
@@ -625,12 +622,6 @@ void PageDashboard::onViewLoad() {
         lv_obj_clear_flag(segment, LV_OBJ_FLAG_SCROLLABLE);
         s_zone_segments[i] = segment;
     }
-
-    s_zone_marker = lv_label_create(parent);
-    lv_label_set_text(s_zone_marker, LV_SYMBOL_UP);
-    lv_obj_set_style_text_font(s_zone_marker, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(s_zone_marker, lv_color_hex(COLOR_VALUE), 0);
-    lv_obj_set_pos(s_zone_marker, (lv_coord_t)(18 + SEG_W / 2 - 4), 310);
 
     if (!s_nav_is_map) {
         ClearTbt();
@@ -674,7 +665,6 @@ void PageDashboard::onViewUnload() {
     s_route_dist_label = nullptr;
     s_trip_unit_label = nullptr;
     s_incline_cell = nullptr;
-    s_zone_marker = nullptr;
     s_nav_cell = nullptr;
     s_nav_is_map = false;
     for (int i = 0; i < 4; i++) {

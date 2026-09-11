@@ -48,6 +48,36 @@ void setup() {
     s_indev_drv.read_cb = Touch_Read;
     lv_indev_drv_register(&s_indev_drv);
 
+    // Every page's root object needs this, and without it nothing lays out.
+    //
+    // PageManager creates each root with a bare lv_obj_create() and applies
+    // whatever style the application hands it -- upstream X-TRACK does exactly
+    // the same and supplies this from App.cpp. Porting the manager without the
+    // style left every root at LVGL's default object size, LV_DPI_DEF square:
+    // 130x130 in the top-left of a 240x320 panel, with the rest of the screen
+    // showing through in the default light theme. Absolutely-positioned cells
+    // were clipped and anything aligned TOP_MID or TOP_RIGHT bunched into the
+    // left corner, because they were aligning against a 130px-wide parent.
+    //
+    // Border, padding and radius are zeroed as well: the default theme gives a
+    // plain lv_obj all three, and the pages position their children in screen
+    // coordinates, which padding would silently shift.
+    static lv_style_t root_style;
+    lv_style_init(&root_style);
+    lv_style_set_width(&root_style, LV_HOR_RES);
+    lv_style_set_height(&root_style, LV_VER_RES);
+    lv_style_set_bg_opa(&root_style, LV_OPA_COVER);
+    lv_style_set_bg_color(&root_style, lv_color_hex(0x101820)); // Page_Dashboard's COLOR_BG
+    lv_style_set_border_width(&root_style, 0);
+    lv_style_set_pad_all(&root_style, 0);
+    lv_style_set_radius(&root_style, 0);
+    s_page_manager.SetRootDefaultStyle(&root_style);
+
+    // The screen behind the pages, seen for a moment during a page transition
+    // when one root has slid partway off. White by default, which against this
+    // palette reads as a flash.
+    lv_disp_set_bg_color(lv_disp_get_default(), lv_color_hex(0x101820));
+
     // setup()/loop() run on Core 1 (arduino-esp32's default loopTask
     // pinning), so this satisfies the pages' "Core 1 only" precondition.
     s_page_manager.Register(&s_page_dashboard, PAGE_NAME_DASHBOARD);
