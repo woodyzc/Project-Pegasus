@@ -1,5 +1,7 @@
 #include "BLE_HR_Client.h"
 
+#include "../navigation/BLE_TBT_Receiver.h"
+
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
@@ -182,6 +184,21 @@ bool ConnectAndSubscribe() {
     if (!s_have_peer) {
         return false;
     }
+
+    // Take the advertisement down for the duration of the attempt.
+    //
+    // Connecting asks the controller to stop a scan and initiate a link in
+    // quick succession. Doing that while it is also advertising is what makes
+    // an HCI command miss its ack deadline, and NimBLE answers a missed ack by
+    // resetting its host -- whereupon its own uncancelled timer fires during
+    // the re-sync and aborts the chip. See BLE_TBT_Receiver.h.
+    //
+    // The window is the connect timeout at worst (5s), and it closes on every
+    // path out of this function.
+    BLE_TBT_PauseAdvertising();
+    struct ResumeAdvertising {
+        ~ResumeAdvertising() { BLE_TBT_ResumeAdvertising(); }
+    } resume_on_exit;
 
     if (s_client == nullptr) {
         s_client = NimBLEDevice::createClient();

@@ -67,6 +67,24 @@ void BLE_TBT_Start();
 // own stale timer fires into an assert and takes the chip down.
 void BLE_TBT_StartAdvertising();
 
+// ---- Radio arbitration with the heart-rate client ----
+// These two modules share one BLE controller, and this is where that is
+// negotiated. BLE_HR_Client brackets each connect attempt with these so the
+// controller is not asked to advertise, initiate a connection and stop a scan
+// all at once.
+//
+// That combination is what kills the board: an HCI command that misses its ack
+// deadline makes NimBLE reset its host, and its own timer -- which the reset
+// does not cancel -- then fires during the re-sync and hits assert(0) in
+// ble_hs_timer_exp. We are on the newest NimBLE-Arduino and cannot patch it,
+// so the load that provokes the timeout is the only thing left to remove.
+//
+// Both are safe no-ops when turn-by-turn was never started (GPX mode), and the
+// pause is deliberately short: a connect attempt times out in 5s, and the
+// phone only loses the chance to discover the head unit for that long.
+void BLE_TBT_PauseAdvertising();
+void BLE_TBT_ResumeAdvertising();
+
 // True while a phone is connected to the TBT service.
 bool BLE_TBT_IsConnected();
 

@@ -34,6 +34,10 @@ volatile bool s_advertising = false;
 // dropped. Non-zero is normal and expected -- it is the mechanism working.
 volatile uint32_t s_restart_count = 0;
 
+// True only while BLE_TBT_PauseAdvertising() is holding the radio down, so the
+// resume cannot fight a phone that connected in the meantime.
+volatile bool s_paused = false;
+
 class ServerCallbacks : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer *server, NimBLEConnInfo &conn_info) override {
         (void)server;
@@ -209,6 +213,26 @@ void BLE_TBT_StartAdvertising() {
     // Ground truth from the controller rather than our own bookkeeping.
     NoteTbtStep("tbt_act", ble_gap_adv_active() ? 1 : 0);
     s_start_result = adv_ok ? "started" : "adv REFUSED";
+}
+
+void BLE_TBT_PauseAdvertising() {
+    if (s_server == nullptr || !s_advertising) {
+        return;
+    }
+    NimBLEDevice::stopAdvertising();
+    s_advertising = false;
+    s_paused = true;
+}
+
+void BLE_TBT_ResumeAdvertising() {
+    // Only resumes what this paused. A phone that connected in the meantime
+    // takes the advertisement down through onConnect, which restarts it
+    // itself; re-entering here would fight that.
+    if (s_server == nullptr || !s_paused) {
+        return;
+    }
+    s_paused = false;
+    s_advertising = NimBLEDevice::startAdvertising();
 }
 
 bool BLE_TBT_IsConnected() {
