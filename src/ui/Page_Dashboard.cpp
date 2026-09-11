@@ -284,8 +284,9 @@ lv_obj_t *MakeUnit(lv_obj_t *cell, const char *text) {
     return label;
 }
 
-// Dims every band and hides the marker: no reading means no zone, and leaving
-// one lit would still be asserting something about the rider.
+// Dims every band, hides the marker and returns the reading to plain white:
+// no reading means no zone, and a coloured "--" would still be asserting
+// something about the rider.
 void ClearHeartRateZone() {
     for (int i = 0; i < HR_ZONE_COUNT; i++) {
         if (s_zone_segments[i] != nullptr) {
@@ -295,12 +296,22 @@ void ClearHeartRateZone() {
     if (s_zone_marker != nullptr) {
         lv_obj_add_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN);
     }
+    if (s_hr_label != nullptr) {
+        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(COLOR_VALUE), 0);
+    }
 }
 
 void UpdateHeartRateZone(uint8_t bpm) {
     const uint8_t rest = Settings_GetHrRestBpm();
     const uint8_t max = Settings_GetHrMaxBpm();
     const int zone = HrZone_Index(bpm, rest, max);
+
+    // The number takes its zone's colour too. The bar is 8px at the very
+    // bottom of the panel; the bpm figure is the thing already being looked at,
+    // so colouring it means the zone registers without the eye travelling.
+    if (s_hr_label != nullptr) {
+        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(ZONE_COLORS[zone]), 0);
+    }
 
     // The lit segment is the readout: colour and position carry the zone at a
     // glance on a bouncing bike, where the words "Zone 3" do not.
