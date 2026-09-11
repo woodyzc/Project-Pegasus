@@ -3,6 +3,7 @@
 
 #include "hal/Battery.h"
 #include "hal/Display.h"
+#include "hal/LvglFs.h"
 #include "hal/Touch.h"
 #include "navigation/BLE_TBT_Receiver.h"
 #include "navigation/GpxTrack.h"
@@ -99,8 +100,16 @@ void setup() {
     //
     // Unlike the radios there is no reason to defer this: mounting is fast and
     // does not block for 15s the way BLE_HR_Start() does.
-    if (GpxTrack_MountCard() && Settings_GetNavMode() == NAV_MODE_GPX) {
-        GpxTrack_LoadFirstAvailable();
+    if (GpxTrack_MountCard()) {
+        // LVGL reads map tiles straight off the card through this; without it
+        // lv_img_set_src() on a path silently does nothing. Registered only
+        // when the card actually mounted, since a driver whose every open
+        // fails is worse than none -- it looks like it should work.
+        LvglFs_Init();
+
+        if (Settings_GetNavMode() == NAV_MODE_GPX) {
+            GpxTrack_LoadFirstAvailable();
+        }
     }
 
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);

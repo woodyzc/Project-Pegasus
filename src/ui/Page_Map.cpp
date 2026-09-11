@@ -1,5 +1,7 @@
 #include "Page_Map.h"
 
+#include "../hal/LvglFs.h"
+
 #include "../navigation/GpxTrack.h"
 #include "../system/DataCenter.h"
 #include "../system/PageManager/PageManager.h"
@@ -26,6 +28,14 @@ constexpr lv_coord_t MAP_X = 0;
 constexpr lv_coord_t MAP_Y = 36;
 constexpr lv_coord_t MAP_W = 240;
 constexpr lv_coord_t MAP_H = 262;
+
+// The one tile the spike draws. Matches tools/tilegen.py's defaults, so
+// `tilegen.py synth /tmp/MAP` then copying that tree to the card is all the
+// setup there is.
+#define TILE_SPIKE_PATH "/15/8721/12556.bin"
+
+lv_obj_t *s_tile_img = nullptr;
+lv_obj_t *s_tile_stat = nullptr;
 
 // Twice the dashboard's allowance, because this view has roughly twice the
 // area to resolve. Its own arrays rather than the dashboard's: during a page
@@ -136,6 +146,24 @@ void PageMap::onViewLoad() {
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
     lv_obj_align(s_status_label, LV_ALIGN_TOP_RIGHT, -8, 12);
 
+    // ---- Spike: one tile behind the track ----
+    // Step 2 of the offline-map scope, and deliberately the stupidest version
+    // that can answer anything: a hardcoded path, no projection, no cache, no
+    // position. It exists to establish two facts that everything downstream
+    // assumes -- that LVGL can read an image off this card at all, and how
+    // long one 128KB tile actually takes on this board's SD bus.
+    //
+    // Created BEFORE MapView so the track draws on top of it.
+    if (LvglFs_IsReady()) {
+        s_tile_img = lv_img_create(parent);
+        lv_img_set_src(s_tile_img, "S:" TILE_SPIKE_PATH);
+        lv_obj_set_pos(s_tile_img, MAP_X, MAP_Y);
+        // The tile is 256 square and the window is 240x262, so it is clipped
+        // rather than scaled -- scaling would make the read time meaningless.
+        lv_obj_add_flag(s_tile_img, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(s_tile_img, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
     // ---- The map ----
     MapView_Create(&s_view, parent, MAP_X, MAP_Y, MAP_W, MAP_H, s_points, s_projected,
                    MAX_POLY_POINTS);
@@ -146,6 +174,24 @@ void PageMap::onViewLoad() {
     lv_obj_set_style_text_color(s_scale_label, lv_color_hex(COLOR_CAPTION), 0);
     lv_obj_align(s_scale_label, LV_ALIGN_BOTTOM_LEFT, 8, -4);
     lv_label_set_text(s_scale_label, "");
+
+    // The measurement, on the panel, because serial cannot carry it. Reports
+    // what the tile above cost: bytes, milliseconds, and the implied rate.
+    s_tile_stat = lv_label_create(parent);
+    lv_obj_set_style_text_font(s_tile_stat, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_tile_stat, lv_color_hex(0x61DAFB), 0);
+    lv_obj_align(s_tile_stat, LV_ALIGN_TOP_LEFT, 8, 26);
+    if (!LvglFs_IsReady()) {
+        lv_label_set_text(s_tile_stat, "tile: no fs driver");
+    } else if (LvglFs_LastReadBytes() == 0) {
+        lv_label_set_text(s_tile_stat, "tile: not found");
+    } else {
+        const uint32_t us = LvglFs_LastReadUs();
+        const uint32_t bytes = LvglFs_LastReadBytes();
+        lv_label_set_text_fmt(s_tile_stat, "tile %u B in %u ms = %.2f MB/s",
+                              (unsigned)bytes, (unsigned)(us / 1000),
+                              (double)bytes / (double)us);
+    }
 
     lv_obj_t *name = lv_label_create(parent);
     lv_obj_set_style_text_font(name, &lv_font_montserrat_10, 0);
