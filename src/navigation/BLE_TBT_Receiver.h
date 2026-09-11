@@ -35,6 +35,17 @@
 // Brings up the GATT server and starts advertising, so the phone can find and
 // connect to the device. Preconditions: DataCenter_Init() has run, and NimBLE
 // is initialised (BLE_HR_Init() does this; call that first).
+//
+// MUST be called before BLE_HR_Start(), and this is a crash rather than a
+// preference. Registering a GATT service needs NimBLE's table to be mutable,
+// and ble_gatts_mutable() says no while a scan, a connection attempt, an
+// advertisement or an established connection exists -- BLE_HR_Start() leaves
+// several of those true. The refusal is not returned to the caller: it lands
+// on SYSINIT_PANIC_ASSERT inside ble_svc_gap_init() and panics the chip.
+//
+// The failure only shows when a heart-rate peer is genuinely in range, since
+// otherwise nothing connects and the registration succeeds, so getting this
+// order wrong looks like flaky hardware rather than a bug.
 void BLE_TBT_Start();
 
 // True while a phone is connected to the TBT service.

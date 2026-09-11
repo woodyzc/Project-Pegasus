@@ -145,6 +145,30 @@ These were each discovered the slow way. They are not optional trivia.
 - **A setting that hangs at boot outlives a reflash**, because it lives in
   NVS. `Settings_Init()`'s bring-up watchdog exists for exactly this; do not
   remove it when adding radio modes.
+- **Register every GATT service before anything scans or connects.**
+  NimBLE's `ble_gatts_mutable()` refuses to add a service while an
+  advertisement, a scan, a connection attempt or an established connection
+  exists, and the refusal is *not* returned to the caller — it lands on
+  `SYSINIT_PANIC_ASSERT` inside `ble_svc_gap_init()` and panics the chip. So
+  `BLE_TBT_Start()` must precede `BLE_HR_Start()` in `main.cpp`. It only
+  misbehaves when a heart-rate peer is actually in range, which makes it look
+  like flaky hardware: with no watch nearby nothing connects and the identical
+  code registers fine.
+- **The board records its own crashes, and you can read them.** Serial is
+  unusable (above), but `esp_reset_reason()` now surfaces on the Settings page,
+  and the `coredump` partition at `0xFF0000` holds a full ELF core dump written
+  on every panic. Read it *without* the serial console:
+
+  ```
+  esptool.py --chip esp32s3 --port /dev/cu.usbmodem101 \
+      read_flash 0xFF0000 0x10000 coredump.bin
+  # strip the 20-byte header, then:
+  xtensa-esp32s3-elf-gdb -batch .pio/build/esp32s3/firmware.elf \
+      -c core.elf -ex "thread 1" -ex bt
+  ```
+
+  This gave the exact assert and the full backtrace for the bug above, after
+  three rounds of guessing had failed. Reach for it first, not last.
 
 ## 9. Companion App (`phone/android/`)
 

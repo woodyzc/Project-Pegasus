@@ -121,8 +121,28 @@ void setup() {
         case HR_SOURCE_BLE:
         default:
             BLE_HR_Init();
-            BLE_HR_Start();
-            // Turn-by-turn shares the NimBLE stack the HR client brings up.
+
+            // ---- This order is load-bearing. Do not swap these two. ----
+            // Turn-by-turn shares the NimBLE stack the HR client brings up,
+            // and registering its GATT service has to happen while the GATT
+            // table is still mutable. NimBLE's ble_gatts_mutable() refuses
+            // once ANY of these is true: advertising is active, a scan is
+            // active, a connection attempt is in flight, or a connection is
+            // established. BLE_HR_Start() ends with all of the last three
+            // possible -- it scans, connects, and leaves a supervisor task
+            // holding the link up.
+            //
+            // Registering anyway does not return an error to us. It reaches
+            // ble_svc_gap_init(), whose SYSINIT_PANIC_ASSERT(rc == 0) turns
+            // BLE_HS_EBUSY into a panic, and the board reboots. That made it
+            // look intermittent and hardware-ish, because it only happened
+            // when the heart-rate peer was actually in range: with no watch
+            // nearby the scan finds nothing, nothing connects, and the same
+            // code registers fine.
+            //
+            // BLE_HR_Init() is safe to precede this -- it only configures the
+            // scan parameters, it does not start scanning.
+            //
             // Settings guarantees NAV_MODE_TBT implies this branch (the
             // exclusivity rule in Settings.h), but honour the mode explicitly
             // rather than assuming: with GPX selected there is no reason to
@@ -130,6 +150,8 @@ void setup() {
             if (Settings_GetNavMode() == NAV_MODE_TBT) {
                 BLE_TBT_Start();
             }
+
+            BLE_HR_Start();
             break;
     }
 
