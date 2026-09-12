@@ -38,6 +38,9 @@ typedef struct {
     // True once the rider has chosen a scale, which stops FitTrack and
     // SetPosition from overriding it.
     bool zoom_locked;
+
+    // Set once the rider drags. Stops SetPosition recentring on the fix.
+    bool pan_locked;
 } MapView_t;
 
 // Builds the view inside `parent`. `points` and `projected` must each hold
@@ -72,3 +75,20 @@ void MapView_ZoomIn(MapView_t *view);
 void MapView_ZoomOut(MapView_t *view);
 bool MapView_CanZoomIn(const MapView_t *view);
 bool MapView_CanZoomOut(const MapView_t *view);
+
+// ---- Panning ----
+// Shifts the view by a screen delta. Dragging the map right moves the view
+// west, the way dragging paper across a desk does; the alternative reads as
+// moving a window over a fixed world and nobody expects that on a touchscreen.
+//
+// Panning locks the centre for the same reason zooming locks the scale: a view
+// that snaps back to the rider mid-drag is unusable. MapView_Recenter undoes
+// both and resumes following.
+void MapView_PanPixels(MapView_t *view, lv_coord_t dx, lv_coord_t dy);
+
+// Back to following the rider, at an automatic scale. Clears both locks.
+void MapView_Recenter(MapView_t *view);
+
+// True when the view has been moved or zoomed by hand, so the UI can offer a
+// way back rather than leaving someone stranded over empty countryside.
+bool MapView_IsManual(const MapView_t *view);

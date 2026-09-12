@@ -67,6 +67,7 @@ lv_point_t s_points[MAX_POLY_POINTS];
 MapPoint_t s_projected[MAX_POLY_POINTS];
 
 MapView_t s_view;
+lv_obj_t *s_recenter_btn = nullptr;
 lv_obj_t *s_status_label = nullptr;
 lv_obj_t *s_scale_label = nullptr;
 lv_timer_t *s_refresh_timer = nullptr;
@@ -97,6 +98,51 @@ void UpdateScale() {
     }
 }
 
+// Only offered once the view has been moved by hand. A control that is always
+// there but usually does nothing trains people to ignore it.
+void UpdateRecenterButton() {
+    if (s_recenter_btn == nullptr) {
+        return;
+    }
+    if (MapView_IsManual(&s_view)) {
+        lv_obj_clear_flag(s_recenter_btn, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_recenter_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// Dragging the map.
+//
+// LV_EVENT_PRESSING fires repeatedly while a finger is down, and the input
+// device carries the movement since the previous call -- so this consumes a
+// delta rather than tracking a start point itself, which is what makes it
+// behave correctly when a drag leaves the widget and comes back.
+void OnMapPressing(lv_event_t *e) {
+    (void)e;
+    lv_indev_t *indev = lv_indev_get_act();
+    if (indev == nullptr) {
+        return;
+    }
+    lv_point_t vect;
+    lv_indev_get_vect(indev, &vect);
+    if (vect.x == 0 && vect.y == 0) {
+        return;
+    }
+
+    MapView_PanPixels(&s_view, vect.x, vect.y);
+    RoadView_Refresh();
+    UpdateRecenterButton();
+}
+
+void OnRecenterClicked(lv_event_t *e) {
+    (void)e;
+    MapView_Recenter(&s_view);
+    RoadView_Refresh();
+    UpdateScale();
+    UpdateRecenterButton();
+}
+
+
 void OnZoomClicked(lv_event_t *e) {
     const int in = (int)(intptr_t)lv_event_get_user_data(e);
     if (in == 0) {
@@ -108,6 +154,7 @@ void OnZoomClicked(lv_event_t *e) {
     // changed it.
     RoadView_Refresh();
     UpdateScale();
+    UpdateRecenterButton();
 }
 
 
@@ -191,6 +238,12 @@ void PageMap::onViewLoad() {
     RoadView_Attach(&s_view);
 
 
+    // Drag to pan. The gesture goes on MapView's own container, which already
+    // covers the map area exactly -- a separate transparent overlay would have
+    // to be kept in step with it for no gain.
+    lv_obj_add_flag(s_view.container, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_view.container, OnMapPressing, LV_EVENT_PRESSING, nullptr);
+
     // ---- Zoom ----
     // Right edge, stacked, deliberately large. This is the one control on the
     // map and it is pressed with a thumb, possibly gloved, possibly moving.
@@ -217,6 +270,40 @@ void PageMap::onViewLoad() {
         }
     }
 
+    // Back to the rider. Hidden until the map has been moved by hand, since a
+    // control that is always visible but usually inert teaches people to stop
+    // seeing it.
+    s_recenter_btn = lv_btn_create(parent);
+    lv_obj_set_size(s_recenter_btn, 44, 44);
+    lv_obj_align(s_recenter_btn, LV_ALIGN_TOP_RIGHT, -6, MAP_Y + 120);
+    lv_obj_set_style_radius(s_recenter_btn, 8, 0);
+    lv_obj_set_style_shadow_width(s_recenter_btn, 0, 0);
+    lv_obj_set_style_bg_color(s_recenter_btn, lv_color_hex(0x101820), 0);
+    lv_obj_set_style_bg_opa(s_recenter_btn, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(s_recenter_btn, lv_color_hex(0x61DAFB), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(s_recenter_btn, OnRecenterClicked, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_flag(s_recenter_btn, LV_OBJ_FLAG_HIDDEN);
+    {
+        lv_obj_t *icon = lv_label_create(s_recenter_btn);
+        lv_label_set_text(icon, LV_SYMBOL_GPS);
+        lv_obj_set_style_text_color(icon, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_center(icon);
+    }
+
+    // ---- Attribution ----
+    // Required, not decorative. The road data is OpenStreetMap under ODbL,
+    // which obliges anything built from it to credit the contributors where a
+    // user can see it. Only shown when a road map is actually loaded, because
+    // crediting OSM for a blank screen would be its own kind of wrong.
+    if (RoadMap_IsLoaded()) {
+        lv_obj_t *attrib = lv_label_create(parent);
+        lv_label_set_text(attrib, "(c) OpenStreetMap contributors");
+        lv_obj_set_style_text_font(attrib, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_color(attrib, lv_color_hex(COLOR_CAPTION), 0);
+        lv_obj_set_style_text_opa(attrib, LV_OPA_60, 0);
+        lv_obj_align(attrib, LV_ALIGN_BOTTOM_MID, 0, -16);
+    }
+
     // ---- Footer ----
     s_scale_label = lv_label_create(parent);
     lv_obj_set_style_text_font(s_scale_label, &lv_font_montserrat_10, 0);
@@ -235,6 +322,7 @@ void PageMap::onViewLoad() {
 
     // On a timer: the draw figure only exists after the first draw, which has
     // not happened while this page is still being built.
+    UpdateRecenterButton();
     s_road_timer = lv_timer_create(RoadStatTimer, 500, nullptr);
     RoadStatTimer(nullptr);
 
@@ -279,5 +367,6 @@ void PageMap::onViewUnload() {
 
     s_status_label = nullptr;
     s_scale_label = nullptr;
+    s_recenter_btn = nullptr;
     s_road_stat = nullptr;
 }

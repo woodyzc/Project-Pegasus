@@ -32,6 +32,7 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->center_lon = 0.0;
     view->have_center = false;
     view->zoom_locked = false;
+    view->pan_locked = false;
 
     view->container = lv_obj_create(parent);
     lv_obj_set_size(view->container, w, h);
@@ -105,9 +106,16 @@ void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
 
     // Once there is a fix the view follows the rider: what matters while
     // riding is where you are on the line, not the shape of the whole route.
-    view->center_lat = gps->lat;
-    view->center_lon = gps->lon;
-    view->have_center = true;
+    //
+    // Unless the rider has dragged the map, in which case they are looking at
+    // somewhere specific and yanking the view back to the bike every second
+    // makes the gesture pointless. The marker below still updates, so the
+    // rider's position stays visible while they look ahead.
+    if (!view->pan_locked) {
+        view->center_lat = gps->lat;
+        view->center_lon = gps->lon;
+        view->have_center = true;
+    }
 
     {
         // Heading is degrees clockwise from north, so it maps to screen with
@@ -215,4 +223,42 @@ bool MapView_CanZoomIn(const MapView_t *view) {
 
 bool MapView_CanZoomOut(const MapView_t *view) {
     return view != nullptr && NearestStep(view->metres_per_pixel) < ZOOM_STEPS - 1;
+}
+
+void MapView_PanPixels(MapView_t *view, lv_coord_t dx, lv_coord_t dy) {
+    if (view == nullptr || (dx == 0 && dy == 0)) {
+        return;
+    }
+    if (!view->have_center) {
+        return; // nothing to pan away from yet
+    }
+
+    const double mpp = view->metres_per_pixel;
+    // y is inverted for the same reason Map_Project inverts it: screen y grows
+    // downward while latitude grows north. Dragging down therefore walks the
+    // centre north, which is what makes the map feel dragged rather than
+    // scrolled.
+    view->center_lat += (dy * mpp) / MAP_EARTH_METRES_PER_DEGREE;
+
+    double cos_lat = cos(view->center_lat * M_PI / 180.0);
+    if (cos_lat < 0.01) {
+        cos_lat = 0.01; // near the poles, where a degree of longitude vanishes
+    }
+    view->center_lon -= (dx * mpp) / (MAP_EARTH_METRES_PER_DEGREE * cos_lat);
+
+    view->pan_locked = true;
+    MapView_Redraw(view);
+}
+
+void MapView_Recenter(MapView_t *view) {
+    if (view == nullptr) {
+        return;
+    }
+    view->pan_locked = false;
+    view->zoom_locked = false;
+    MapView_FitTrack(view);
+}
+
+bool MapView_IsManual(const MapView_t *view) {
+    return view != nullptr && (view->pan_locked || view->zoom_locked);
 }
