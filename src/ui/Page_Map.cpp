@@ -49,6 +49,8 @@ constexpr lv_coord_t MAP_H = 262;
 
 // Half a tile, so both seams of the 2x2 fall inside the window rather than
 // off its edges where they prove nothing.
+#define ROADMAP_SPIKE_PATH "/MAP/roads.prd"
+
 #define TILE_OFF_X 120
 #define TILE_OFF_Y 100
 
@@ -151,19 +153,14 @@ void TileStatTimer(lv_timer_t *timer) {
     }
 
     if (!LvglFs_IsReady()) {
-        lv_label_set_text(s_tile_stat, "tile: no fs driver (card not mounted?)");
+        lv_label_set_text(s_tile_stat, "no fs driver (card not mounted?)");
         return;
     }
 
-    const uint32_t bytes = LvglFs_LastReadBytes();
-    if (bytes >= 4096) {
-        const uint32_t us = LvglFs_LastReadUs();
-        lv_label_set_text_fmt(s_tile_stat, "tile %u B in %u ms = %.2f MB/s",
-                              (unsigned)bytes, (unsigned)(us / 1000),
-                              us > 0 ? (double)bytes / (double)us : 0.0);
-        return;
-    }
-
+    // Roads are the headline now, and they are reported even when absent. An
+    // earlier version only mentioned them on success, so a card without
+    // roads.prd showed the tile line instead and looked like the road code had
+    // never been flashed.
     if (RoadMap_IsLoaded()) {
         lv_label_set_text_fmt(s_tile_stat, "roads %u B, %u ways, %u seg in %u us",
                               (unsigned)RoadMap_Bytes(), (unsigned)RoadMap_WayCount(),
@@ -171,15 +168,19 @@ void TileStatTimer(lv_timer_t *timer) {
         return;
     }
 
-    if (LvglFs_OpenFailures() > 0) {
-        // Ask the card what it does have, rather than leaving the reader to
-        // guess which component of the path is wrong.
-        char probe[96];
-        LvglFs_Probe(TILE_SPIKE_PATH, probe, sizeof(probe));
-        lv_label_set_text_fmt(s_tile_stat, "no %s\n%s", LvglFs_LastFailedPath(), probe);
-        return;
+    // No roads: say where they were looked for, and what the card does have
+    // there, rather than leaving the reader to guess which half is wrong.
+    char probe[96];
+    LvglFs_Probe(ROADMAP_SPIKE_PATH, probe, sizeof(probe));
+
+    const uint32_t bytes = LvglFs_LastReadBytes();
+    if (bytes >= 4096) {
+        // Tiles are working even though roads are not, which is worth saying:
+        // it means the card and the filesystem driver are both fine.
+        lv_label_set_text_fmt(s_tile_stat, "no roads.prd (tiles ok)\n%s", probe);
+    } else {
+        lv_label_set_text_fmt(s_tile_stat, "no roads.prd, no tiles\n%s", probe);
     }
-    lv_label_set_text(s_tile_stat, "tile: header only, not drawn yet");
 }
 
 // Twice the dashboard's allowance, because this view has roughly twice the
