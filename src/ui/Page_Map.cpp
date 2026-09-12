@@ -97,6 +97,20 @@ void UpdateScale() {
     }
 }
 
+void OnZoomClicked(lv_event_t *e) {
+    const int in = (int)(intptr_t)lv_event_get_user_data(e);
+    if (in == 0) {
+        MapView_ZoomIn(&s_view);
+    } else {
+        MapView_ZoomOut(&s_view);
+    }
+    // The roads are drawn from the view's scale, and LVGL has no idea this
+    // changed it.
+    RoadView_Refresh();
+    UpdateScale();
+}
+
+
 void RefreshTimerCallback(lv_timer_t *timer) {
     (void)timer;
 
@@ -176,6 +190,32 @@ void PageMap::onViewLoad() {
     // Roads behind the trail, sharing this view's projection.
     RoadView_Attach(&s_view);
 
+
+    // ---- Zoom ----
+    // Right edge, stacked, deliberately large. This is the one control on the
+    // map and it is pressed with a thumb, possibly gloved, possibly moving.
+    // Small round buttons would be the obvious design and the wrong one.
+    {
+        static const char *const LABEL[2] = {LV_SYMBOL_PLUS, LV_SYMBOL_MINUS};
+        for (int i = 0; i < 2; i++) {
+            lv_obj_t *btn = lv_btn_create(parent);
+            lv_obj_set_size(btn, 44, 44);
+            lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, -6, MAP_Y + 16 + i * 52);
+            lv_obj_set_style_radius(btn, 8, 0);
+            lv_obj_set_style_shadow_width(btn, 0, 0);
+            // Semi-transparent: it sits over the map, and a solid button
+            // would punch a hole in exactly the thing being navigated.
+            lv_obj_set_style_bg_color(btn, lv_color_hex(0x101820), 0);
+            lv_obj_set_style_bg_opa(btn, LV_OPA_70, 0);
+            lv_obj_set_style_bg_color(btn, lv_color_hex(0x61DAFB), LV_STATE_PRESSED);
+            lv_obj_add_event_cb(btn, OnZoomClicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+            lv_obj_t *label = lv_label_create(btn);
+            lv_label_set_text(label, LABEL[i]);
+            lv_obj_set_style_text_color(label, lv_color_hex(COLOR_VALUE), 0);
+            lv_obj_center(label);
+        }
+    }
 
     // ---- Footer ----
     s_scale_label = lv_label_create(parent);

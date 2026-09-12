@@ -34,6 +34,10 @@ typedef struct {
     double center_lat;
     double center_lon;
     bool have_center;
+
+    // True once the rider has chosen a scale, which stops FitTrack and
+    // SetPosition from overriding it.
+    bool zoom_locked;
 } MapView_t;
 
 // Builds the view inside `parent`. `points` and `projected` must each hold
@@ -55,3 +59,16 @@ void MapView_Redraw(MapView_t *view);
 
 // Metres covered by the view's full width, for a scale readout.
 double MapView_MetresAcross(const MapView_t *view);
+
+// ---- Zoom ----
+// Steps through a fixed ladder of scales rather than scaling by an arbitrary
+// factor, so repeated presses always land on the same set of views and the
+// road detail thresholds (RoadView) line up with recognisable steps.
+//
+// A zoom set by hand sticks: MapView_SetPosition keeps following the rider but
+// stops re-fitting the scale, because a view that silently re-zooms under a
+// rider who just chose one is worse than no zoom at all.
+void MapView_ZoomIn(MapView_t *view);
+void MapView_ZoomOut(MapView_t *view);
+bool MapView_CanZoomIn(const MapView_t *view);
+bool MapView_CanZoomOut(const MapView_t *view);

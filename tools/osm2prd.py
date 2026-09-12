@@ -49,7 +49,19 @@ HIGHWAY_CLASS = {
     "tertiary": CLASS_SECONDARY, "tertiary_link": CLASS_SECONDARY,
     "residential": CLASS_MINOR, "unclassified": CLASS_MINOR,
     "living_street": CLASS_MINOR, "cycleway": CLASS_MINOR,
+
+    # Trails. A lot of genuinely rideable route is tagged path or track rather
+    # than cycleway -- rail trails, canal towpaths, forest roads -- and leaving
+    # them out meant a bike computer could not show the very thing being
+    # ridden. The Custis Trail is only in the first export at all because parts
+    # of it happen to carry cycleway.
+    "path": CLASS_MINOR, "track": CLASS_MINOR, "bridleway": CLASS_MINOR,
 }
+
+# Deliberately absent: service (parking aisles and driveways, which flood a
+# small screen with geometry nobody navigates by), footway and steps
+# (pavements, which would double the way count and are not rideable), and
+# pedestrian. A 240px panel cannot afford to draw what it will not be read for.
 CLASS_NAME = {0: "minor", 1: "secondary", 2: "artery", 3: "water"}
 
 # Overpass caps a way at 2000 nodes, but the firmware stores a count as u16 and

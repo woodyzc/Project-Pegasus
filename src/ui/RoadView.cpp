@@ -46,6 +46,11 @@ constexpr uint32_t ROAD_MAX_SEGMENTS = 4000;
 // runs on the LVGL task, whose stack is 8KB, and 2048 entries is 4KB of it.
 constexpr uint16_t ROAD_VISIBLE_MAX = 2048;
 
+// Manhattan distance below which a point is folded into the previous one.
+// 3px keeps curves smooth at this screen size while collapsing the runs of
+// near-identical points OSM records along a straight road.
+constexpr int ROAD_MIN_SEGMENT_PX = 3;
+
 const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
     {0x333A42, 1}, // minor
     {0x4E5760, 2}, // secondary
@@ -152,18 +157,38 @@ void RoadDrawCb(lv_event_t *e) {
             if (!RoadMap_Way(visible[v], &way) || way.klass != klass) {
                 continue;
             }
-            lv_point_t prev;
+            // Decimate while projecting: a point that lands within a pixel or
+            // two of the last one drawn cannot change what appears, and
+            // drawing it costs the same as one that can.
+            //
+            // This is where the frame time was going. OSM records geometry at
+            // metre resolution; at 40 metres a pixel that is dozens of points
+            // per pixel, and 4,000 segments took 128ms to produce a line no
+            // different from the one 400 would have drawn. MapProject already
+            // does exactly this for the recorded track -- see
+            // Map_BuildPolyline -- and the roads simply were not.
+            lv_point_t prev = {0, 0};
+            bool have_prev = false;
             for (uint16_t k = 0; k < way.count; k++) {
                 int16_t x, y;
                 Map_Project(way.points[k * 2] / ROADMAP_COORD_SCALE,
                             way.points[k * 2 + 1] / ROADMAP_COORD_SCALE, clat, clon, mpp,
                             (int16_t)(w / 2), (int16_t)(h / 2), &x, &y);
                 lv_point_t p = {(lv_coord_t)(area.x1 + x), (lv_coord_t)(area.y1 + y)};
-                if (k > 0) {
+
+                if (have_prev) {
+                    const int dx = p.x > prev.x ? p.x - prev.x : prev.x - p.x;
+                    const int dy = p.y > prev.y ? p.y - prev.y : prev.y - p.y;
+                    // Always draw the final point, or a way shorter than the
+                    // threshold would vanish entirely rather than simplify.
+                    if (dx + dy < ROAD_MIN_SEGMENT_PX && k + 1 < way.count) {
+                        continue;
+                    }
                     lv_draw_line(ctx, &dsc, &prev, &p);
                     segments++;
                 }
                 prev = p;
+                have_prev = true;
             }
         }
     }

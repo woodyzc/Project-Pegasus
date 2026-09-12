@@ -31,6 +31,7 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->center_lat = 0.0;
     view->center_lon = 0.0;
     view->have_center = false;
+    view->zoom_locked = false;
 
     view->container = lv_obj_create(parent);
     lv_obj_set_size(view->container, w, h);
@@ -82,8 +83,13 @@ void MapView_FitTrack(MapView_t *view) {
     }
 
     view->have_center = true;
-    view->metres_per_pixel =
-        Map_FitScale(min_lat, max_lat, min_lon, max_lon, view->width, view->height, 10);
+    // A scale the rider chose outranks fitting the track. Re-fitting under
+    // someone who just pressed zoom is the surest way to make the control feel
+    // broken.
+    if (!view->zoom_locked) {
+        view->metres_per_pixel =
+            Map_FitScale(min_lat, max_lat, min_lon, max_lon, view->width, view->height, 10);
+    }
     MapView_Redraw(view);
 }
 
@@ -155,4 +161,58 @@ double MapView_MetresAcross(const MapView_t *view) {
         return 0.0;
     }
     return view->metres_per_pixel * (double)view->width;
+}
+
+namespace {
+
+// Metres per pixel, roughly halving each step. Spans 0.5km to 19km across a
+// 240px panel: below that a rider is looking at their own front wheel, above
+// it the detail filter has hidden everything worth seeing anyway.
+const double ZOOM_LADDER[] = {2.0, 4.0, 8.0, 16.0, 32.0, 80.0};
+constexpr int ZOOM_STEPS = (int)(sizeof(ZOOM_LADDER) / sizeof(ZOOM_LADDER[0]));
+
+// Nearest rung to where the view currently sits, so the first press after an
+// automatic fit moves one visible step rather than jumping to an end.
+int NearestStep(double mpp) {
+    int best = 0;
+    double best_d = 1e30;
+    for (int i = 0; i < ZOOM_STEPS; i++) {
+        const double d = mpp > ZOOM_LADDER[i] ? mpp / ZOOM_LADDER[i] : ZOOM_LADDER[i] / mpp;
+        if (d < best_d) {
+            best_d = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+void ApplyStep(MapView_t *view, int step) {
+    if (step < 0 || step >= ZOOM_STEPS) {
+        return;
+    }
+    view->metres_per_pixel = ZOOM_LADDER[step];
+    view->zoom_locked = true;
+    MapView_Redraw(view);
+}
+
+} // namespace
+
+void MapView_ZoomIn(MapView_t *view) {
+    if (view != nullptr) {
+        ApplyStep(view, NearestStep(view->metres_per_pixel) - 1);
+    }
+}
+
+void MapView_ZoomOut(MapView_t *view) {
+    if (view != nullptr) {
+        ApplyStep(view, NearestStep(view->metres_per_pixel) + 1);
+    }
+}
+
+bool MapView_CanZoomIn(const MapView_t *view) {
+    return view != nullptr && NearestStep(view->metres_per_pixel) > 0;
+}
+
+bool MapView_CanZoomOut(const MapView_t *view) {
+    return view != nullptr && NearestStep(view->metres_per_pixel) < ZOOM_STEPS - 1;
 }
