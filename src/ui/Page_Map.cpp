@@ -300,12 +300,28 @@ void PageMap::onViewLoad() {
     // long one 128KB tile actually takes on this board's SD bus.
     //
     // Created BEFORE MapView so the track draws on top of it.
+    // ---- The map ----
+    MapView_Create(&s_view, parent, MAP_X, MAP_Y, MAP_W, MAP_H, s_points, s_projected,
+                   MAX_POLY_POINTS);
+
+    // ---- Map underlay: tiles, then roads, then MapView's own trail ----
+    // Both go INSIDE MapView's container, and that is the whole point.
+    //
+    // They were siblings created before it, which meant MapView's opaque
+    // background was drawn on top and hid both completely. The tile was being
+    // read off the card and drawn correctly the entire time -- the byte
+    // counter proved it -- and then painted over, which is why it never
+    // appeared and the measurement looked like the only thing working.
+    //
+    // Inside the container they land above its background. lv_obj_move_to_index
+    // then puts them behind the trail: roads to the back, then tiles behind
+    // those, leaving bg -> tiles -> roads -> trail -> marker.
     if (LvglFs_IsReady()) {
         // A clipping container, so tiles can hang off the edges. LVGL clips
         // children to their parent, which is the only way a tile can start at
         // a negative offset without painting over the ROUTE title.
-        s_tile_layer = lv_obj_create(parent);
-        lv_obj_set_pos(s_tile_layer, MAP_X, MAP_Y);
+        s_tile_layer = lv_obj_create(s_view.container);
+        lv_obj_set_pos(s_tile_layer, 0, 0);
         lv_obj_set_size(s_tile_layer, MAP_W, MAP_H);
         lv_obj_set_style_bg_opa(s_tile_layer, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s_tile_layer, 0, 0);
@@ -337,8 +353,8 @@ void PageMap::onViewLoad() {
 
     // Roads under the track, over the tiles.
     if (RoadMap_IsLoaded()) {
-        s_road_layer = lv_obj_create(parent);
-        lv_obj_set_pos(s_road_layer, MAP_X, MAP_Y);
+        s_road_layer = lv_obj_create(s_view.container);
+        lv_obj_set_pos(s_road_layer, 0, 0);
         lv_obj_set_size(s_road_layer, MAP_W, MAP_H);
         lv_obj_set_style_bg_opa(s_road_layer, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s_road_layer, 0, 0);
@@ -346,9 +362,13 @@ void PageMap::onViewLoad() {
         lv_obj_add_event_cb(s_road_layer, RoadDrawCb, LV_EVENT_DRAW_MAIN, nullptr);
     }
 
-    // ---- The map ----
-    MapView_Create(&s_view, parent, MAP_X, MAP_Y, MAP_W, MAP_H, s_points, s_projected,
-                   MAX_POLY_POINTS);
+    if (s_road_layer != nullptr) {
+        lv_obj_move_to_index(s_road_layer, 0);
+    }
+    if (s_tile_layer != nullptr) {
+        lv_obj_move_to_index(s_tile_layer, 0);
+    }
+
 
     // ---- Footer ----
     s_scale_label = lv_label_create(parent);
