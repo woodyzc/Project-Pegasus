@@ -130,7 +130,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 link.onRouteProgress = { percent, done ->
                     runOnUiThread {
-                        status.text = if (done) "Route sent" else "Sending route… \$percent%"
+                        status.text = if (done) "Route sent" else "Sending route… $percent%"
                     }
                 }
                 link.sendRoute(TestRoute.square().encode())

@@ -133,7 +133,7 @@ class BleLink(context: Context) {
      */
     fun sendRoute(encoded: RouteFrame.Encoded) {
         transfer = RouteTransfer(encoded.chunks)
-        report("Sending route (\${encoded.chunks.size} chunks)")
+        report("Sending route (${encoded.chunks.size} chunks)")
         pumpTransfer()
     }
 
@@ -165,17 +165,29 @@ class BleLink(context: Context) {
                 transfer = null
             }
             RouteTransfer.State.FAILED -> {
-                report("Route upload failed")
+                report(uploadFailureReport(t))
                 transfer = null
             }
             else -> handler.postDelayed(::tickTransfer, RouteTransfer.STALL_TIMEOUT_MS)
         }
     }
 
+    /**
+     * Why the upload gave up, in the only terms available after the fact.
+     *
+     * "0 of n" and "k of n" are different faults and the bare message could
+     * not tell them apart: zero means the head unit never acknowledged
+     * anything -- no progress notification, or every chunk rejected -- while a
+     * partial count means the transfer was moving and then stopped.
+     */
+    private fun uploadFailureReport(t: RouteTransfer): String =
+        "Route upload failed (${t.acknowledged} of ${t.totalChunks} chunks," +
+            " pass ${t.pass})"
+
     private fun tickTransfer() {
         val t = transfer ?: return
         if (!t.onTick(System.currentTimeMillis())) {
-            report("Route upload failed")
+            report(uploadFailureReport(t))
             transfer = null
             return
         }
