@@ -37,6 +37,7 @@ lv_conf.h, so the bytes are native order; flip that setting and every tile on
 the card has to be regenerated.
 """
 import argparse
+import math
 import os
 import struct
 import sys
@@ -165,74 +166,184 @@ def synth_tile(z: int, x: int, y: int) -> Image.Image:
     return img
 
 
-def draw_region(n: int, seed: int) -> Image.Image:
-    """Render an n x n tile region as ONE image, to be sliced afterwards.
+# Map style, shared by both renderers so raster and vector cannot drift apart.
+STYLE = {
+    "ground": (0x1A, 0x1E, 0x23),
+    "park":   (0x1B, 0x2A, 0x20),
+    "water":  (0x1C, 0x3E, 0x5C),
+    "casing": (0x10, 0x14, 0x18),
+    "minor":  (0x33, 0x3A, 0x42),
+    "second": (0x4E, 0x57, 0x60),
+    "artery": (0xC8, 0xA0, 0x50),
+}
 
-    Drawn whole rather than per tile because that is the only way roads and
-    rivers run continuously across tile seams. Generating each tile
-    independently gives nine squares that obviously do not join, which would
-    hide exactly the alignment errors these tiles exist to expose.
 
-    Styled dark, like Carto's Dark Matter, because the head unit's UI is dark
-    and a white map dropped into it would be blinding at night.
+def region_geometry(n: int, seed: int):
+    """The region as primitives in normalised 0..1 coordinates.
+
+    Normalised on purpose: the same geometry then renders at any pixel size,
+    which is what lets the raster tiles and the vector drawing below be the
+    same map rather than two similar-looking ones. It is also the shape the
+    data would take on the device -- coordinates, not pixels.
     """
     import random
     rnd = random.Random(seed)
+    parks, water, roads = [], [], []
 
-    SS = 2
-    span = n * TILE * SS
-    img = Image.new("RGB", (span, span), (0x1A, 0x1E, 0x23))
-    d = ImageDraw.Draw(img)
-
-    # Parkland first: everything else sits on top of it.
     for _ in range(max(2, n)):
-        cx, cy = rnd.randint(0, span), rnd.randint(0, span)
-        r = rnd.randint(span // 12, span // 6)
-        d.ellipse([cx - r, cy - r * 3 // 4, cx + r, cy + r * 3 // 4],
-                  fill=(0x1B, 0x2A, 0x20))
+        cx, cy = rnd.random(), rnd.random()
+        r = rnd.uniform(1 / 12, 1 / 6)
+        parks.append((cx, cy, r, r * 0.75))
 
-    # A river, wandering top to bottom, drawn under the roads so bridges read
-    # as roads crossing water rather than water cutting the road.
-    x = rnd.randint(span // 4, span * 3 // 4)
+    x = rnd.uniform(0.25, 0.75)
     river = []
-    for y in range(-20, span + 20, span // 24):
-        x += rnd.randint(-span // 22, span // 22)
-        river.append((max(0, min(span, x)), y))
-    # Wide and a touch brighter than instinct says: the minor street grid is
-    # drawn over it, and at 256px a subtle river simply disappears under the
-    # roads.
-    d.line(river, fill=(0x1C, 0x3E, 0x5C), width=14 * SS, joint="curve")
+    for i in range(26):
+        x += rnd.uniform(-1 / 22, 1 / 22)
+        river.append((min(1.0, max(0.0, x)), -0.03 + i / 24))
+    water.append(river)
 
-    def road(pts, width, colour):
-        # Casing under fill: the dark outline is what stops two roads that
-        # cross from merging into one blob at this scale.
-        d.line(pts, fill=(0x10, 0x14, 0x18), width=width + 3 * SS, joint="curve")
-        d.line(pts, fill=colour, width=width, joint="curve")
+    step = 1 / (n * 6)
+    i = 0.0
+    while i <= 1.0 + step:
+        j = i + rnd.uniform(-step / 5, step / 5)
+        roads.append(("minor", [(j, -0.02), (j, 1.02)]))
+        j = i + rnd.uniform(-step / 5, step / 5)
+        roads.append(("minor", [(-0.02, j), (1.02, j)]))
+        i += step
 
-    # Minor streets: a jittered grid, so blocks look built rather than plotted.
-    step = span // (n * 6)
-    for i in range(0, span + step, step):
-        j = i + rnd.randint(-step // 5, step // 5)
-        road([(j, 0), (j, span)], 2 * SS, (0x33, 0x3A, 0x42))
-        j = i + rnd.randint(-step // 5, step // 5)
-        road([(0, j), (span, j)], 2 * SS, (0x33, 0x3A, 0x42))
+    step2 = 1 / (n * 2)
+    i = step2 / 2
+    while i < 1.0:
+        roads.append(("second", [(i, -0.02), (i, 1.02)]))
+        roads.append(("second", [(-0.02, i), (1.02, i)]))
+        i += step2
 
-    # Secondary roads, a coarser grid on top.
-    step2 = span // (n * 2)
-    for i in range(step2 // 2, span, step2):
-        road([(i, 0), (i, span)], 4 * SS, (0x4E, 0x57, 0x60))
-        road([(0, i), (span, i)], 4 * SS, (0x4E, 0x57, 0x60))
-
-    # Two arterials, the brightest thing on the map, deliberately not straight.
     for horizontal in (True, False):
-        base = rnd.randint(span // 3, span * 2 // 3)
+        base = rnd.uniform(1 / 3, 2 / 3)
         pts = []
-        for t in range(0, span + 1, span // 10):
-            base += rnd.randint(-span // 40, span // 40)
-            pts.append((t, base) if horizontal else (base, t))
-        road(pts, 7 * SS, (0xC8, 0xA0, 0x50))
+        for t in range(11):
+            base += rnd.uniform(-1 / 40, 1 / 40)
+            u = t / 10
+            pts.append((u, base) if horizontal else (base, u))
+        roads.append(("artery", pts))
 
-    return img.resize((n * TILE, n * TILE), Image.LANCZOS)
+    return parks, water, roads
+
+
+# Stroke widths as a fraction of one tile, so they hold at any render scale.
+ROAD_W = {"minor": 2 / 256, "second": 4 / 256, "artery": 7 / 256}
+WATER_W = 14 / 256
+CASING_W = 3 / 256
+
+
+def render_raster(n, seed, px, ss=2):
+    """Rasterise the region at `px` pixels square."""
+    parks, water, roads = region_geometry(n, seed)
+    span = px * ss
+    img = Image.new("RGB", (span, span), STYLE["ground"])
+    d = ImageDraw.Draw(img)
+    S = lambda p: (p[0] * span, p[1] * span)
+    w = lambda frac: max(1, int(frac * span / n))
+
+    for cx, cy, rx, ry in parks:
+        d.ellipse([(cx - rx) * span, (cy - ry) * span,
+                   (cx + rx) * span, (cy + ry) * span], fill=STYLE["park"])
+    for line in water:
+        d.line([S(p) for p in line], fill=STYLE["water"], width=w(WATER_W), joint="curve")
+    for kind, pts in roads:
+        xy = [S(p) for p in pts]
+        d.line(xy, fill=STYLE["casing"], width=w(ROAD_W[kind]) + w(CASING_W), joint="curve")
+        d.line(xy, fill=STYLE[kind], width=w(ROAD_W[kind]), joint="curve")
+    return img.resize((px, px), Image.LANCZOS)
+
+
+def render_svg(n, seed, px):
+    """The same region as SVG -- geometry, not pixels."""
+    parks, water, roads = region_geometry(n, seed)
+    hexc = lambda c: "#%02x%02x%02x" % c
+    w = lambda frac: frac * px / n
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{px}" height="{px}" '
+           f'viewBox="0 0 {px} {px}">',
+           f'<rect width="{px}" height="{px}" fill="{hexc(STYLE["ground"])}"/>']
+    for cx, cy, rx, ry in parks:
+        out.append(f'<ellipse cx="{cx*px:.1f}" cy="{cy*px:.1f}" rx="{rx*px:.1f}" '
+                   f'ry="{ry*px:.1f}" fill="{hexc(STYLE["park"])}"/>')
+    pts_s = lambda pts: " ".join(f"{x*px:.1f},{y*px:.1f}" for x, y in pts)
+    for line in water:
+        out.append(f'<polyline points="{pts_s(line)}" fill="none" '
+                   f'stroke="{hexc(STYLE["water"])}" stroke-width="{w(WATER_W):.1f}" '
+                   f'stroke-linejoin="round" stroke-linecap="round"/>')
+    for kind, pts in roads:
+        out.append(f'<polyline points="{pts_s(pts)}" fill="none" '
+                   f'stroke="{hexc(STYLE["casing"])}" '
+                   f'stroke-width="{w(ROAD_W[kind])+w(CASING_W):.1f}" '
+                   f'stroke-linejoin="round" stroke-linecap="round"/>')
+    for kind, pts in roads:
+        out.append(f'<polyline points="{pts_s(pts)}" fill="none" stroke="{hexc(STYLE[kind])}" '
+                   f'stroke-width="{w(ROAD_W[kind]):.1f}" '
+                   f'stroke-linejoin="round" stroke-linecap="round"/>')
+    out.append("</svg>")
+    return "\n".join(out)
+
+
+def draw_region(n: int, seed: int) -> Image.Image:
+    return render_raster(n, seed, n * TILE)
+
+
+# Must match RoadMap.h.
+ROAD_CLASS = {"minor": 0, "second": 1, "artery": 2, "water": 3}
+
+
+def cmd_roads(args) -> int:
+    """The same region as geometry, in the format the firmware reads.
+
+    Deliberately the SAME region_geometry() the tiles come from, so the two
+    can be compared like for like rather than as two maps that merely look
+    similar.
+    """
+    parks, water, roads = region_geometry(args.n, args.seed)
+
+    # Normalised 0..1 onto a real patch of the world, so the projection and
+    # the fit-to-bounds code get plausible degrees rather than unit squares.
+    lat0, lon0 = args.lat, args.lon
+    span_deg = args.span_km / 111.32
+
+    def enc(u, v):
+        # u across, v down. v is subtracted because latitude grows north while
+        # the rendered image grows downward -- the same flip Map_Project makes.
+        lat = lat0 + (0.5 - v) * span_deg
+        lon = lon0 + (u - 0.5) * span_deg / math.cos(math.radians(lat0))
+        return int(round(lat * 1e7)), int(round(lon * 1e7))
+
+    ways = []
+    for line in water:
+        ways.append((ROAD_CLASS["water"], [enc(u, v) for u, v in line]))
+    for kind, pts in roads:
+        ways.append((ROAD_CLASS[kind], [enc(u, v) for u, v in pts]))
+
+    lats = [p[0] for _, pts in ways for p in pts]
+    lons = [p[1] for _, pts in ways for p in pts]
+
+    blob = bytearray()
+    blob += b"PRD1"
+    blob += struct.pack("<I", len(ways))
+    blob += struct.pack("<iiii", min(lats), min(lons), max(lats), max(lons))
+    for klass, pts in ways:
+        blob += struct.pack("<BBH", klass, 0, len(pts))
+        for la, lo in pts:
+            blob += struct.pack("<ii", la, lo)
+
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    with open(args.out, "wb") as f:
+        f.write(blob)
+
+    points = sum(len(p) for _, p in ways)
+    tiles = args.n * args.n * (TILE * TILE * 2 + 4)
+    print(f"{len(ways)} ways, {points} points -> {args.out}")
+    print(f"  {len(blob)} bytes ({len(blob)/1024:.1f} KB)")
+    print(f"  same area as raster tiles: {tiles} bytes ({tiles/1024:.0f} KB)")
+    print(f"  {tiles/len(blob):.0f}x smaller")
+    return 0
 
 
 def cmd_mapsim(args) -> int:
@@ -307,6 +418,16 @@ def main() -> int:
     m.add_argument("--seed", type=int, default=7)
     m.add_argument("--preview", help="also save the whole region as a PNG")
     m.set_defaults(fn=cmd_mapsim)
+
+    r = sub.add_parser("roads", help="the same region as vector geometry (.prd)")
+    r.add_argument("out")
+    r.add_argument("--n", type=int, default=3)
+    r.add_argument("--seed", type=int, default=7)
+    r.add_argument("--lat", type=float, default=40.0992)
+    r.add_argument("--lon", type=float, default=-83.1141)
+    r.add_argument("--span-km", type=float, default=2.8,
+                   help="ground width of the whole region")
+    r.set_defaults(fn=cmd_roads)
 
     c = sub.add_parser("convert", help="image file -> LVGL .bin")
     c.add_argument("src")

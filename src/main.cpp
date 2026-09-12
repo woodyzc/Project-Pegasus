@@ -8,6 +8,7 @@
 #include "navigation/BLE_TBT_Receiver.h"
 #include "navigation/GpxTrack.h"
 #include "navigation/RideLog.h"
+#include "navigation/RoadMap.h"
 #include "sensors/BLE_HR_Client.h"
 #include "sensors/GPS_Reader.h"
 #include "sensors/SoftANT.h"
@@ -110,6 +111,11 @@ void setup() {
         if (Settings_GetNavMode() == NAV_MODE_GPX) {
             GpxTrack_LoadFirstAvailable();
         }
+
+        // Vector roads, if the card carries them. Optional by design: the
+        // breadcrumb and every metric work without it, so a card with no
+        // roads.prd is not an error, just a map with no streets on it.
+        RoadMap_Load("/MAP/roads.prd");
     }
 
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);

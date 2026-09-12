@@ -1,10 +1,13 @@
 #include "Page_Map.h"
 
+#include <Arduino.h>
 #include <stdio.h>
 
 #include "../hal/LvglFs.h"
 
 #include "../navigation/GpxTrack.h"
+#include "../navigation/MapProject.h"
+#include "../navigation/RoadMap.h"
 #include "../system/DataCenter.h"
 #include "../system/PageManager/PageManager.h"
 #include "MapView.h"
@@ -49,6 +52,90 @@ constexpr lv_coord_t MAP_H = 262;
 #define TILE_OFF_X 120
 #define TILE_OFF_Y 100
 
+// ---- Vector roads ----
+// One object with a draw callback, not one lv_line per road. A city has
+// thousands of ways, and thousands of lv_obj would cost memory and a layout
+// pass each; this draws them all in a single callback with no objects at all.
+lv_obj_t *s_road_layer = nullptr;
+volatile uint32_t s_road_draw_us = 0;
+volatile uint32_t s_road_segments = 0;
+
+struct RoadStyle {
+    uint32_t colour;
+    lv_coord_t width;
+};
+
+// Widths in screen pixels, chosen for a 240px panel rather than scaled from
+// the data: a residential street and a trunk road have to be told apart at
+// arm's length, which is a display question, not a cartographic one.
+const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
+    {0x333A42, 1}, // minor
+    {0x4E5760, 2}, // secondary
+    {0xC8A050, 3}, // artery
+    {0x1C3E5C, 4}, // water
+};
+
+void RoadDrawCb(lv_event_t *e) {
+    if (!RoadMap_IsLoaded()) {
+        return;
+    }
+    lv_obj_t *obj = lv_event_get_target(e);
+    lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
+
+    lv_area_t area;
+    lv_obj_get_coords(obj, &area);
+    const lv_coord_t w = lv_area_get_width(&area);
+    const lv_coord_t h = lv_area_get_height(&area);
+
+    double min_lat, min_lon, max_lat, max_lon;
+    RoadMap_Bounds(&min_lat, &min_lon, &max_lat, &max_lon);
+    const double mpp = Map_FitScale(min_lat, max_lat, min_lon, max_lon, w, h, 4);
+    const double clat = (min_lat + max_lat) / 2.0;
+    const double clon = (min_lon + max_lon) / 2.0;
+
+    const uint32_t started = micros();
+    uint32_t segments = 0;
+
+    // Water first, then minor, then secondary, then arteries: painter's order,
+    // so a trunk road crosses a river rather than being cut by it.
+    for (int pass = ROAD_CLASS_COUNT - 1; pass >= 0; pass--) {
+        const int klass = (pass == ROAD_CLASS_COUNT - 1) ? ROAD_CLASS_WATER : pass;
+        if (pass != ROAD_CLASS_COUNT - 1 && klass == ROAD_CLASS_WATER) {
+            continue;
+        }
+
+        lv_draw_line_dsc_t dsc;
+        lv_draw_line_dsc_init(&dsc);
+        dsc.color = lv_color_hex(ROAD_STYLE[klass].colour);
+        dsc.width = ROAD_STYLE[klass].width;
+        dsc.round_start = 1;
+        dsc.round_end = 1;
+
+        for (size_t i = 0; i < RoadMap_WayCount(); i++) {
+            RoadWay_t way;
+            if (!RoadMap_Way(i, &way) || way.klass != klass || way.count < 2) {
+                continue;
+            }
+            lv_point_t prev;
+            for (uint16_t k = 0; k < way.count; k++) {
+                int16_t x, y;
+                Map_Project(way.points[k * 2] / ROADMAP_COORD_SCALE,
+                            way.points[k * 2 + 1] / ROADMAP_COORD_SCALE, clat, clon, mpp,
+                            (int16_t)(w / 2), (int16_t)(h / 2), &x, &y);
+                lv_point_t p = {(lv_coord_t)(area.x1 + x), (lv_coord_t)(area.y1 + y)};
+                if (k > 0) {
+                    lv_draw_line(ctx, &dsc, &prev, &p);
+                    segments++;
+                }
+                prev = p;
+            }
+        }
+    }
+
+    s_road_draw_us = micros() - started;
+    s_road_segments = segments;
+}
+
 lv_obj_t *s_tile_layer = nullptr;
 lv_obj_t *s_tile_img = nullptr;
 lv_obj_t *s_tile_stat = nullptr;
@@ -74,6 +161,13 @@ void TileStatTimer(lv_timer_t *timer) {
         lv_label_set_text_fmt(s_tile_stat, "tile %u B in %u ms = %.2f MB/s",
                               (unsigned)bytes, (unsigned)(us / 1000),
                               us > 0 ? (double)bytes / (double)us : 0.0);
+        return;
+    }
+
+    if (RoadMap_IsLoaded()) {
+        lv_label_set_text_fmt(s_tile_stat, "roads %u B, %u ways, %u seg in %u us",
+                              (unsigned)RoadMap_Bytes(), (unsigned)RoadMap_WayCount(),
+                              (unsigned)s_road_segments, (unsigned)s_road_draw_us);
         return;
     }
 
@@ -240,6 +334,17 @@ void PageMap::onViewLoad() {
         }
     }
 
+    // Roads under the track, over the tiles.
+    if (RoadMap_IsLoaded()) {
+        s_road_layer = lv_obj_create(parent);
+        lv_obj_set_pos(s_road_layer, MAP_X, MAP_Y);
+        lv_obj_set_size(s_road_layer, MAP_W, MAP_H);
+        lv_obj_set_style_bg_opa(s_road_layer, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(s_road_layer, 0, 0);
+        lv_obj_clear_flag(s_road_layer, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_event_cb(s_road_layer, RoadDrawCb, LV_EVENT_DRAW_MAIN, nullptr);
+    }
+
     // ---- The map ----
     MapView_Create(&s_view, parent, MAP_X, MAP_Y, MAP_W, MAP_H, s_points, s_projected,
                    MAX_POLY_POINTS);
@@ -311,6 +416,7 @@ void PageMap::onViewUnload() {
 
     s_status_label = nullptr;
     s_scale_label = nullptr;
+    s_road_layer = nullptr;
     s_tile_layer = nullptr;
     s_tile_img = nullptr;
     s_tile_stat = nullptr;
