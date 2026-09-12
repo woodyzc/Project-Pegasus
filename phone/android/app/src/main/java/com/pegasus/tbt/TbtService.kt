@@ -1,5 +1,6 @@
 package com.pegasus.tbt
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,10 +8,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 
 /**
  * Owns the BLE link for the lifetime of the process.
@@ -35,6 +38,17 @@ class TbtService : Service() {
 
         /** Sent by the notification's Stop action and by the in-app button. */
         const val ACTION_STOP = "com.pegasus.tbt.STOP"
+
+        /**
+         * The route source, when this build has one and it has been started.
+         *
+         * Lives beside the link and for the same reason: the phone spends a
+         * ride in a pocket with no Activity alive, and a navigation session
+         * owned by a screen would die with it.
+         */
+        @Volatile
+        var routeSource: RouteSource? = null
+            private set
 
         private const val PREFS = "pegasus_tbt"
         private const val KEY_ENABLED = "link_enabled"
@@ -134,6 +148,33 @@ class TbtService : Service() {
             }
             ble.start()
         }
+        ensureRouteSource()
+    }
+
+    /**
+     * Starts route planning, if this build contains any.
+     *
+     * Null on a default build, where RouteSources.create returns nothing --
+     * the Google Maps notification path does not need this and must keep
+     * working without it.
+     */
+    private fun ensureRouteSource() {
+        if (routeSource != null) return
+        val source = RouteSources.create(applicationContext) ?: return
+
+        // A planned route goes to the head unit twice over, and the two are
+        // not redundant. The whole polyline is uploaded once so the head unit
+        // can navigate alone when the phone goes quiet, and each live turn is
+        // sent as it changes so the panel counts down while the phone is
+        // talking.
+        source.onRoutePlanned = { planned ->
+            link?.sendRoute(planned.encode())
+        }
+        source.onInstruction = { instruction ->
+            link?.send(instruction.toFrame())
+        }
+        source.start()
+        routeSource = source
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -146,11 +187,17 @@ class TbtService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             // API 34 requires declaring why a foreground service exists.
             // connectedDevice is the honest description: it holds a GATT link.
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            )
+            //
+            // The location type is added only when location is actually
+            // granted. Claiming a type whose permission is missing is not a
+            // refusal on API 34, it is a SecurityException -- so declaring
+            // both unconditionally would mean that denying location crashes
+            // the Bluetooth link, which does not need location at all.
+            var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            if (hasLocationPermission()) {
+                types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            }
+            startForeground(NOTIFICATION_ID, notification, types)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -184,6 +231,11 @@ class TbtService : Service() {
     }
 
     override fun onDestroy() {
+        // Routing first: it holds a trip session that is consuming location,
+        // and there is no reason to keep a GPS burning while the link it feeds
+        // is being torn down.
+        routeSource?.stop()
+        routeSource = null
         link?.stop()
         link = null
         status = "Stopped"
@@ -191,6 +243,15 @@ class TbtService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /** Either precision counts; Android 12+ lets the user grant only coarse. */
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(
+            this, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return

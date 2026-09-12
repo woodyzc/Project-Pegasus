@@ -46,24 +46,39 @@ now decoded with `PolylineUtils` at the precision read back off the route's own
 options. It has still never **run**, and nothing constructs it — see *Still
 missing* below.
 
+### How it is wired
+
+`TbtService` owns the route source for the same reason it owns the BLE link:
+the phone spends a ride in a pocket with no Activity alive. A planned route
+reaches the head unit twice over, and the two are not redundant — the whole
+polyline is uploaded once so the head unit can navigate alone when the phone
+goes quiet, and each live turn is written as it changes so the panel counts
+down while the phone is talking.
+
+`src/main` never names a Mapbox type. `RouteSource` is the interface, and
+`RouteSources.create()` has one body in `src/mapbox` and another in
+`src/nomapbox` that returns null; the build script picks the source set. That
+is what keeps the default build, and every unit test, free of a dependency most
+machines here cannot resolve.
+
+Destinations come from `DestinationParser`, which reads a pasted Google Maps
+link or plain `lat, lon`. There is no map picker and no place search: a map
+means another large SDK and a search means another billed API, for a field used
+once per ride. It prefers the `!3d!4d` pin over the `@` camera position in a
+place URL, because those differ and the camera one puts the destination a
+street away. A shortened `maps.app.goo.gl` link is refused by name, since it
+carries no coordinates at all.
+
 ### Still missing
 
-Tokens are not the last blocker. Even with both in place and the flag on, the
-Mapbox path does nothing, because:
+It has never been **run**. Everything below the compiler is unverified: no
+route has been planned, no turn has come out of the SDK, and the head unit has
+never seen a Mapbox-sourced frame. There is also still no GPS module on the
+head unit, so the offline half cannot be exercised end to end either.
 
-- nothing constructs `MapboxRouteSource` — its two callbacks are declared and
-  never subscribed;
-- no screen collects a destination, and `requestRoute` takes coordinates;
-- `startTripSession()` is never called, so the SDK emits no route progress and
-  therefore no turns;
-- location permission is capped at `maxSdkVersion="30"` in the manifest, which
-  was right when BLE scanning was the only thing that needed it and is not
-  enough for the Navigation SDK.
-
-One more practical note: the Mapbox build produces a **173 MB** debug APK
-against 3.2 MB without it, because it ships native libraries for every ABI.
-An `abiFilters` narrowing to `arm64-v8a` is worth adding before anyone tries to
-install it over a phone link.
+The Mapbox debug APK is 49 MB, down from 173 MB before `abiFilters` narrowed it
+to `arm64-v8a`. That is one architecture on purpose; a build for a different
+phone needs that line changed.
 
 To build it:
 

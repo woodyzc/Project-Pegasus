@@ -45,12 +45,28 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
+
+        if (withMapbox) {
+            // One ABI, or the debug APK is 173 MB against 3.2 MB without
+            // Mapbox: the SDK ships native libraries for four architectures
+            // and three of them are dead weight on any phone this will run on.
+            // Narrow rather than universal because this APK gets moved around
+            // by hand, and an install that has to transfer 173 MB does not
+            // happen twice.
+            ndk { abiFilters.add("arm64-v8a") }
+        }
     }
 
     sourceSets {
         getByName("main") {
+            // Exactly one of these, always. Both define RouteSources.create();
+            // the Mapbox one returns a real route source and the other returns
+            // null, so src/main never names a Mapbox type and the default
+            // build needs no Mapbox account to compile or to test.
             if (withMapbox) {
                 java.srcDir("src/mapbox/java")
+            } else {
+                java.srcDir("src/nomapbox/java")
             }
         }
     }

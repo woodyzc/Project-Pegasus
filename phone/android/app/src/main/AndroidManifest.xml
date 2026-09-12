@@ -11,8 +11,18 @@
     <!-- Pre-12 path: scanning required location permission. -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="30" />
+
+    <!-- Location, with no version cap.
+         It used to be capped at API 30, which was right when BLE scanning was
+         the only thing that wanted it, since neverForLocation on BLUETOOTH_SCAN
+         covers that case on 12+. Mapbox navigation is a different requirement
+         entirely: the trip session produces no fixes and therefore no turns
+         without it, and it needs it on every release, not just old ones.
+         COARSE is listed because Android 12+ lets the user grant approximate
+         location instead, and the request must name both or that choice
+         silently yields nothing. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
@@ -21,6 +31,12 @@
          requires declaring the service's type. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Navigation keeps receiving fixes with the phone in a pocket, which on
+         API 34 is a separate foreground-service type from holding a GATT
+         link. Declared here; whether it is actually claimed is decided at
+         runtime by TbtService, because claiming a type without its permission
+         is a crash rather than a refusal. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <!-- API 33+: without this the service's notification is suppressed. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -42,7 +58,7 @@
         <service
             android:name=".TbtService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|location" />
 
         <!-- Bound by the system once the user enables notification access.
              BIND_NOTIFICATION_LISTENER_SERVICE must be the *service's*

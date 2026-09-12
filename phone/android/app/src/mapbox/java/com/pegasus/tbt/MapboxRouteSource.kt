@@ -8,12 +8,15 @@ import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.geojson.Point as MapboxPoint
 import com.mapbox.geojson.utils.PolylineUtils
 import com.mapbox.common.MapboxOptions
+import com.mapbox.navigation.base.ExperimentalPreviewMapboxNavigationAPI
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.core.MapboxNavigation
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
+import com.mapbox.navigation.core.trip.session.LocationMatcherResult
+import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
 
 /**
@@ -39,7 +42,7 @@ import com.mapbox.navigation.core.trip.session.RouteProgressObserver
  * RouteFrame, the upload in RouteTransfer. All four are unit tested. This file
  * is deliberately thin so the untested surface is as small as it can be.
  */
-class MapboxRouteSource(private val context: Context) {
+class MapboxRouteSource(private val context: Context) : RouteSource {
 
     companion object {
         private const val TAG = "PegasusMapbox"
@@ -53,14 +56,39 @@ class MapboxRouteSource(private val context: Context) {
         private const val GEOMETRY_PRECISION = DirectionsCriteria.GEOMETRY_POLYLINE6
     }
 
-    /** Fires whenever the next turn changes. */
-    var onInstruction: ((NavigationInstruction) -> Unit)? = null
+    override var onInstruction: ((NavigationInstruction) -> Unit)? = null
 
-    /** Fires once when a route is planned, with the whole thing to upload. */
-    var onRoutePlanned: ((PlannedRoute) -> Unit)? = null
+    override var onRoutePlanned: ((PlannedRoute) -> Unit)? = null
 
     private var navigation: MapboxNavigation? = null
     private var routeId = 0
+
+    /**
+     * The rider's last known position, kept as the origin for the next route
+     * request.
+     *
+     * There is no separate location client. The trip session is already
+     * receiving fixes in order to produce route progress, so taking the origin
+     * from the same stream means one source of position rather than two that
+     * can disagree.
+     */
+    @Volatile
+    private var lastKnown: MapboxPoint? = null
+
+    private val locationObserver = object : LocationObserver {
+        override fun onNewRawLocation(rawLocation: com.mapbox.common.location.Location) {
+            lastKnown = MapboxPoint.fromLngLat(rawLocation.longitude, rawLocation.latitude)
+        }
+
+        override fun onNewLocationMatcherResult(locationMatcherResult: LocationMatcherResult) {
+            // The map-matched position, which is the raw fix snapped to the
+            // road network. Better than raw for a route origin: it starts the
+            // route on the road the rider is actually on rather than on a
+            // parallel one a few metres away.
+            val matched = locationMatcherResult.enhancedLocation
+            lastKnown = MapboxPoint.fromLngLat(matched.longitude, matched.latitude)
+        }
+    }
 
     private val progressObserver = RouteProgressObserver { progress ->
         val legProgress = progress.currentLegProgress ?: return@RouteProgressObserver
@@ -90,7 +118,7 @@ class MapboxRouteSource(private val context: Context) {
      * identical to being out of network, or to Mapbox being down, or to the
      * route simply not existing.
      */
-    fun unavailableReason(): String? {
+    override fun unavailableReason(): String? {
         val token = MapboxToken.load(context)
         if (token.isEmpty()) {
             return "No Mapbox token. Enter the public pk. token on the main screen."
@@ -101,7 +129,12 @@ class MapboxRouteSource(private val context: Context) {
         return MapboxToken.Rules.rejectionReason(token)
     }
 
-    fun start() {
+    // startTripSessionWithPermissionCheck is still marked preview in 3.6.0.
+    // Opting in here rather than on the class keeps the annotation next to the
+    // one call it covers, so a future version that promotes or removes it
+    // fails at this line instead of somewhere unrelated.
+    @OptIn(ExperimentalPreviewMapboxNavigationAPI::class)
+    override fun start() {
         unavailableReason()?.let {
             Log.e(TAG, it)
             return
@@ -112,13 +145,51 @@ class MapboxRouteSource(private val context: Context) {
             MapboxOptions.accessToken = MapboxToken.load(context)
             MapboxNavigationApp.setup(NavigationOptions.Builder(context).build())
         }
-        navigation = MapboxNavigationApp.current()
-        navigation?.registerRouteProgressObserver(progressObserver)
+        val nav = MapboxNavigationApp.current() ?: run {
+            Log.e(TAG, "MapboxNavigationApp has no current instance")
+            return
+        }
+        navigation = nav
+        nav.registerRouteProgressObserver(progressObserver)
+        nav.registerLocationObserver(locationObserver)
+
+        // Without this the SDK emits no location and no route progress at all,
+        // so a route can be planned and then never produce a single turn. It
+        // was the quiet half of "compiles but does nothing".
+        //
+        // The WithPermissionCheck variant refuses politely when location has
+        // not been granted, where the plain one throws.
+        runCatching { nav.startTripSessionWithPermissionCheck() }
+            .onFailure { Log.e(TAG, "trip session refused: ${it.message}") }
     }
 
-    fun stop() {
-        navigation?.unregisterRouteProgressObserver(progressObserver)
+    override fun stop() {
+        navigation?.let { nav ->
+            nav.unregisterRouteProgressObserver(progressObserver)
+            nav.unregisterLocationObserver(locationObserver)
+            nav.stopTripSession()
+        }
         navigation = null
+        lastKnown = null
+    }
+
+    /**
+     * Plans a cycling route from the rider's current position to [destination].
+     *
+     * The origin is not a parameter. Asking the caller for one meant either a
+     * second location client or a screen that makes the rider type where they
+     * already are; the trip session knows, so it supplies it.
+     */
+    override fun requestRouteTo(destination: Destination): String? {
+        if (navigation == null) return "Routing is not started."
+        unavailableReason()?.let { return it }
+        val origin = lastKnown
+            ?: return "No position yet. Wait for a GPS fix, or check location permission."
+        requestRoute(
+            from = Pair(origin.latitude(), origin.longitude()),
+            to = Pair(destination.latitude, destination.longitude),
+        )
+        return null
     }
 
     /**
@@ -128,7 +199,7 @@ class MapboxRouteSource(private val context: Context) {
      * bike onto trunk roads and misses every path and cycleway, which is most
      * of what this head unit exists to follow.
      */
-    fun requestRoute(from: Pair<Double, Double>, to: Pair<Double, Double>) {
+    private fun requestRoute(from: Pair<Double, Double>, to: Pair<Double, Double>) {
         val nav = navigation ?: return
 
         val options = RouteOptions.builder()

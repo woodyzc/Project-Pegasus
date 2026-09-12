@@ -36,6 +36,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var parseStatus: TextView
     private lateinit var tokenStatus: TextView
+    private lateinit var navStatus: TextView
     private lateinit var powerButton: Button
     private val handler = Handler(Looper.getMainLooper())
 
@@ -141,6 +142,42 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Destination entry and route planning. Present in every build; a
+        // build without the Mapbox SDK has no route source and says so rather
+        // than hiding the controls, because "the button is missing" is a worse
+        // thing to debug than "the button explains itself".
+        navStatus = TextView(this).apply { textSize = 13f }
+
+        val destinationInput = EditText(this).apply {
+            hint = "Destination: Maps link, or \"lat, lon\""
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }
+
+        val planButton = Button(this).apply {
+            text = "Plan cycling route"
+            setOnClickListener {
+                val source = TbtService.routeSource
+                if (source == null) {
+                    navStatus.text = "Routing: ${RouteSources.unavailable}"
+                    return@setOnClickListener
+                }
+                when (val parsed = DestinationParser.parse(destinationInput.text.toString())) {
+                    is DestinationParser.Result.Err ->
+                        navStatus.text = "Routing: ${parsed.reason}"
+
+                    is DestinationParser.Result.Ok -> {
+                        val where = DestinationParser.describe(parsed.destination)
+                        val refusal = source.requestRouteTo(parsed.destination)
+                        navStatus.text = if (refusal == null) {
+                            "Routing: planning to $where…"
+                        } else {
+                            "Routing: $refusal"
+                        }
+                    }
+                }
+            }
+        }
+
         // Mapbox's public token, entered here rather than compiled in. A token
         // in BuildConfig ends up in the dex as a plain string and travels with
         // every APK; kept in the app's private preferences it needs the device
@@ -204,6 +241,9 @@ class MainActivity : AppCompatActivity() {
             addView(testButton)
             addView(clearButton)
             addView(routeButton)
+            addView(navStatus)
+            addView(destinationInput)
+            addView(planButton)
             addView(tokenStatus)
             addView(tokenInput)
             addView(saveTokenButton)
@@ -217,6 +257,10 @@ class MainActivity : AppCompatActivity() {
         TbtService.startIfEnabled(this)
         syncPowerButton()
         syncTokenStatus(null)
+        navStatus.text = "Routing: " + (
+            TbtService.routeSource?.unavailableReason()
+                ?: if (TbtService.routeSource == null) RouteSources.unavailable else "ready"
+            )
     }
 
     /**
@@ -260,10 +304,18 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             needed += Manifest.permission.BLUETOOTH_SCAN
             needed += Manifest.permission.BLUETOOTH_CONNECT
-        } else {
-            // Pre-12, BLE scanning is gated behind location permission.
-            needed += Manifest.permission.ACCESS_FINE_LOCATION
         }
+
+        // Location on every release, not just pre-12.
+        //
+        // It used to be asked for only below API 31, where BLE scanning
+        // required it. Mapbox navigation needs it on all of them: without a
+        // fix the trip session produces no route progress, so a route plans
+        // and then never yields a single turn. Both precisions are named
+        // because Android 12+ offers the user "approximate" as a choice, and a
+        // request for FINE alone leaves that choice granting nothing.
+        needed += Manifest.permission.ACCESS_FINE_LOCATION
+        needed += Manifest.permission.ACCESS_COARSE_LOCATION
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Without this the foreground service still runs, but its
             // notification is suppressed -- so the one visible sign that the
