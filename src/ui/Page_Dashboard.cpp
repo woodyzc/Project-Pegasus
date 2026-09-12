@@ -16,6 +16,7 @@
 #include "../navigation/TbtParse.h"
 #include "../system/TimeZone.h"
 #include "MapView.h"
+#include "RoadView.h"
 #include "Page_Map.h"
 #include "TbtIcons.h"
 
@@ -683,6 +684,11 @@ void PageDashboard::onViewLoad() {
         MapView_Create(&s_map_view, parent, 0, NAV_Y, FULL_W, NAV_H, s_map_points,
                        s_map_projected, INLINE_MAP_POINTS);
         s_nav_cell = s_map_view.container;
+
+        // Roads here too. The dashboard's navigation tile is a MapView like
+        // the ROUTE page's, and a rider looking at the dashboard has the same
+        // question about which street is which.
+        RoadView_Attach(&s_map_view);
         MapView_FitTrack(&s_map_view);
 
         // Tapping it opens the full-screen map, where the trail gets the
