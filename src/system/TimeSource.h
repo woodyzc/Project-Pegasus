@@ -65,6 +65,16 @@ bool TimeSource_Now(uint32_t now_ms, TimeReading_t *out);
 // Forgets everything. For tests, and for a settings-page reset.
 void TimeSource_Reset(void);
 
+// How many phone readings have been accepted, and how many frames the parser
+// threw out. Surfaced on the settings page, because "the clock is blank" has
+// three very different causes that look identical from the outside: the phone
+// never wrote, it wrote something malformed, or it wrote hours ago and the
+// reading has gone stale. Serial is unusable on this board, so the panel is
+// where diagnostics have to live.
+void TimeSource_NotePhoneRejected(void);
+uint32_t TimeSource_PhoneAccepted(void);
+uint32_t TimeSource_PhoneRejected(void);
+
 #ifdef __cplusplus
 }
 #endif

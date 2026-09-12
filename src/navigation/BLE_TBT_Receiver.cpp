@@ -157,9 +157,12 @@ class ClockCallbacks : public NimBLECharacteristicCallbacks {
 
         if (!Clock_ParseFrame(value.data(), value.length(), &utc_seconds, &offset_min, zone,
                               sizeof(zone))) {
-            // Dropped silently, like a malformed turn. A clock that is wrong
-            // is worse than one that is blank: it names the ride file and
-            // stamps every trackpoint in it.
+            // Dropped, like a malformed turn: a clock that is wrong is worse
+            // than one that is blank, because it names the ride file and
+            // stamps every trackpoint in it. Counted rather than silent,
+            // because a rejected frame and an absent one look the same on the
+            // panel and need opposite fixes.
+            TimeSource_NotePhoneRejected();
             return;
         }
 

@@ -70,6 +70,9 @@ class BleLink(context: Context) {
          */
         const val ROUTE_MTU = 200
 
+        /** How soon to try the clock again after the GATT queue refused it. */
+        const val CLOCK_RETRY_MS = 2_000L
+
         /** Client Characteristic Configuration, the standard notify switch. */
         val CCCD_UUID: java.util.UUID =
             java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -320,12 +323,14 @@ class BleLink(context: Context) {
 
             statusCharacteristic?.let { subscribeToStatus(g, it) }
 
-            // The head unit has no clock of its own until a GNSS module is
-            // fitted, so send one immediately on connecting rather than
-            // waiting for the first timer tick -- the whole point is that the
-            // panel shows a time as soon as the link is up.
-            sendClock()
-            scheduleClock()
+            // The clock is NOT sent here, though that is the obvious place.
+            // Android runs one GATT operation at a time and drops any issued
+            // while another is outstanding, and this method already starts two
+            // -- the descriptor write above and the MTU request below. A clock
+            // write wedged between them is discarded with no error, and the
+            // next attempt is five minutes away, so the panel sits at dashes
+            // for the whole of a short test. It goes in onMtuChanged instead,
+            // which is the last of the connect-time operations to finish.
 
             // A larger MTU matters more now than it did for turns alone. A
             // route chunk is 186 bytes on the wire, and at the 23-byte default
@@ -339,6 +344,12 @@ class BleLink(context: Context) {
             if (transfer != null) {
                 handler.post(::pumpTransfer)
             }
+            // And the last connect-time operation is done, so the queue is
+            // free for the clock. The head unit has no clock of its own until
+            // a GNSS module is fitted, and the point of sending one now rather
+            // than on the first timer tick is that the panel shows a time as
+            // soon as the link comes up.
+            handler.post { sendClock() }
         }
 
         override fun onCharacteristicWrite(
@@ -458,8 +469,10 @@ class BleLink(context: Context) {
         val g = gatt ?: return
         val frame = ClockFrame.now()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeCharacteristic(chr, frame, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(
+                chr, frame, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            ) == BluetoothGatt.GATT_SUCCESS
         } else {
             @Suppress("DEPRECATION")
             run {
@@ -468,18 +481,18 @@ class BleLink(context: Context) {
                 g.writeCharacteristic(chr)
             }
         }
+
+        // A refusal means the queue was busy, not that the head unit said no.
+        // Waiting the full interval after one would leave the panel blank for
+        // five minutes over a collision that clears in milliseconds.
+        scheduleClock(if (ok) ClockFrame.RESEND_INTERVAL_MS else CLOCK_RETRY_MS)
     }
 
-    private val clockTick = object : Runnable {
-        override fun run() {
-            sendClock()
-            scheduleClock()
-        }
-    }
+    private val clockTick = Runnable { sendClock() }
 
-    private fun scheduleClock() {
+    private fun scheduleClock(delayMs: Long) {
         handler.removeCallbacks(clockTick)
-        handler.postDelayed(clockTick, ClockFrame.RESEND_INTERVAL_MS)
+        handler.postDelayed(clockTick, delayMs)
     }
 
     private fun report(message: String) {

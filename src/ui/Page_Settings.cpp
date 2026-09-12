@@ -1,7 +1,9 @@
 #include "Page_Settings.h"
 
 #include <Arduino.h>
-#include <WiFi.h> // WiFi.macAddress() -- reads the eFused MAC, no radio started
+#include <WiFi.h>
+
+#include "../system/TimeSource.h" // WiFi.macAddress() -- reads the eFused MAC, no radio started
 
 #include "../navigation/BLE_TBT_Receiver.h"
 #include "../navigation/GpxTrack.h"
@@ -749,6 +751,27 @@ void PageSettings::onViewLoad() {
              (unsigned)Settings_BootCount());
     MakeInfoRow(info_card, "Last reset", buf);
     MakeInfoRow(info_card, "Build", __DATE__ " " __TIME__);
+
+    // The clock, and where it came from. "Blank clock" has three causes that
+    // look identical on the dashboard and need opposite fixes: the phone never
+    // wrote, it wrote something the parser refused, or it wrote hours ago and
+    // the reading has aged out. This row separates them, and it is the only
+    // way to do so on a board whose serial port cannot be opened.
+    {
+        TimeReading_t reading;
+        const unsigned ok = (unsigned)TimeSource_PhoneAccepted();
+        const unsigned bad = (unsigned)TimeSource_PhoneRejected();
+        if (TimeSource_Now(millis(), &reading)) {
+            const char *src = reading.kind == TIME_SRC_GNSS ? "GNSS" : "phone";
+            snprintf(buf, sizeof(buf), "%s, %+d min (%u ok, %u bad)", src,
+                     (int)reading.offset_min, ok, bad);
+        } else if (ok > 0 || bad > 0) {
+            snprintf(buf, sizeof(buf), "stale (%u ok, %u bad)", ok, bad);
+        } else {
+            snprintf(buf, sizeof(buf), "never set (no writes)");
+        }
+        MakeInfoRow(info_card, "Clock", buf);
+    }
 
     // Ride logging has no controls -- it records whenever a card is present --
     // so this line is the only way to tell whether it is working. Without it a

@@ -17,6 +17,9 @@ static bool s_offset_known = false;
 static char s_zone[8] = {0};
 static uint32_t s_offset_ms = 0;
 
+static uint32_t s_phone_accepted = 0;
+static uint32_t s_phone_rejected = 0;
+
 static bool Fresh(uint32_t now_ms, uint32_t then_ms) {
     /* Unsigned subtraction, so a tick counter that wraps after 49 days still
        yields the right elapsed time rather than an enormous one. */
@@ -25,6 +28,8 @@ static bool Fresh(uint32_t now_ms, uint32_t then_ms) {
 
 void TimeSource_SetFromPhone(uint32_t utc_seconds, int16_t offset_min, const char *zone,
                              uint32_t now_ms) {
+    s_phone_accepted++;
+
     /* The offset and zone are taken unconditionally. A satellite knows the
        instant and has no idea what the rider would call it. */
     s_offset_min = offset_min;
@@ -82,6 +87,18 @@ bool TimeSource_Now(uint32_t now_ms, TimeReading_t *out) {
         out->zone[0] = '\0';
     }
     return true;
+}
+
+void TimeSource_NotePhoneRejected(void) {
+    s_phone_rejected++;
+}
+
+uint32_t TimeSource_PhoneAccepted(void) {
+    return s_phone_accepted;
+}
+
+uint32_t TimeSource_PhoneRejected(void) {
+    return s_phone_rejected;
 }
 
 void TimeSource_Reset(void) {
