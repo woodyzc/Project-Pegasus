@@ -40,20 +40,58 @@ is deliberately thin so the uncompiled surface is as small as possible.
 
 To build it:
 
-1. Create a Mapbox account. On the tokens page make **two** tokens:
-   - a **public** token (`pk.…`) for the app at runtime;
-   - a **secret** token (`sk.…`) with the `DOWNLOADS:READ` scope for Gradle.
-2. Put the secret one in `~/.gradle/gradle.properties`, **not** in this repo:
+1. Sign up at [mapbox.com](https://www.mapbox.com/). A free account is enough
+   to start; see *Cost* below.
+2. Go to [account.mapbox.com/access-tokens](https://account.mapbox.com/access-tokens/).
+   You need **two different tokens**, and this is the part people get wrong.
+   - The **public** token (`pk.…`) already exists — it is created with the
+     account and labelled *Default public token*. Copy it.
+   - The **secret** token (`sk.…`) has to be made: *Create a token*, name it,
+     and tick **`DOWNLOADS:READ`** under *Secret scopes*. This is the only
+     scope it needs.
+
+   A secret token is displayed **once, at creation**. Copy it then; if you
+   lose it, delete it and make another.
+3. Put the **secret** one in `~/.gradle/gradle.properties` — outside this repo,
+   because it is a credential:
    ```properties
    MAPBOX_DOWNLOADS_TOKEN=sk.ey...
    ```
-3. Put the public one in the app's resources or `local.properties`, wherever
-   you wire `NavigationOptions` to read it.
-4. Build with the flag, and **without** `--offline`, since the artifacts are
-   not in the local cache:
+4. Put the **public** one in `phone/android/local.properties`, which git does
+   not track:
+   ```properties
+   MAPBOX_ACCESS_TOKEN=pk.ey...
+   ```
+   The build reads it into `BuildConfig.MAPBOX_ACCESS_TOKEN`, and
+   `MapboxRouteSource.unavailableReason()` reports in words if it is missing or
+   if the two tokens were swapped — which is the failure that otherwise looks
+   like being offline.
+5. Build with the flag, and **without** `--offline`, since the artifacts are
+   not in the local Gradle cache:
    ```sh
    gradle -PwithMapbox=true assembleDebug
    ```
+
+### Which token does what
+
+| | Public `pk.…` | Secret `sk.…` |
+|---|---|---|
+| Used by | the app, at runtime | Gradle, at build time |
+| Purpose | routing requests | downloading the SDK |
+| Scope | default | `DOWNLOADS:READ` |
+| Lives in | `local.properties` | `~/.gradle/gradle.properties` |
+| Shown again? | yes, any time | **no, once only** |
+
+Swapping them fails in two confusing ways: Gradle cannot resolve the
+dependency, or routing requests are rejected. Neither says "wrong token".
+
+### Cost
+
+The Navigation SDK is billed per monthly active user with a free allowance, and
+the Directions API has its own monthly free request quota. Personal use by one
+rider sits far inside both. Mapbox does ask for a card on file before enabling
+the Navigation SDK, so check the current rates on their pricing page rather than
+trusting this paragraph — they change.
 
 Expect `MapboxRouteSource.kt` to need adjusting on first compile. Its SDK calls
 are written from the published API of version 3.6.0 and have not been checked

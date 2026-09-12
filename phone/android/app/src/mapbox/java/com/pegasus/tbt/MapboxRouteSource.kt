@@ -6,6 +6,7 @@ import com.mapbox.api.directions.v5.DirectionsCriteria
 import com.mapbox.api.directions.v5.models.DirectionsRoute
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.geojson.Point as MapboxPoint
+import com.mapbox.common.MapboxOptions
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
@@ -79,8 +80,31 @@ class MapboxRouteSource(private val context: Context) {
         )
     }
 
+    /**
+     * Returns an error string if the app cannot route, or null if it can.
+     *
+     * Checked up front and reported in words, because the failure without this
+     * is a routing request that silently returns nothing -- which looks
+     * identical to being out of network, or to Mapbox being down, or to the
+     * route simply not existing.
+     */
+    fun unavailableReason(): String? = when {
+        BuildConfig.MAPBOX_ACCESS_TOKEN.isEmpty() ->
+            "No Mapbox token. Put MAPBOX_ACCESS_TOKEN=pk.… in local.properties."
+        !BuildConfig.MAPBOX_ACCESS_TOKEN.startsWith("pk.") ->
+            "Mapbox token is not a public token. It must start with pk., not sk."
+        else -> null
+    }
+
     fun start() {
+        unavailableReason()?.let {
+            Log.e(TAG, it)
+            return
+        }
         if (!MapboxNavigationApp.isSetup()) {
+            // v3 takes the token globally rather than on NavigationOptions,
+            // which is one of the things that moved at the major version.
+            MapboxOptions.accessToken = BuildConfig.MAPBOX_ACCESS_TOKEN
             MapboxNavigationApp.setup(NavigationOptions.Builder(context).build())
         }
         navigation = MapboxNavigationApp.current()
