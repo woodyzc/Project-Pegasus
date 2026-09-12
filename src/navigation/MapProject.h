@@ -42,6 +42,32 @@ void Map_Project(double lat, double lon, double center_lat, double center_lon,
                  double metres_per_pixel, int16_t center_x, int16_t center_y,
                  int16_t *out_x, int16_t *out_y);
 
+// ---- Projecting many points at one view ----
+// Map_Project takes the view as arguments, so it recomputes cos(center_lat)
+// and two divisions on every call. That is invisible for a track of a few
+// hundred points and ruinous for a road map: 27 visible ways took 17ms to
+// produce 41 drawn segments, nearly all of it transcendentals for points that
+// were then clipped away.
+//
+// Prepare once per frame, then project with multiplies and adds only.
+typedef struct {
+    double center_lat;
+    double center_lon;
+    double px_per_deg_lon; // already folded: metres/deg * cos(lat) / mpp
+    double px_per_deg_lat;
+    int16_t center_x;
+    int16_t center_y;
+    bool valid;
+} MapProjection_t;
+
+void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double center_lon,
+                           double metres_per_pixel, int16_t center_x, int16_t center_y);
+
+// Identical results to Map_Project for the same view -- the host tests pin
+// them together so the fast path cannot drift from the reference.
+void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, int16_t *out_x,
+                         int16_t *out_y);
+
 // Metres per pixel that fits a bounding box into width x height, leaving
 // `margin_px` on every side. Never returns zero or a negative: a track with no
 // extent (one point, or a rider standing still) still needs a usable scale.

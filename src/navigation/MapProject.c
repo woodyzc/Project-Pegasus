@@ -14,6 +14,45 @@ static int16_t ClampCoord(double value) {
     return (int16_t)(value + (value >= 0.0 ? 0.5 : -0.5));
 }
 
+void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double center_lon,
+                           double metres_per_pixel, int16_t center_x, int16_t center_y) {
+    if (proj == NULL) {
+        return;
+    }
+    proj->center_lat = center_lat;
+    proj->center_lon = center_lon;
+    proj->center_x = center_x;
+    proj->center_y = center_y;
+    proj->valid = (metres_per_pixel > 0.0);
+    if (!proj->valid) {
+        proj->px_per_deg_lon = 0.0;
+        proj->px_per_deg_lat = 0.0;
+        return;
+    }
+
+    /* cos() of the VIEW centre, not of each point: using the point's own
+       latitude would scale every row differently and shear the map. Folding
+       the division in here is what makes the per-point path multiply-only. */
+    const double lon_scale = cos(center_lat * M_PI / 180.0);
+    proj->px_per_deg_lon = MAP_EARTH_METRES_PER_DEGREE * lon_scale / metres_per_pixel;
+    proj->px_per_deg_lat = MAP_EARTH_METRES_PER_DEGREE / metres_per_pixel;
+}
+
+void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, int16_t *out_x,
+                         int16_t *out_y) {
+    if (proj == NULL || out_x == NULL || out_y == NULL) {
+        return;
+    }
+    if (!proj->valid) {
+        *out_x = proj->center_x;
+        *out_y = proj->center_y;
+        return;
+    }
+    *out_x = ClampCoord((double)proj->center_x + (lon - proj->center_lon) * proj->px_per_deg_lon);
+    /* Screen y grows downward while latitude grows north, hence the sign. */
+    *out_y = ClampCoord((double)proj->center_y - (lat - proj->center_lat) * proj->px_per_deg_lat);
+}
+
 void Map_Project(double lat, double lon, double center_lat, double center_lon,
                  double metres_per_pixel, int16_t center_x, int16_t center_y,
                  int16_t *out_x, int16_t *out_y) {
@@ -27,15 +66,11 @@ void Map_Project(double lat, double lon, double center_lat, double center_lon,
     }
 
     {
-        /* cos() of the VIEW centre, not of each point: using the point's own
-           latitude would scale every row differently and shear the trail. */
-        const double lon_scale = cos(center_lat * M_PI / 180.0);
-        const double dx_m = (lon - center_lon) * MAP_EARTH_METRES_PER_DEGREE * lon_scale;
-        const double dy_m = (lat - center_lat) * MAP_EARTH_METRES_PER_DEGREE;
-
-        *out_x = ClampCoord((double)center_x + dx_m / metres_per_pixel);
-        /* Screen y grows downward while latitude grows north, hence the sign. */
-        *out_y = ClampCoord((double)center_y - dy_m / metres_per_pixel);
+        /* Delegates, so there is one projection rather than two that agree
+           until someone edits one of them. */
+        MapProjection_t proj;
+        Map_PrepareProjection(&proj, center_lat, center_lon, metres_per_pixel, center_x, center_y);
+        Map_ProjectPrepared(&proj, lat, lon, out_x, out_y);
     }
 }
 

@@ -167,6 +167,45 @@ int main(void) {
     Map_Project(0, 0, 0, 0, 1.0, 0, 0, NULL, &y); /* must not crash */
     printf("done\n");
 
+    printf("- the prepared projection matches the reference exactly: ");
+    {
+        // The fast path exists because Map_Project recomputes a cosine and two
+        // divisions per point, which is ruinous for a road map. It is only
+        // safe if it agrees with the reference everywhere, so check it does --
+        // across latitudes, scales and offsets, not at one convenient point.
+        const double centres[][2] = {{38.88, -77.14}, {0.0, 0.0}, {60.2, 24.9}, {-33.9, 151.2}};
+        const double scales[] = {1.0, 2.0, 17.5, 80.0};
+
+        for (size_t c = 0; c < sizeof(centres) / sizeof(centres[0]); c++) {
+            for (size_t s = 0; s < sizeof(scales) / sizeof(scales[0]); s++) {
+                MapProjection_t proj;
+                Map_PrepareProjection(&proj, centres[c][0], centres[c][1], scales[s], 120, 131);
+
+                for (int dy = -3; dy <= 3; dy++) {
+                    for (int dx = -3; dx <= 3; dx++) {
+                        const double lat = centres[c][0] + dy * 0.004;
+                        const double lon = centres[c][1] + dx * 0.004;
+
+                        int16_t rx, ry, fx, fy;
+                        Map_Project(lat, lon, centres[c][0], centres[c][1], scales[s], 120, 131,
+                                    &rx, &ry);
+                        Map_ProjectPrepared(&proj, lat, lon, &fx, &fy);
+                        check(rx == fx && ry == fy, "prepared equals reference");
+                    }
+                }
+            }
+        }
+
+        // A degenerate scale must land on the centre either way rather than
+        // dividing by zero.
+        MapProjection_t bad;
+        Map_PrepareProjection(&bad, 38.0, -77.0, 0.0, 55, 66);
+        int16_t bx, by;
+        Map_ProjectPrepared(&bad, 39.0, -78.0, &bx, &by);
+        check(bx == 55 && by == 66, "zero scale pins to the centre");
+    }
+    printf("done\n");
+
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     printf("RESULT: %s\n", failures == 0 ? "PASS" : "FAIL");
     return failures == 0 ? 0 : 1;

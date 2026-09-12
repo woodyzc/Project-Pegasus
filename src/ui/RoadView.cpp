@@ -131,6 +131,12 @@ void RoadDrawCb(lv_event_t *e) {
     const int32_t view_min_lon = (int32_t)((clon - half_w_deg) * ROADMAP_COORD_SCALE);
     const int32_t view_max_lon = (int32_t)((clon + half_w_deg) * ROADMAP_COORD_SCALE);
 
+    // Prepared once for the whole frame. The per-point path is then two
+    // multiplies and two adds, where Map_Project would recompute a cosine and
+    // two divisions for every point of every visible way.
+    MapProjection_t proj;
+    Map_PrepareProjection(&proj, clat, clon, mpp, (int16_t)(w / 2), (int16_t)(h / 2));
+
     const uint32_t started = micros();
     uint32_t segments = 0;
     const size_t ways = RoadMap_WayCount();
@@ -194,9 +200,8 @@ void RoadDrawCb(lv_event_t *e) {
             bool have_prev = false;
             for (uint16_t k = 0; k < way.count; k++) {
                 int16_t x, y;
-                Map_Project(way.points[k * 2] / ROADMAP_COORD_SCALE,
-                            way.points[k * 2 + 1] / ROADMAP_COORD_SCALE, clat, clon, mpp,
-                            (int16_t)(w / 2), (int16_t)(h / 2), &x, &y);
+                Map_ProjectPrepared(&proj, way.points[k * 2] / ROADMAP_COORD_SCALE,
+                                    way.points[k * 2 + 1] / ROADMAP_COORD_SCALE, &x, &y);
                 lv_point_t p = {(lv_coord_t)(area.x1 + x), (lv_coord_t)(area.y1 + y)};
 
                 const uint8_t code = OutCode(&p, &area);
