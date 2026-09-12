@@ -151,8 +151,12 @@ class BleLink(context: Context) {
             val chunk = t.nextChunk(System.currentTimeMillis()) ?: break
             if (!writeChunk(g, chr, chunk)) {
                 // The stack refused the write, which on Android means one is
-                // already in flight. Stop and let the next notification or
-                // tick resume; retrying here would spin.
+                // already in flight. Give the chunk back before stopping:
+                // nextChunk has already advanced past it, so without this it
+                // is simply never sent, and a burst loses roughly every other
+                // one. Then let the write callback or the tick resume;
+                // retrying here would spin.
+                t.onWriteRefused()
                 break
             }
         }

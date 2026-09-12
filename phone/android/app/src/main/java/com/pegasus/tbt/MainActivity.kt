@@ -257,10 +257,37 @@ class MainActivity : AppCompatActivity() {
         TbtService.startIfEnabled(this)
         syncPowerButton()
         syncTokenStatus(null)
-        navStatus.text = "Routing: " + (
-            TbtService.routeSource?.unavailableReason()
-                ?: if (TbtService.routeSource == null) RouteSources.unavailable else "ready"
-            )
+        syncNavStatus()
+    }
+
+    /**
+     * Whether routing could plan a route right now, and why not if it could
+     * not.
+     *
+     * Re-read rather than remembered: the service starts before the user has
+     * answered the location dialog, so this line is wrong the moment it is
+     * first drawn and right a few seconds later.
+     */
+    private fun syncNavStatus() {
+        val source = TbtService.routeSource
+        navStatus.text = "Routing: " + when {
+            source == null -> RouteSources.unavailable
+            else -> source.unavailableReason() ?: "ready"
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        // Location arrives here, after the service has already started without
+        // it. Nothing else would ever start the trip session, so a granted
+        // permission would otherwise leave routing permanently dead until the
+        // next reboot. start() is idempotent for exactly this call.
+        TbtService.routeSource?.start()
+        syncNavStatus()
     }
 
     /**

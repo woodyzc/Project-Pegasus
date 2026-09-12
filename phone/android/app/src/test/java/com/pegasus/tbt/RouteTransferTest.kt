@@ -203,4 +203,58 @@ class RouteTransferTest {
         assertTrue("chunk count ${t.totalChunks}", t.totalChunks in 55..65)
         assertNotNull(t.nextChunk(0))
     }
+
+    /**
+     * Reproduces the "11 of 13 chunks, pass 5" failure seen on real hardware.
+     *
+     * Android accepts one outstanding GATT write at a time and refuses the
+     * rest, so a caller draining the window gets a refusal on most of them.
+     * Before onWriteRefused existed, each refusal consumed a chunk that was
+     * then never written, and a 13-chunk route converged a couple short no
+     * matter how many passes it spent.
+     */
+    @Test
+    fun `a refused write does not lose its chunk`() {
+        val chunks = (0 until 13).map { byteArrayOf(it.toByte()) }
+        val transfer = RouteTransfer(chunks)
+
+        val delivered = mutableSetOf<Int>()
+        var now = 0L
+        // The real stack: the first write of a burst lands, the next is
+        // refused because one is already in flight.
+        var acceptNext = true
+
+        repeat(200) {
+            val chunk = transfer.nextChunk(now) ?: run {
+                transfer.onProgress(delivered.size, now)
+                acceptNext = true
+                return@repeat
+            }
+            if (acceptNext) {
+                delivered += chunk[0].toInt()
+                acceptNext = false
+            } else {
+                transfer.onWriteRefused()
+                // The write callback that frees the queue again.
+                acceptNext = true
+            }
+            now += 1
+        }
+
+        assertEquals(RouteTransfer.State.COMPLETE, transfer.state)
+        assertEquals(13, delivered.size)
+    }
+
+    @Test
+    fun `handing a chunk back re-offers the same one`() {
+        val chunks = (0 until 4).map { byteArrayOf(it.toByte()) }
+        val transfer = RouteTransfer(chunks)
+
+        assertEquals(0, transfer.nextChunk(0L)!![0].toInt())
+        val second = transfer.nextChunk(0L)!![0].toInt()
+        assertEquals(1, second)
+        transfer.onWriteRefused()
+        // The same chunk, not the one after it.
+        assertEquals(1, transfer.nextChunk(0L)!![0].toInt())
+    }
 }

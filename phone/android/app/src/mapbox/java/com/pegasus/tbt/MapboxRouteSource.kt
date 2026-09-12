@@ -14,7 +14,7 @@ import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.core.MapboxNavigation
-import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
+import com.mapbox.navigation.core.MapboxNavigationProvider
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
@@ -139,19 +139,33 @@ class MapboxRouteSource(private val context: Context) : RouteSource {
             Log.e(TAG, it)
             return
         }
-        if (!MapboxNavigationApp.isSetup()) {
-            // v3 takes the token globally rather than on NavigationOptions,
-            // which is one of the things that moved at the major version.
-            MapboxOptions.accessToken = MapboxToken.load(context)
-            MapboxNavigationApp.setup(NavigationOptions.Builder(context).build())
+        // v3 takes the token globally rather than on NavigationOptions,
+        // which is one of the things that moved at the major version.
+        MapboxOptions.accessToken = MapboxToken.load(context)
+
+        // MapboxNavigationProvider, not MapboxNavigationApp.
+        //
+        // MapboxNavigationApp builds its instance only while a LifecycleOwner
+        // is attached, and hands back null until one is. Our owner is a
+        // foreground Service, precisely because the phone spends a ride in a
+        // pocket with no Activity alive -- so current() was always null and
+        // every route request answered "Routing is not started." Provider
+        // creates the instance outright and ties it to nothing.
+        val nav = if (MapboxNavigationProvider.isCreated()) {
+            MapboxNavigationProvider.retrieve()
+        } else {
+            MapboxNavigationProvider.create(NavigationOptions.Builder(context).build())
         }
-        val nav = MapboxNavigationApp.current() ?: run {
-            Log.e(TAG, "MapboxNavigationApp has no current instance")
-            return
+        // Observers are registered once. start() is safe to call again --
+        // and is, the moment location permission is granted -- because the
+        // service comes up before the user has answered that dialog, and a
+        // trip session refused for want of permission has to be retried by
+        // something. Registering twice would deliver every turn twice.
+        if (navigation == null) {
+            navigation = nav
+            nav.registerRouteProgressObserver(progressObserver)
+            nav.registerLocationObserver(locationObserver)
         }
-        navigation = nav
-        nav.registerRouteProgressObserver(progressObserver)
-        nav.registerLocationObserver(locationObserver)
 
         // Without this the SDK emits no location and no route progress at all,
         // so a route can be planned and then never produce a single turn. It
@@ -171,6 +185,10 @@ class MapboxRouteSource(private val context: Context) : RouteSource {
         }
         navigation = null
         lastKnown = null
+        // Releases the native engine and the location subscription with it.
+        if (MapboxNavigationProvider.isCreated()) {
+            MapboxNavigationProvider.destroy()
+        }
     }
 
     /**
@@ -181,8 +199,11 @@ class MapboxRouteSource(private val context: Context) : RouteSource {
      * already are; the trip session knows, so it supplies it.
      */
     override fun requestRouteTo(destination: Destination): String? {
-        if (navigation == null) return "Routing is not started."
+        // unavailableReason first: a missing or bad token is a specific,
+        // actionable answer, and reporting "not started" over the top of it
+        // sends the reader looking in the wrong place.
         unavailableReason()?.let { return it }
+        if (navigation == null) return "Routing is not started."
         val origin = lastKnown
             ?: return "No position yet. Wait for a GPS fix, or check location permission."
         requestRoute(

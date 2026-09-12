@@ -101,6 +101,27 @@ class RouteTransfer(
     }
 
     /**
+     * Hands back the chunk [nextChunk] just returned, because the write was
+     * refused before it left the phone.
+     *
+     * Without this a refused write silently drops a chunk. nextChunk advances
+     * the index as it hands one out, so a caller that cannot write it has
+     * consumed it -- and Android refuses a write whenever another is still in
+     * flight, which for a burst is most of them. The result was a pass that
+     * delivered roughly every other chunk, five passes that each lost a few
+     * more, and an upload that stalled a couple of chunks short: the real
+     * symptom was "11 of 13 chunks, pass 5".
+     *
+     * Must be called before the next nextChunk, which is the only ordering
+     * the caller can get wrong.
+     */
+    fun onWriteRefused() {
+        if (state != State.SENDING) return
+        if (nextIndex > 0) nextIndex--
+        if (inFlight > 0) inFlight--
+    }
+
+    /**
      * Feeds in the head unit's progress report: how many chunks it has.
      *
      * A report that moves the count resets the stall timer. One that does not
