@@ -51,6 +51,28 @@ constexpr uint16_t ROAD_VISIBLE_MAX = 2048;
 // near-identical points OSM records along a straight road.
 constexpr int ROAD_MIN_SEGMENT_PX = 3;
 
+// Region codes for rejecting a segment that cannot cross the view.
+//
+// Culling is per WAY, and a way only has to touch the view to survive it --
+// then every one of its points is drawn, including the miles of it that are
+// nowhere near the screen. At 480m across that was 966 segments from 55 ways
+// and a 38ms frame, most of it spent drawing road that was never visible.
+//
+// Two endpoints sharing any outside edge cannot have the segment between them
+// cross the view, which is the cheap half of Cohen-Sutherland and all that is
+// needed here: LVGL clips the drawing correctly either way, this just avoids
+// asking it to.
+enum { OUT_LEFT = 1, OUT_RIGHT = 2, OUT_TOP = 4, OUT_BOTTOM = 8 };
+
+inline uint8_t OutCode(const lv_point_t *p, const lv_area_t *a) {
+    uint8_t code = 0;
+    if (p->x < a->x1) code |= OUT_LEFT;
+    else if (p->x > a->x2) code |= OUT_RIGHT;
+    if (p->y < a->y1) code |= OUT_TOP;
+    else if (p->y > a->y2) code |= OUT_BOTTOM;
+    return code;
+}
+
 const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
     {0x333A42, 1}, // minor
     {0x4E5760, 2}, // secondary
@@ -168,6 +190,7 @@ void RoadDrawCb(lv_event_t *e) {
             // does exactly this for the recorded track -- see
             // Map_BuildPolyline -- and the roads simply were not.
             lv_point_t prev = {0, 0};
+            uint8_t prev_code = 0;
             bool have_prev = false;
             for (uint16_t k = 0; k < way.count; k++) {
                 int16_t x, y;
@@ -175,6 +198,8 @@ void RoadDrawCb(lv_event_t *e) {
                             way.points[k * 2 + 1] / ROADMAP_COORD_SCALE, clat, clon, mpp,
                             (int16_t)(w / 2), (int16_t)(h / 2), &x, &y);
                 lv_point_t p = {(lv_coord_t)(area.x1 + x), (lv_coord_t)(area.y1 + y)};
+
+                const uint8_t code = OutCode(&p, &area);
 
                 if (have_prev) {
                     const int dx = p.x > prev.x ? p.x - prev.x : prev.x - p.x;
@@ -184,10 +209,15 @@ void RoadDrawCb(lv_event_t *e) {
                     if (dx + dy < ROAD_MIN_SEGMENT_PX && k + 1 < way.count) {
                         continue;
                     }
-                    lv_draw_line(ctx, &dsc, &prev, &p);
-                    segments++;
+                    // Both ends off the same side: the segment cannot cross
+                    // the view, so there is nothing for LVGL to clip.
+                    if ((code & prev_code) == 0) {
+                        lv_draw_line(ctx, &dsc, &prev, &p);
+                        segments++;
+                    }
                 }
                 prev = p;
+                prev_code = code;
                 have_prev = true;
             }
         }

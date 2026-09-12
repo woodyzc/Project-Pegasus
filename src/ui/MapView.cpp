@@ -176,7 +176,10 @@ namespace {
 // Metres per pixel, roughly halving each step. Spans 0.5km to 19km across a
 // 240px panel: below that a rider is looking at their own front wheel, above
 // it the detail filter has hidden everything worth seeing anyway.
-const double ZOOM_LADDER[] = {2.0, 4.0, 8.0, 16.0, 32.0, 80.0};
+// 1 m/px is 240m across this panel, ~35 seconds of riding at 25 km/h. That is
+// the useful floor: close enough to read a complex junction, not so close that
+// the next turn is off-screen before you reach it.
+const double ZOOM_LADDER[] = {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 80.0};
 constexpr int ZOOM_STEPS = (int)(sizeof(ZOOM_LADDER) / sizeof(ZOOM_LADDER[0]));
 
 // Nearest rung to where the view currently sits, so the first press after an
