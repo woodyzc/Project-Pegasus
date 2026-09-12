@@ -10,6 +10,7 @@
 #include "../system/DataCenter.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
+#include "../system/RideStats.h"
 #include "../system/Settings.h"
 #include "../system/Trip.h"
 #include "../navigation/GpxTrack.h"
@@ -120,6 +121,9 @@ lv_obj_t *s_clock_caption = nullptr;
 const char *s_active_tz = nullptr;
 lv_obj_t *s_incline_label = nullptr;
 lv_obj_t *s_hr_label = nullptr;
+// Ride averages and peaks, beside the live value in the two tall cells.
+lv_obj_t *s_speed_stats_label = nullptr;
+lv_obj_t *s_hr_stats_label = nullptr;
 lv_obj_t *s_incline_cell = nullptr;
 lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
@@ -347,12 +351,33 @@ lv_obj_t *MakeSeparator(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t
 // lv_obj_align is stored on the object and re-applied every time the label
 // resizes. These labels change width constantly -- 9.5 to 10.5, "km/h" to
 // "mph" -- so a one-shot placement silently goes stale.
-lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
+lv_obj_t *MakeValueIn(lv_obj_t *cell, const char *text, uint32_t color,
+                      const lv_font_t *font) {
     lv_obj_t *label = lv_label_create(cell);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_40, 0);
+    lv_obj_set_style_text_font(label, font, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
+    return label;
+}
+
+lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
+    return MakeValueIn(cell, text, color, &lv_font_montserrat_40);
+}
+
+// The "AVG 12.3 / MAX 24.8" block, bottom-right of a cell, beside the value.
+//
+// Two lines in one label rather than two labels: they are always written
+// together, and a single right-aligned label keeps them aligned with each
+// other without a second alignment to go stale.
+lv_obj_t *MakeSecondary(lv_obj_t *cell) {
+    lv_obj_t *label = lv_label_create(cell);
+    lv_label_set_text(label, "AVG --\nMAX --");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_style_text_line_space(label, 2, 0);
+    lv_obj_align(label, LV_ALIGN_BOTTOM_RIGHT, -CELL_PAD, CELL_VALUE_Y);
     return label;
 }
 
@@ -602,6 +627,32 @@ void RenderSpeedAndTrip() {
     if (s_trip_unit_label != nullptr) {
         lv_label_set_text(s_trip_unit_label, Settings_DistanceUnitLabel());
     }
+
+    if (s_speed_stats_label != nullptr) {
+        // Converted like the live value, so all three agree with the unit in
+        // the corner. A ride average shown in km/h beside a speed in mph is
+        // the kind of thing nobody notices until they are comparing rides.
+        const float avg = Settings_SpeedFromKmh(RideStats_AvgSpeedKmh());
+        const float max = Settings_SpeedFromKmh(RideStats_MaxSpeedKmh());
+        lv_label_set_text_fmt(s_speed_stats_label, "AVG %.1f\nMAX %.1f", avg, max);
+    }
+}
+
+void RenderHeartRateStats() {
+    if (s_hr_stats_label == nullptr) {
+        return;
+    }
+    const uint8_t avg = RideStats_AvgBpm();
+    const uint8_t max = RideStats_MaxBpm();
+    // Dashes rather than zero before a strap has reported. Zero is a number a
+    // rider could believe, and "average heart rate 0" reads as a fault rather
+    // than as an absence.
+    if (avg == 0) {
+        lv_label_set_text(s_hr_stats_label, "AVG --\nMAX --");
+    } else {
+        lv_label_set_text_fmt(s_hr_stats_label, "AVG %u\nMAX %u", (unsigned)avg,
+                              (unsigned)max);
+    }
 }
 
 // The only place in this file allowed to touch LVGL objects: an lv_timer
@@ -616,6 +667,13 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     // for nothing.
     if (lv_tick_elaps(s_clock_drawn_ms) >= 1000) {
         s_clock_drawn_ms = lv_tick_get();
+
+        // The averages move slowly and, more to the point, nothing publishes
+        // while the rider is stopped -- so a block redrawn only on a GPS or
+        // heart-rate publish would freeze exactly when someone is standing
+        // over the bike reading it.
+        RenderSpeedAndTrip();
+        RenderHeartRateStats();
         const bool fix_is_drawing =
             s_clock_from_fix_ms != 0 && lv_tick_elaps(s_clock_from_fix_ms) < 3000;
         if (!fix_is_drawing) {
@@ -908,6 +966,10 @@ Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 
 void Page_Dashboard_ResetTrip() {
     Trip_Reset();
+    // The averages and maxima describe the same ride as the distance, so they
+    // go with it. Leaving a maximum speed behind after a reset would report
+    // last week's descent as part of today's commute.
+    RideStats_Reset();
     if (s_trip_label != nullptr) {
         RenderSpeedAndTrip();
     }
@@ -943,9 +1005,17 @@ void PageDashboard::onViewLoad() {
     const lv_coord_t ZONE_BAR_H = 8;                           // the colour bands
     const lv_coord_t ZONE_MARK_H = 8;                          // the triangle above them
     const lv_coord_t CELL_H = 60;
-    const lv_coord_t CELL_W = SCREEN_W / 2;                    // 120
+    // Two unequal columns, not the even split this used to be.
+    //
+    // Speed and heart rate share the left one and it is wider, because those
+    // two now carry a ride average and a peak beside the live number and the
+    // other two do not. Trip and incline are a glance rather than a readout:
+    // they keep their own column and take a smaller face, which is what pays
+    // for the width the left column gains.
+    const lv_coord_t STATS_W = 148;
+    const lv_coord_t SEC_W = SCREEN_W - STATS_W;               // 92
     const lv_coord_t COL1 = 0;
-    const lv_coord_t COL2 = CELL_W;                            // 120
+    const lv_coord_t COL2 = STATS_W;
 
     const lv_coord_t ZONE_BAR_Y = SCREEN_H - ZONE_BAR_H;       // 312
     const lv_coord_t ZONE_MARK_Y = ZONE_BAR_Y - ZONE_MARK_H;   // 304
@@ -1038,8 +1108,13 @@ void PageDashboard::onViewLoad() {
         // four, with no branch in the code that fills it.
         s_nav_content = lv_obj_create(s_nav_cell);
         lv_obj_remove_style_all(s_nav_content);
-        lv_obj_set_pos(s_nav_content, PAD, STATUS_H);
-        lv_obj_set_size(s_nav_content, FULL_W - 2 * PAD, NAV_H - STATUS_H - PAD);
+        // Inset less on the left than on the right. The arrow sits at this
+        // edge and had more air around it than the tile could spare, while
+        // the distance on the other side is right-aligned and stays put
+        // because the width is reduced by the same amount it gains.
+        const lv_coord_t NAV_PAD_L = 2;
+        lv_obj_set_pos(s_nav_content, NAV_PAD_L, STATUS_H);
+        lv_obj_set_size(s_nav_content, FULL_W - NAV_PAD_L - PAD, NAV_H - STATUS_H - PAD);
         lv_obj_clear_flag(s_nav_content, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(s_nav_content, LV_FLEX_FLOW_COLUMN);
         // CENTER, not SPACE_BETWEEN.
@@ -1174,17 +1249,36 @@ void PageDashboard::onViewLoad() {
     lv_obj_set_style_text_color(gear, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_center(gear);
 
-    s_clock_label = lv_label_create(parent);
+    // The time and its zone, in a flex row rather than aligned to each other.
+    //
+    // The caption used to be placed with lv_obj_align_to against the clock,
+    // which resolves once, against the clock's width at that instant -- and at
+    // that instant the clock read "--:--". When a real time arrived the label
+    // changed width and the caption stayed put, so "18:43" and "EDT" ran into
+    // each other. A flex row is re-laid out whenever either label resizes, and
+    // the gap is a property of the row rather than a number measured once.
+    lv_obj_t *clock_row = lv_obj_create(parent);
+    lv_obj_remove_style_all(clock_row);
+    lv_obj_set_size(clock_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(clock_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
+    // Bottom-aligned, so the small caption sits on the time's baseline rather
+    // than floating at its cap height.
+    lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_END);
+    lv_obj_set_style_pad_column(clock_row, 5, 0);
+    lv_obj_align(clock_row, LV_ALIGN_TOP_MID, -8, 6);
+
+    s_clock_label = lv_label_create(clock_row);
     lv_obj_set_style_text_font(s_clock_label, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_clock_label, lv_color_hex(COLOR_VALUE), 0);
     lv_label_set_text(s_clock_label, "--:--");
-    lv_obj_align(s_clock_label, LV_ALIGN_TOP_MID, -10, 6);
 
-    s_clock_caption = lv_label_create(parent);
+    s_clock_caption = lv_label_create(clock_row);
     lv_obj_set_style_text_font(s_clock_caption, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(s_clock_caption, lv_color_hex(COLOR_CAPTION), 0);
     lv_label_set_text(s_clock_caption, "");
-    lv_obj_align_to(s_clock_caption, s_clock_label, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -2);
+    lv_obj_set_style_pad_bottom(s_clock_caption, 2, 0);
 
     // ---- Battery ----
     // The device's own battery, published to TOPIC_BATTERY by the Core 0
@@ -1202,22 +1296,28 @@ void PageDashboard::onViewLoad() {
     // which is what pays for the jump from 28 to 34. The widest thing any of
     // them has to hold is a six-character trip ("123.45"), and at 34 that
     // comes to about 104px inside 108px of usable width.
-    lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, CELL_W, CELL_H, "SPEED");
+    lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, STATS_W, CELL_H, "SPEED");
     s_speed_label = MakeValue(speed_cell, "--", COLOR_VALUE);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
     lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
+    s_speed_stats_label = MakeSecondary(speed_cell);
 
-    lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, CELL_W, CELL_H, "TRIP");
-    s_trip_label = MakeValue(trip_cell, "0.00", COLOR_VALUE);
-    s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
-
-    s_incline_cell = MakeCell(parent, COL1, ROW2, CELL_W, CELL_H, "INCLINE");
-    s_incline_label = MakeValue(s_incline_cell, "--", COLOR_ACCENT);
-    MakeUnit(s_incline_cell, "%");
-
-    lv_obj_t *hr_cell = MakeCell(parent, COL2, ROW2, CELL_W, CELL_H, "HEART RATE");
+    lv_obj_t *hr_cell = MakeCell(parent, COL1, ROW2, STATS_W, CELL_H, "HEART RATE");
     s_hr_label = MakeValue(hr_cell, "--", COLOR_VALUE);
     MakeUnit(hr_cell, "bpm");
+    s_hr_stats_label = MakeSecondary(hr_cell);
+
+    // 24pt, not 40. The narrower column cannot hold a six-character trip at
+    // the larger face -- "123.45" wants about 119px against 80px of usable
+    // width here -- and the choice is between a smaller number and a wrong
+    // one. These two are a glance, where speed and heart rate are read.
+    lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, SEC_W, CELL_H, "TRIP");
+    s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_24);
+    s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
+
+    s_incline_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "INCLINE");
+    s_incline_label = MakeValueIn(s_incline_cell, "--", COLOR_ACCENT, &lv_font_montserrat_24);
+    MakeUnit(s_incline_cell, "%");
 
     // ---- Dividing lines ----
     // Internal joins only. Nothing is drawn at x=0, x=239, y=0 or y=319, so
@@ -1326,6 +1426,8 @@ void PageDashboard::onViewUnload() {
     s_active_tz = nullptr;
     s_incline_label = nullptr;
     s_hr_label = nullptr;
+    s_speed_stats_label = nullptr;
+    s_hr_stats_label = nullptr;
     s_route_arrow_label = nullptr;
     s_route_dir_label = nullptr;
     s_nav_content = nullptr;

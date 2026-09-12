@@ -17,6 +17,7 @@
 #include "system/LvglTask.h"
 #include "system/PageManager/PageManager.h"
 #include "system/Settings.h"
+#include "system/RideStats.h"
 #include "system/Trip.h"
 #include "ui/Page_Dashboard.h"
 #include "ui/Page_Map.h"
@@ -214,6 +215,10 @@ void setup() {
     // Both read GPS through DataCenter, so they are independent of which page
     // the rider happens to be looking at.
     Trip_Init();
+    // Beside the odometer and for the same reason: both accumulate from
+    // DataCenter rather than from a redraw, so both keep counting while the
+    // rider is looking at the map or the settings page.
+    RideStats_Init();
     RideLog_Init();
 
     // TODO(Phase 1 Task 1.3+): remaining Core 0 tasks publishing into

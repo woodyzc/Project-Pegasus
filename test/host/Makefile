@@ -33,6 +33,10 @@
 #   * test_time_source  - which clock the head unit believes, and when it stops
 #                         believing it (compiles the real
 #                         src/system/TimeSource.c)
+#   * test_ride_stats   - ride averages and maxima: moving average, the stop
+#                         that must not decay it, and the bad fix that must
+#                         not own the max (compiles the real
+#                         src/system/RideStatsCore.c)
 #   * test_route_parse  - the BLE route-download protocol and the offline
 #                         route-following geometry (compiles the real
 #                         src/navigation/RouteParse.c and RouteFollow.c).
@@ -57,7 +61,8 @@ BINS := test_parsebpm$(SUFFIX) test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX
         test_ubx_parse$(SUFFIX) test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) \
         test_track_buffer$(SUFFIX) test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) \
         test_trip_accum$(SUFFIX) test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) \
-        test_clock_frame$(SUFFIX) test_time_source$(SUFFIX)
+        test_clock_frame$(SUFFIX) test_time_source$(SUFFIX) \
+        test_ride_stats$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -86,6 +91,9 @@ test_clock_frame$(SUFFIX): test_clock_frame.c $(SYSTEM)/ClockFrame.c
 
 test_time_source$(SUFFIX): test_time_source.c $(SYSTEM)/TimeSource.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^
+
+test_ride_stats$(SUFFIX): test_ride_stats.c $(SYSTEM)/RideStatsCore.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^ -lm
 
 test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
