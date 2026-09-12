@@ -12,7 +12,8 @@ which was wrong on first contact and is now a regression test.
 the app to find, so the BLE link, the frame reaching the firmware and the head
 unit rendering it are all untested.
 
-**Not compiled at all: the Mapbox adapter.** See *Two route sources* below.
+**Compiles, but nothing calls it: the Mapbox adapter.** See *Two route sources*
+below.
 
 ## Two route sources
 
@@ -30,13 +31,39 @@ live turn display but can never supply the offline fallback.
 *and* the polyline the head unit needs to navigate on its own. This is the
 route worth investing in, and it is what `MapboxRouteSource.kt` implements.
 
-It is **not built by default and has never been compiled**, because the SDK is
-served from Mapbox's own Maven repository, which refuses anonymous access.
-Building it needs a Mapbox account and two different tokens. Everything that
-could be written without the SDK was, and is unit tested — the maneuver mapping
-(`MapboxManeuver`), the route model (`PlannedRoute`), the wire format
-(`RouteFrame`) and the upload state machine (`RouteTransfer`). `MapboxRouteSource`
-is deliberately thin so the uncompiled surface is as small as possible.
+It is **not built by default**, because the SDK is served from Mapbox's own
+Maven repository, which refuses anonymous access. Building it needs a Mapbox
+account and two different tokens. Everything that could be written without the
+SDK was, and is unit tested — the maneuver mapping (`MapboxManeuver`), the route
+model (`PlannedRoute`), the wire format (`RouteFrame`) and the upload state
+machine (`RouteTransfer`). `MapboxRouteSource` is deliberately thin so the
+untested surface is as small as possible.
+
+As of 2026-09-12 it **does compile** against `navigationcore:3.6.0`. One call
+was wrong, which is what writing against published docs buys you: it used a
+`completeGeometryToPoints()` that does not exist, and the route's polyline is
+now decoded with `PolylineUtils` at the precision read back off the route's own
+options. It has still never **run**, and nothing constructs it — see *Still
+missing* below.
+
+### Still missing
+
+Tokens are not the last blocker. Even with both in place and the flag on, the
+Mapbox path does nothing, because:
+
+- nothing constructs `MapboxRouteSource` — its two callbacks are declared and
+  never subscribed;
+- no screen collects a destination, and `requestRoute` takes coordinates;
+- `startTripSession()` is never called, so the SDK emits no route progress and
+  therefore no turns;
+- location permission is capped at `maxSdkVersion="30"` in the manifest, which
+  was right when BLE scanning was the only thing that needed it and is not
+  enough for the Navigation SDK.
+
+One more practical note: the Mapbox build produces a **173 MB** debug APK
+against 3.2 MB without it, because it ships native libraries for every ABI.
+An `abiFilters` narrowing to `arm64-v8a` is worth adding before anyone tries to
+install it over a phone link.
 
 To build it:
 
@@ -113,9 +140,9 @@ rider sits far inside both. Mapbox does ask for a card on file before enabling
 the Navigation SDK, so check the current rates on their pricing page rather than
 trusting this paragraph — they change.
 
-Expect `MapboxRouteSource.kt` to need adjusting on first compile. Its SDK calls
-are written from the published API of version 3.6.0 and have not been checked
-by a compiler. The SDK's package layout changed at v3 and will change again.
+`MapboxRouteSource.kt` has now been through a compiler against 3.6.0 and needed
+one fix to do it. The SDK's package layout changed at v3 and will change again,
+so expect the same on any version bump.
 
 ## Why a notification listener
 

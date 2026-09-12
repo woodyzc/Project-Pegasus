@@ -6,6 +6,7 @@ import com.mapbox.api.directions.v5.DirectionsCriteria
 import com.mapbox.api.directions.v5.models.DirectionsRoute
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.geojson.Point as MapboxPoint
+import com.mapbox.geojson.utils.PolylineUtils
 import com.mapbox.common.MapboxOptions
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.NavigationRoute
@@ -152,11 +153,11 @@ class MapboxRouteSource(private val context: Context) {
                 onRoutePlanned?.invoke(toPlannedRoute(first.directionsRoute))
             }
 
-            override fun onFailure(reasons: List<RouterFailure>, options: RouteOptions) {
+            override fun onFailure(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
                 Log.w(TAG, "route request failed: $reasons")
             }
 
-            override fun onCanceled(options: RouteOptions, routerOrigin: String) {
+            override fun onCanceled(routeOptions: RouteOptions, routerOrigin: String) {
                 Log.i(TAG, "route request cancelled")
             }
         })
@@ -172,7 +173,7 @@ class MapboxRouteSource(private val context: Context) {
     private fun toPlannedRoute(route: DirectionsRoute): PlannedRoute {
         routeId++
 
-        val points = route.completeGeometryToPoints().map {
+        val points = decodeGeometry(route).map {
             RouteFrame.Point(it.latitude(), it.longitude())
         }
 
@@ -196,6 +197,25 @@ class MapboxRouteSource(private val context: Context) {
         }
 
         return PlannedRoute.fromSteps(routeId, points, steps)
+    }
+
+    /**
+     * Decodes the route's polyline at the precision the route was requested
+     * with.
+     *
+     * Not hardcoded to 6, even though requestRoute always asks for polyline6.
+     * Decoding a 5-decimal polyline as 6 does not fail -- it yields
+     * coordinates a factor of ten out, which is a route on the wrong
+     * continent -- and a route arriving from anywhere but requestRoute carries
+     * its own setting. Reading it back off the route is the only way to be
+     * sure the two agree.
+     */
+    private fun decodeGeometry(route: DirectionsRoute): List<MapboxPoint> {
+        val geometry = route.geometry() ?: return emptyList()
+        val precision = if (route.routeOptions()?.geometries() ==
+            DirectionsCriteria.GEOMETRY_POLYLINE
+        ) 5 else 6
+        return PolylineUtils.decode(geometry, precision)
     }
 }
 
