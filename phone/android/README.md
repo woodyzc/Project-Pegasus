@@ -1,16 +1,63 @@
 # Pegasus TBT — Android companion
 
-Forwards Google Maps turn-by-turn prompts to the Pegasus head unit over BLE.
+Forwards turn-by-turn prompts to the Pegasus head unit over BLE, and uploads
+the whole planned route so the head unit can keep navigating without the phone.
 
-**Status: builds, 16 unit tests pass, and the notification half is verified on
-a real route.** A live Maps route confirmed the maneuver type, the imperial to
-metric conversion (200 ft to 61 m) and the street name — the last of which was
-wrong on first contact and is now a regression test.
+**Status: builds, 67 unit tests pass.** The Google Maps notification half is
+verified on a real route — a live route confirmed the maneuver type, the
+imperial to metric conversion (200 ft to 61 m) and the street name, the last of
+which was wrong on first contact and is now a regression test.
 
-**Not yet verified: anything past the phone.** No head unit has been powered
-for the app to find, so the BLE link, the frame reaching the firmware and the
-head unit rendering it are all untested. The status line will sit at
-"Looking for pegasus…" until one is.
+**Not verified: anything past the phone.** No head unit has been powered for
+the app to find, so the BLE link, the frame reaching the firmware and the head
+unit rendering it are all untested.
+
+**Not compiled at all: the Mapbox adapter.** See *Two route sources* below.
+
+## Two route sources
+
+There are two ways to get maneuvers into this app, and they are at very
+different levels of maturity.
+
+**Google Maps notifications** — works, is verified on a real route, and needs
+no account or token. It is also permanently limited: Maps ships the maneuver
+arrow as a *bitmap*, so the turn type can only be recovered from the
+notification's wording. That makes it English only, leaves it guessing on
+unusual phrasing, and gives no route geometry whatsoever — so it can drive the
+live turn display but can never supply the offline fallback.
+
+**Mapbox Navigation SDK** — plans the route, so it yields structured maneuvers
+*and* the polyline the head unit needs to navigate on its own. This is the
+route worth investing in, and it is what `MapboxRouteSource.kt` implements.
+
+It is **not built by default and has never been compiled**, because the SDK is
+served from Mapbox's own Maven repository, which refuses anonymous access.
+Building it needs a Mapbox account and two different tokens. Everything that
+could be written without the SDK was, and is unit tested — the maneuver mapping
+(`MapboxManeuver`), the route model (`PlannedRoute`), the wire format
+(`RouteFrame`) and the upload state machine (`RouteTransfer`). `MapboxRouteSource`
+is deliberately thin so the uncompiled surface is as small as possible.
+
+To build it:
+
+1. Create a Mapbox account. On the tokens page make **two** tokens:
+   - a **public** token (`pk.…`) for the app at runtime;
+   - a **secret** token (`sk.…`) with the `DOWNLOADS:READ` scope for Gradle.
+2. Put the secret one in `~/.gradle/gradle.properties`, **not** in this repo:
+   ```properties
+   MAPBOX_DOWNLOADS_TOKEN=sk.ey...
+   ```
+3. Put the public one in the app's resources or `local.properties`, wherever
+   you wire `NavigationOptions` to read it.
+4. Build with the flag, and **without** `--offline`, since the artifacts are
+   not in the local cache:
+   ```sh
+   gradle -PwithMapbox=true assembleDebug
+   ```
+
+Expect `MapboxRouteSource.kt` to need adjusting on first compile. Its SDK calls
+are written from the published API of version 3.6.0 and have not been checked
+by a compiler. The SDK's package layout changed at v3 and will change again.
 
 ## Why a notification listener
 
@@ -92,12 +139,23 @@ off  size  field
 8    n     street_name UTF-8, no NUL on the wire
 ```
 
-Service `a3c87500-8ed3-4bdf-8a39-a01bebede295`,
-characteristic `a3c87501-…` (write / write-no-response), device name
-`pegasus`.
+Service `a3c87500-8ed3-4bdf-8a39-a01bebede295`, device name `pegasus`, with
+three characteristics:
 
-`TbtFrameTest` locks the encoder to that layout byte for byte, so if either
-side drifts, that test is what should notice.
+| UUID | Direction | Carries |
+|---|---|---|
+| `a3c87501-…` | write, write-no-response | one live turn |
+| `a3c87502-…` | write | one route chunk |
+| `a3c87503-…` | read, notify | route transfer progress |
+
+The turn characteristic takes unacknowledged writes and the route one does not,
+and that asymmetry is deliberate: a dropped turn is corrected by the next one a
+second later, where a dropped route chunk is a permanent hole.
+
+`TbtFrameTest` and `RouteFrameTest` lock the two encoders to their firmware
+layouts byte for byte, so if either side drifts, those tests are what should
+notice. The authorities are `src/navigation/TbtParse.h` and
+`src/navigation/RouteParse.h`.
 
 ## Building
 
@@ -121,7 +179,9 @@ GRADLE_USER_HOME="$K/gradle-home" \
 ```
 
 `--offline` matters: the Gradle cache under `gradle-home` already has every
-dependency, and without it the build tries to reach the network.
+dependency, and without it the build tries to reach the network. It is also the
+one flag to drop when building with `-PwithMapbox=true`, because the Mapbox
+artifacts are not in that cache and never will be until they are fetched.
 
 Output: `app/build/outputs/apk/debug/app-debug.apk`.
 
