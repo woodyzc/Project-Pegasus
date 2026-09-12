@@ -95,7 +95,7 @@ class TbtCallbacks : public NimBLECharacteristicCallbacks {
         TBT_Directive_t directive;
         if (!TBT_ParseFrame(value.data(), value.length(), &directive.icon_id,
                             &directive.distance_m, directive.street_name,
-                            sizeof(directive.street_name))) {
+                            sizeof(directive.street_name), &directive.exit_number)) {
             // Malformed frames are dropped silently rather than partially
             // applied: showing a turn the phone never sent is worse than
             // showing nothing.
@@ -107,6 +107,12 @@ class TbtCallbacks : public NimBLECharacteristicCallbacks {
         // but silent still hands navigation back to the head unit.
         NavRoute_NoteLiveDirective();
         directive.source = TBT_SOURCE_PHONE;
+
+        // The phone sends one turn per frame and has no room for a second, so
+        // the cached route fills in what follows this turn and how far is
+        // left. Leaves them unknown when no route has been uploaded, which is
+        // the case whenever the rider is navigating live without one.
+        NavRoute_EnrichDirective(&directive);
 
         // Runs on NimBLE's host task (Core 0), which is exactly the pattern
         // DataCenter exists for -- the dashboard consumes it on Core 1.

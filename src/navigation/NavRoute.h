@@ -94,6 +94,19 @@ void NavRoute_Tick(uint32_t now_ms);
 // fix. False if that has never happened.
 bool NavRoute_LastFix(RouteFix_t *out);
 
+// Fills the fields only the cached route can know: the maneuver after next,
+// the gap to it, and how far is left to the destination.
+//
+// Called by BOTH directive publishers, not just the onboard one. The phone
+// sends one turn at a time and its wire format has no room for a second, so
+// without this a rider navigating from the phone -- the normal case -- would
+// never see what follows the turn they are approaching, even though the head
+// unit is holding the whole route and could say.
+//
+// Leaves the fields at "unknown" and returns false when no route is loaded or
+// no fix has been taken. Never invents: a wrong "then" is worse than none.
+bool NavRoute_EnrichDirective(TBT_Directive_t *directive);
+
 #ifdef __cplusplus
 }
 #endif

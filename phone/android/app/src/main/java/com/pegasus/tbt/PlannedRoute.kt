@@ -27,7 +27,9 @@ data class NavigationInstruction(
     /** Metres remaining on the whole route, for an ETA readout. Negative when unknown. */
     val remainingMetres: Int = -1,
 ) {
-    fun toFrame(): ByteArray = TbtFrame.encode(iconId, distanceMetres, streetName)
+    // exitNumber goes on the wire now. It is the one thing Mapbox knows that
+    // an arrow cannot show: every roundabout shares a single icon.
+    fun toFrame(): ByteArray = TbtFrame.encode(iconId, distanceMetres, streetName, exitNumber)
 }
 
 /**

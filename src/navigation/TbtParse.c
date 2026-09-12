@@ -7,7 +7,11 @@ bool TBT_ParseFrame(const uint8_t *data,
                     uint8_t *out_icon_id,
                     uint32_t *out_distance_m,
                     char *out_street_name,
-                    size_t out_street_size) {
+                    size_t out_street_size,
+                    uint8_t *out_exit_number) {
+    size_t header_len;
+    uint8_t exit_number = 0;
+
     if (data == NULL || out_icon_id == NULL || out_distance_m == NULL ||
         out_street_name == NULL) {
         return false;
@@ -15,10 +19,24 @@ bool TBT_ParseFrame(const uint8_t *data,
     if (out_street_size < (size_t)TBT_STREET_NAME_LEN + 1) {
         return false;
     }
-    if (length < (size_t)TBT_FRAME_HEADER_LEN) {
+    if (length < (size_t)TBT_FRAME_HEADER_LEN_V1) {
         return false;
     }
-    if (data[0] != TBT_FRAME_MAGIC || data[1] != TBT_FRAME_VERSION) {
+    if (data[0] != TBT_FRAME_MAGIC) {
+        return false;
+    }
+
+    /* Both versions are accepted. The phone and the head unit are flashed
+       separately, so a pair that disagrees by one version should lose the
+       exit number and keep navigating, not go dark. */
+    if (data[1] == TBT_FRAME_VERSION) {
+        header_len = (size_t)TBT_FRAME_HEADER_LEN_V2;
+    } else if (data[1] == TBT_FRAME_VERSION_LEGACY) {
+        header_len = (size_t)TBT_FRAME_HEADER_LEN_V1;
+    } else {
+        return false;
+    }
+    if (length < header_len) {
         return false;
     }
 
@@ -35,8 +53,18 @@ bool TBT_ParseFrame(const uint8_t *data,
         }
         /* The declared name length must match what actually arrived: a frame
            claiming more than it carries would otherwise read past the end. */
-        if (length != (size_t)TBT_FRAME_HEADER_LEN + (size_t)name_len) {
+        if (length != header_len + (size_t)name_len) {
             return false;
+        }
+
+        if (header_len == (size_t)TBT_FRAME_HEADER_LEN_V2) {
+            exit_number = data[8];
+            /* A number past the maximum is a decoding error, not a junction.
+               Rejecting the whole frame would throw away a usable turn over a
+               field that is decoration, so the exit alone is discarded. */
+            if (exit_number > TBT_EXIT_NUMBER_MAX) {
+                exit_number = 0;
+            }
         }
 
         /* Assembled byte by byte rather than cast: the payload is
@@ -47,8 +75,11 @@ bool TBT_ParseFrame(const uint8_t *data,
 
         *out_icon_id = icon;
         *out_distance_m = distance;
-        memcpy(out_street_name, data + TBT_FRAME_HEADER_LEN, name_len);
+        memcpy(out_street_name, data + header_len, name_len);
         out_street_name[name_len] = '\0';
+        if (out_exit_number != NULL) {
+            *out_exit_number = exit_number;
+        }
     }
     return true;
 }

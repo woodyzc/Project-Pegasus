@@ -241,6 +241,56 @@ bool NavRoute_LastFix(RouteFix_t *out) {
     return true;
 }
 
+bool NavRoute_EnrichDirective(TBT_Directive_t *directive) {
+    if (directive == nullptr) {
+        return false;
+    }
+    // Say "unknown" up front, so every early return below leaves the
+    // directive honest rather than carrying whatever the caller had.
+    directive->then_icon_id = TBT_ICON_NONE;
+    directive->then_distance_m = 0;
+    directive->remaining_m = TBT_DISTANCE_UNKNOWN;
+
+    if (!s_loaded || !s_have_fix || s_blob == nullptr) {
+        return false;
+    }
+
+    // How much route is left. Clamped rather than allowed to wrap: a fix that
+    // snapped just past the end would otherwise read as four thousand
+    // kilometres to go.
+    if (s_last_fix.distance_along_m < s_manifest.total_length_m) {
+        directive->remaining_m = s_manifest.total_length_m - s_last_fix.distance_along_m;
+    } else {
+        directive->remaining_m = 0;
+    }
+
+    // The maneuver after next. Found by asking the same question twice: once
+    // from where the rider is, then again from just past whatever that
+    // returned.
+    {
+        RouteManeuver_t first;
+        RouteManeuver_t second;
+        uint32_t ignored = 0;
+
+        if (!RouteFollow_NextManeuver(s_blob, &s_manifest, s_last_fix.distance_along_m, &first,
+                                      &ignored)) {
+            return true; // Past the last maneuver; remaining_m still stands.
+        }
+        if (!RouteFollow_NextManeuver(s_blob, &s_manifest, first.distance_along_route_m + 1,
+                                      &second, &ignored)) {
+            return true; // The next one is the last; there is no "then".
+        }
+
+        directive->then_icon_id = second.icon_id;
+        // The gap BETWEEN the two maneuvers, not the distance from the rider.
+        // "Then in 40 m" means 40 metres after the turn being made, which is
+        // what a rider needs to know to take the first one in the right lane.
+        directive->then_distance_m =
+            second.distance_along_route_m - first.distance_along_route_m;
+    }
+    return true;
+}
+
 void NavRoute_Tick(uint32_t now_ms) {
     if (!s_loaded) {
         return;
@@ -279,6 +329,7 @@ void NavRoute_Tick(uint32_t now_ms) {
                                  &to_maneuver)) {
         directive.icon_id = maneuver.icon_id;
         directive.distance_m = to_maneuver;
+        directive.exit_number = maneuver.exit_number;
         // The wire field is 32 bytes and the directive's is 32 including the
         // NUL, so this truncates by one byte in the worst case rather than
         // overrunning.
@@ -307,5 +358,6 @@ void NavRoute_Tick(uint32_t now_ms) {
     s_last_icon = directive.icon_id;
     s_last_distance = directive.distance_m;
     s_last_publish_ms = now_ms;
+    NavRoute_EnrichDirective(&directive);
     DataCenter_Publish(TOPIC_NAV_TBT, &directive);
 }

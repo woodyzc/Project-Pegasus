@@ -9,11 +9,17 @@ import java.util.UUID
  *
  *   off  size  field
  *   0    1     magic       0x54 ('T')
- *   1    1     version     0x01
+ *   1    1     version     0x02
  *   2    1     icon_id     0..10
  *   3    1     name_len    0..31 bytes of UTF-8 that follow
  *   4    4     distance_m  uint32, little-endian
- *   8    n     street_name UTF-8, no NUL terminator on the wire
+ *   8    1     exit_number roundabout exit 1..9, or 0 for none
+ *   9    n     street_name UTF-8, no NUL terminator on the wire
+ *
+ * Version 2 added the exit number. Mapbox states it outright and every
+ * roundabout shares one arrow, so it is the only thing that tells them apart.
+ * The firmware still accepts version 1 and reports exit 0 for it, so a head
+ * unit on older firmware keeps navigating rather than going dark.
  */
 object TbtFrame {
 
@@ -24,11 +30,19 @@ object TbtFrame {
     const val DEVICE_NAME = "pegasus"
 
     const val MAGIC: Byte = 0x54
-    const val VERSION: Byte = 0x01
-    const val HEADER_LEN = 8
+    const val VERSION: Byte = 0x02
+    const val HEADER_LEN = 9
     const val STREET_NAME_MAX_BYTES = 31
 
-    fun encode(iconId: Int, distanceMetres: Int, streetName: String): ByteArray {
+    /** Largest exit the firmware will accept; beyond it the field is dropped. */
+    const val EXIT_NUMBER_MAX = 9
+
+    fun encode(
+        iconId: Int,
+        distanceMetres: Int,
+        streetName: String,
+        exitNumber: Int = 0,
+    ): ByteArray {
         require(iconId in 0..10) { "icon id out of range: $iconId" }
         require(distanceMetres >= 0 || distanceMetres == ManeuverParser.DISTANCE_UNKNOWN) {
             "negative distance: $distanceMetres"
@@ -50,6 +64,11 @@ object TbtFrame {
         frame[5] = ((d shr 8) and 0xFF).toByte()
         frame[6] = ((d shr 16) and 0xFF).toByte()
         frame[7] = ((d shr 24) and 0xFF).toByte()
+
+        // Clamped rather than rejected. An exit outside the range is a
+        // decoration this frame can do without, and refusing the frame over it
+        // would throw away a real turn -- which is the firmware's rule too.
+        frame[8] = if (exitNumber in 1..EXIT_NUMBER_MAX) exitNumber.toByte() else 0
 
         nameBytes.copyInto(frame, HEADER_LEN)
         return frame

@@ -103,6 +103,29 @@ typedef struct {
     // publisher that zeroes this struct keeps its old meaning untouched.
     uint8_t source;      // a TBT_Source_t value
     bool off_route;      // onboard only: the fix is not near the cached route
+
+    // Which exit to take, 1..9, or 0 when the maneuver is not a roundabout or
+    // nobody said. Every roundabout shares one arrow, so this is the only
+    // thing that distinguishes them.
+    uint8_t exit_number;
+
+    // The maneuver AFTER the one above, and the gap between the two. Closely
+    // spaced junctions are where a rider goes wrong, and an arrow that only
+    // ever shows the next one gives no warning that another follows it
+    // immediately.
+    //
+    // TBT_ICON_NONE means "not known", which is also what a zeroed struct
+    // says, so a publisher that does not fill these is reporting honestly.
+    // Only the cached route can supply them: the phone sends one turn at a
+    // time and the wire format has no room for two.
+    uint8_t then_icon_id;
+    uint32_t then_distance_m;
+
+    // Metres still to ride to the destination, or TBT_DISTANCE_UNKNOWN.
+    //
+    // Explicitly unknown rather than zero, because zero is a legitimate value
+    // meaning "arrived" and a zeroed struct must not claim that.
+    uint32_t remaining_m;
 } TBT_Directive_t;
 
 // Well-known topic names (CLAUDE.md §4 examples: "Sensor/HeartRate", "GPS_Info").

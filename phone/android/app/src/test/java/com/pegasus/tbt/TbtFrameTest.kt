@@ -12,10 +12,13 @@ class TbtFrameTest {
 
     @Test
     fun `known frame matches the firmware layout byte for byte`() {
-        // 'T', v1, turn right, 7-byte name, 250 m little-endian, "Main St"
+        // 'T', v2, turn right, 7-byte name, 250 m little-endian, no exit,
+        // "Main St". The exit byte at offset 8 is what version 2 added, and
+        // it pushes the name from offset 8 to offset 9.
         val expected = byteArrayOf(
-            0x54, 0x01, 0x03, 0x07,
+            0x54, 0x02, 0x03, 0x07,
             0xFA.toByte(), 0x00, 0x00, 0x00,
+            0x00,
             0x4D, 0x61, 0x69, 0x6E, 0x20, 0x53, 0x74
         )
         assertArrayEquals(expected, TbtFrame.encode(3, 250, "Main St"))
@@ -88,5 +91,31 @@ class TbtFrameTest {
         assertEquals(TbtFrame.HEADER_LEN, frame.size)
         assertEquals(ManeuverParser.Icon.NONE.toByte(), frame[2])
         assertEquals(0, frame[3].toInt())
+    }
+
+    @Test
+    fun `version 2 puts the roundabout exit at offset 8`() {
+        val frame = TbtFrame.encode(ManeuverParser.Icon.ROUNDABOUT, 120, "Ring Road", 3)
+        assertEquals(0x54.toByte(), frame[0])
+        assertEquals(0x02.toByte(), frame[1])
+        assertEquals(3.toByte(), frame[8])
+        // The name starts one byte later than it did in version 1.
+        assertEquals("Ring Road", String(frame, 9, frame.size - 9, Charsets.UTF_8))
+    }
+
+    @Test
+    fun `no exit means a zero, not a missing byte`() {
+        val frame = TbtFrame.encode(ManeuverParser.Icon.TURN_LEFT, 50, "Main St")
+        assertEquals(TbtFrame.HEADER_LEN + "Main St".toByteArray().size, frame.size)
+        assertEquals(0.toByte(), frame[8])
+    }
+
+    @Test
+    fun `an out of range exit is clamped rather than refused`() {
+        // The firmware drops the field and keeps the turn; the encoder must
+        // not be stricter than the thing it is encoding for.
+        assertEquals(0.toByte(), TbtFrame.encode(9, 120, "Ring", 200)[8])
+        assertEquals(0.toByte(), TbtFrame.encode(9, 120, "Ring", -1)[8])
+        assertEquals(9.toByte(), TbtFrame.encode(9, 120, "Ring", 9)[8])
     }
 }

@@ -43,6 +43,34 @@ constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
 // the route so the countdown cannot be trusted.
 constexpr uint32_t COLOR_NAV_ONBOARD = 0xFFC857;
 constexpr uint32_t COLOR_NAV_OFF_ROUTE = 0xFF6B6B;
+
+// The turn is close enough to act on. Green rather than another warning
+// colour: amber and red are already spoken for above and both mean "something
+// is less certain", where this means the opposite -- act now.
+constexpr uint32_t COLOR_NAV_IMMINENT = 0x7CE38B;
+
+// Distance at which a turn stops being something to expect and becomes
+// something to do. At 25 km/h this is about four seconds of warning, which is
+// roughly the point where a rider should already be in the right lane.
+constexpr uint32_t TBT_IMMINENT_M = 30;
+
+// How far out a fresh maneuver fills the countdown bar. A turn announced
+// further away than this simply starts at full; without a ceiling, one
+// announced 5 km out would leave the bar visibly motionless for most of a
+// ride and teach the rider to ignore it.
+constexpr uint32_t TBT_BAR_MAX_M = 500;
+
+// The arrow asset is 112px square and the tile cannot afford that much height
+// now that a countdown bar, a "then" line and a distance-to-go share it.
+// Drawn at 88 via LVGL's image zoom rather than regenerating the bitmaps,
+// which needs Pillow and would risk the arrows' appearance for 24px.
+constexpr lv_coord_t TBT_ARROW_DRAW_PX = 88;
+
+// Usable width inside the navigation tile: the 240px panel less the tile's
+// padding on both sides. At file scope because the street name is re-fitted
+// on every directive, long after Create()'s locals have gone.
+constexpr lv_coord_t TBT_TEXT_W = 240 - 2 * 6;
+constexpr uint16_t TBT_ARROW_ZOOM = (uint16_t)((256 * TBT_ARROW_DRAW_PX) / TBT_ICON_PX);
 constexpr uint32_t COLOR_BADGE_TEXT = 0x081015;
 constexpr uint32_t COLOR_CELL_BG = 0x141E27;
 constexpr uint32_t COLOR_CELL_BORDER = 0x24313D;
@@ -135,10 +163,28 @@ MapPoint_t s_map_projected[INLINE_MAP_POINTS];
 // the same thing -- the thing in the corner that shows which way to go.
 lv_obj_t *s_route_arrow_label = nullptr;
 lv_obj_t *s_route_dir_label = nullptr;
-// Holds the number and its unit side by side; see the flex row in Create().
+// The navigation tile's contents, packed top to bottom by a flex column so a
+// row with nothing to say can hide itself and give its height back.
+lv_obj_t *s_nav_content = nullptr;
 lv_obj_t *s_route_dist_row = nullptr;
 lv_obj_t *s_route_dist_label = nullptr;
 lv_obj_t *s_route_dist_unit = nullptr;
+// Drains as the rider closes on the turn. A number has to be read; a bar is
+// understood while looking at the road.
+lv_obj_t *s_route_bar = nullptr;
+// Which exit to take, drawn over the middle of the roundabout arrow. Every
+// roundabout shares one icon, so without this they are indistinguishable.
+lv_obj_t *s_route_exit_label = nullptr;
+lv_obj_t *s_route_secondary_row = nullptr;
+lv_obj_t *s_route_then_label = nullptr;
+lv_obj_t *s_route_remaining_label = nullptr;
+
+// The distance this maneuver was first announced at, which is what the
+// countdown bar is scaled against. Reset whenever the maneuver changes, and
+// kept here rather than recomputed because the directive carries no history.
+uint32_t s_tbt_bar_scale_m = 0;
+uint8_t s_tbt_bar_icon = 0;
+char s_tbt_bar_street[TBT_STREET_NAME_MAX] = {0};
 uint32_t s_tbt_last_ms = 0;
 uint32_t s_hr_last_ms = 0;
 lv_obj_t *s_battery_label = nullptr;
@@ -417,6 +463,54 @@ void FormatTbtDistance(uint32_t metres, char *value, size_t value_size, char *un
     }
 }
 
+// The maneuver in words, for the "then" preview.
+//
+// Words, not a second arrow. A preview arrow would have to be drawn at about
+// a fifth of the asset's size, which downsamples an already small shape into
+// mush -- and "then left" is unambiguous in a way a 20px glyph is not.
+const char *ManeuverWord(uint8_t icon_id) {
+    switch (icon_id) {
+        case TBT_ICON_TURN_LEFT: return "left";
+        case TBT_ICON_TURN_RIGHT: return "right";
+        case TBT_ICON_SLIGHT_LEFT: return "bear left";
+        case TBT_ICON_SLIGHT_RIGHT: return "bear right";
+        case TBT_ICON_SHARP_LEFT: return "sharp left";
+        case TBT_ICON_SHARP_RIGHT: return "sharp right";
+        case TBT_ICON_UTURN: return "U-turn";
+        case TBT_ICON_ROUNDABOUT: return "roundabout";
+        case TBT_ICON_ARRIVE: return "arrive";
+        case TBT_ICON_STRAIGHT: return "straight on";
+        default: return "";
+    }
+}
+
+// Picks the largest font the name actually fits in, rather than shrinking
+// every name to suit the longest one.
+//
+// "Rockingham Road" ellipsized to "Rockingham..." on the bench, and the street
+// name is how a rider confirms they are turning where they meant to -- a name
+// that has lost its second half cannot do that. Scrolling text was the
+// alternative and is worse: movement at the edge of vision while riding is a
+// distraction, and the name is only readable during part of the cycle.
+void SetStreetName(lv_obj_t *label, const char *text, lv_coord_t max_width) {
+    static const lv_font_t *const kFonts[] = {
+        &lv_font_montserrat_24,
+        &lv_font_montserrat_18,
+        &lv_font_montserrat_14,
+    };
+    const lv_font_t *chosen = kFonts[sizeof(kFonts) / sizeof(kFonts[0]) - 1];
+    for (size_t i = 0; i < sizeof(kFonts) / sizeof(kFonts[0]); i++) {
+        lv_point_t size;
+        lv_txt_get_size(&size, text, kFonts[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        if (size.x <= max_width) {
+            chosen = kFonts[i];
+            break;
+        }
+    }
+    lv_obj_set_style_text_font(label, chosen, 0);
+    lv_label_set_text(label, text);
+}
+
 void ClearTbt() {
     // In GPX mode the slot holds a map and these labels do not exist.
     if (s_route_arrow_label == nullptr) {
@@ -427,6 +521,15 @@ void ClearTbt() {
     lv_label_set_text(s_route_dist_label, "");
     lv_label_set_text(s_route_dist_unit, "");
     lv_label_set_text(s_route_dir_label, "NO ROUTE");
+    lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_24, 0);
+    lv_bar_set_value(s_route_bar, 0, LV_ANIM_OFF);
+    lv_obj_add_flag(s_route_exit_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_route_secondary_row, LV_OBJ_FLAG_HIDDEN);
+    // Forget the bar's scale too, or the next route's first turn is measured
+    // against a maneuver from the last one.
+    s_tbt_bar_scale_m = 0;
+    s_tbt_bar_icon = 0;
+    s_tbt_bar_street[0] = '\0';
 }
 
 void RenderSpeedAndTrip() {
@@ -571,12 +674,107 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 } else if (tbt.source == TBT_SOURCE_ONBOARD) {
                     arrow_colour = COLOR_NAV_ONBOARD;
                 }
+                // Close enough to act on. Overrides the source colour: which
+                // module produced the turn stops mattering when the junction
+                // is four seconds away.
+                const bool imminent = tbt.distance_m != TBT_DISTANCE_UNKNOWN &&
+                                      tbt.distance_m <= TBT_IMMINENT_M;
+                if (imminent) {
+                    arrow_colour = COLOR_NAV_IMMINENT;
+                }
+
                 lv_img_set_src(s_route_arrow_label, TbtIcon(tbt.icon_id));
                 lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(arrow_colour), 0);
                 lv_label_set_text(s_route_dist_label, dist);
                 lv_label_set_text(s_route_dist_unit, dist_unit);
-                lv_label_set_text(s_route_dir_label,
-                                  tbt.street_name[0] != '\0' ? tbt.street_name : "AHEAD");
+                lv_obj_set_style_text_color(s_route_dist_label,
+                                            lv_color_hex(imminent ? COLOR_NAV_IMMINENT
+                                                                  : COLOR_VALUE),
+                                            0);
+
+                const char *street =
+                    tbt.street_name[0] != '\0' ? tbt.street_name : "AHEAD";
+                SetStreetName(s_route_dir_label, street, TBT_TEXT_W);
+
+                // ---- The countdown bar ----
+                // A new maneuver resets the scale to whatever distance it was
+                // announced at, so the bar always starts full and drains to
+                // the junction. Detected by icon or street changing: the
+                // directive carries no maneuver id, and the distance alone
+                // cannot tell a new turn from the old one counting down.
+                const bool new_maneuver = tbt.icon_id != s_tbt_bar_icon ||
+                                          strncmp(street, s_tbt_bar_street,
+                                                  sizeof(s_tbt_bar_street)) != 0;
+                if (new_maneuver) {
+                    s_tbt_bar_icon = tbt.icon_id;
+                    strncpy(s_tbt_bar_street, street, sizeof(s_tbt_bar_street) - 1);
+                    s_tbt_bar_street[sizeof(s_tbt_bar_street) - 1] = '\0';
+                    s_tbt_bar_scale_m = tbt.distance_m == TBT_DISTANCE_UNKNOWN
+                                            ? 0
+                                            : (tbt.distance_m > TBT_BAR_MAX_M ? TBT_BAR_MAX_M
+                                                                              : tbt.distance_m);
+                }
+                if (s_tbt_bar_scale_m == 0 || tbt.distance_m == TBT_DISTANCE_UNKNOWN) {
+                    // Nothing honest to draw: an empty bar, not a full one,
+                    // because a full bar reads as "miles to go" rather than
+                    // "unknown".
+                    lv_bar_set_value(s_route_bar, 0, LV_ANIM_OFF);
+                } else {
+                    uint32_t left = tbt.distance_m > s_tbt_bar_scale_m ? s_tbt_bar_scale_m
+                                                                      : tbt.distance_m;
+                    const int32_t filled =
+                        (int32_t)(1000 - (left * 1000) / s_tbt_bar_scale_m);
+                    lv_bar_set_value(s_route_bar, filled, LV_ANIM_OFF);
+                }
+                lv_obj_set_style_bg_color(s_route_bar,
+                                          lv_color_hex(imminent ? COLOR_NAV_IMMINENT
+                                                                : arrow_colour),
+                                          LV_PART_INDICATOR);
+
+                // ---- Which exit, over the arrow ----
+                if (tbt.exit_number > 0) {
+                    lv_label_set_text_fmt(s_route_exit_label, "%u",
+                                          (unsigned)tbt.exit_number);
+                    lv_obj_clear_flag(s_route_exit_label, LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(s_route_exit_label, LV_OBJ_FLAG_HIDDEN);
+                }
+
+                // ---- What follows, and how far is left ----
+                // Only the cached route knows either, so both are blank until
+                // a route has been uploaded and the rider placed on it. The
+                // row hides itself when neither has anything, and a flex
+                // column gives its height back to the rows that do.
+                bool any_secondary = false;
+                if (tbt.then_icon_id != TBT_ICON_NONE) {
+                    char then_dist[16];
+                    char then_unit[8];
+                    FormatTbtDistance(tbt.then_distance_m, then_dist, sizeof(then_dist),
+                                      then_unit, sizeof(then_unit));
+                    lv_label_set_text_fmt(s_route_then_label, "then %s in %s %s",
+                                          ManeuverWord(tbt.then_icon_id), then_dist,
+                                          then_unit);
+                    any_secondary = true;
+                } else {
+                    lv_label_set_text(s_route_then_label, "");
+                }
+                if (tbt.remaining_m != TBT_DISTANCE_UNKNOWN) {
+                    char left_dist[16];
+                    char left_unit[8];
+                    FormatTbtDistance(tbt.remaining_m, left_dist, sizeof(left_dist),
+                                      left_unit, sizeof(left_unit));
+                    lv_label_set_text_fmt(s_route_remaining_label, "%s %s to go", left_dist,
+                                          left_unit);
+                    any_secondary = true;
+                } else {
+                    lv_label_set_text(s_route_remaining_label, "");
+                }
+                if (any_secondary) {
+                    lv_obj_clear_flag(s_route_secondary_row, LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(s_route_secondary_row, LV_OBJ_FLAG_HIDDEN);
+                }
+
                 s_tbt_last_ms = lv_tick_get();
             }
         }
@@ -742,81 +940,129 @@ void PageDashboard::onViewLoad() {
         // Splitting the distance (see FormatTbtDistance) frees that width:
         // the number keeps the largest face LVGL ships and the unit becomes a
         // caption beneath it, so the arrow can take the whole left column.
-        s_route_arrow_label = lv_img_create(s_nav_cell);
+        // ---- The tile's contents, as one flex column ----
+        //
+        // Packed by LVGL rather than by hand-placed alignments. Two earlier
+        // versions of this tile were positioned with lv_obj_align_to() and
+        // absolute offsets, and both broke: the first put the unit off the
+        // edge because align_to reads coordinates that the layout pass has not
+        // written yet, the second clipped the number because a content-sized
+        // box cannot grow into space the arrow already occupies.
+        //
+        // A column also solves the harder problem here. The "then" preview and
+        // the distance to go only exist when a route has been uploaded AND a
+        // fix has been taken, which is neither the common case today nor
+        // something the tile can be sized for. Hidden children take no space in
+        // a flex layout, so the same tile packs correctly with two rows or
+        // four, with no branch in the code that fills it.
+        s_nav_content = lv_obj_create(s_nav_cell);
+        lv_obj_remove_style_all(s_nav_content);
+        lv_obj_set_pos(s_nav_content, PAD, STATUS_H);
+        lv_obj_set_size(s_nav_content, FULL_W - 2 * PAD, NAV_H - STATUS_H - PAD);
+        lv_obj_clear_flag(s_nav_content, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(s_nav_content, LV_FLEX_FLOW_COLUMN);
+        // SPACE_BETWEEN rather than START: whatever slack the hidden rows leave
+        // is spread between the rows that remain, instead of pooling into one
+        // gap at the bottom.
+        lv_obj_set_flex_align(s_nav_content, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+        // ---- Row 1: the arrow, and the distance to it ----
+        lv_obj_t *turn_row = lv_obj_create(s_nav_content);
+        lv_obj_remove_style_all(turn_row);
+        lv_obj_set_size(turn_row, lv_pct(100), TBT_ARROW_DRAW_PX);
+        lv_obj_clear_flag(turn_row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(turn_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(turn_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+
+        s_route_arrow_label = lv_img_create(turn_row);
         lv_img_set_src(s_route_arrow_label, TbtIcon(TBT_ICON_STRAIGHT));
         // recolor_opa must be full or the recolour is a no-op and an
         // ALPHA_8BIT image draws in the theme's default, not the accent.
         lv_obj_set_style_img_recolor_opa(s_route_arrow_label, LV_OPA_COVER, 0);
         lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
-        lv_obj_align(s_route_arrow_label, LV_ALIGN_TOP_LEFT, PAD, STATUS_H - 2);
+        // Zoomed down, and the object sized to match: an lv_img keeps the
+        // asset's own dimensions otherwise, and flex would reserve all 112px.
+        lv_img_set_zoom(s_route_arrow_label, TBT_ARROW_ZOOM);
+        lv_obj_set_size(s_route_arrow_label, TBT_ARROW_DRAW_PX, TBT_ARROW_DRAW_PX);
 
-        // The number, with its unit stacked underneath. Both right-aligned.
-        //
-        // Two earlier attempts are worth recording, because each failed in a
-        // way that is invisible until it is on the panel.
-        //
-        // First the unit was placed with lv_obj_align_to() against the number.
-        // align_to resolves immediately against the base object's CURRENT
-        // coordinates, and the number had only just been given an alignment,
-        // which LVGL does not apply until the next layout pass -- so the unit
-        // was positioned against coordinates the number did not have yet and
-        // landed off the tile. That is why the panel read "157" with no unit
-        // anywhere.
-        //
-        // Then both were put in one content-sized flex row. The unit appeared,
-        // and the number lost its leading digit: a content-sized container
-        // right-aligned into a fixed space has no room to grow leftwards once
-        // the arrow is beside it, so the overflow is simply cut off.
-        //
-        // A fixed-width column solves both. The width is the whole gap beside
-        // the arrow, decided here rather than derived from the text, so the
-        // number cannot outgrow it. Stacking means the row only ever has to
-        // fit the number OR the unit, never the two side by side, which is
-        // what made the width tight in the first place.
-        const lv_coord_t DIST_W = FULL_W - TBT_ICON_PX - 2 * PAD;
-        s_route_dist_row = lv_obj_create(s_nav_cell);
+        // Which exit, over the middle of the arrow. Costs no layout height,
+        // which is the only reason it can exist on a tile this full.
+        s_route_exit_label = lv_label_create(turn_row);
+        lv_obj_set_style_text_font(s_route_exit_label, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(s_route_exit_label, lv_color_hex(COLOR_VALUE), 0);
+        lv_label_set_text(s_route_exit_label, "");
+        lv_obj_add_flag(s_route_exit_label, LV_OBJ_FLAG_HIDDEN);
+        // Ignored by the flex layout so it can sit on top of the arrow rather
+        // than taking a column of its own.
+        lv_obj_add_flag(s_route_exit_label, LV_OBJ_FLAG_FLOATING);
+        lv_obj_align_to(s_route_exit_label, s_route_arrow_label, LV_ALIGN_CENTER, 0, 6);
+
+        // The number over its unit, both right-aligned so the digits stay put
+        // as the distance counts down and the string shortens.
+        s_route_dist_row = lv_obj_create(turn_row);
         lv_obj_remove_style_all(s_route_dist_row);
-        lv_obj_set_size(s_route_dist_row, DIST_W, LV_SIZE_CONTENT);
+        lv_obj_set_size(s_route_dist_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
         lv_obj_clear_flag(s_route_dist_row, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(s_route_dist_row, LV_FLEX_FLOW_COLUMN);
-        // Cross axis END right-aligns both lines, so the digits stay put as
-        // the distance counts down and the string shortens.
-        lv_obj_set_flex_align(s_route_dist_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END,
+        lv_obj_set_flex_align(s_route_dist_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END,
                               LV_FLEX_ALIGN_END);
-        // Sits the block's centre roughly on the arrow's, rather than hanging
-        // it from the top of the tile.
-        lv_obj_align(s_route_dist_row, LV_ALIGN_TOP_RIGHT, -PAD, STATUS_H + 4);
 
         s_route_dist_label = lv_label_create(s_route_dist_row);
         lv_obj_set_style_text_font(s_route_dist_label, &lv_font_montserrat_48, 0);
         lv_obj_set_style_text_color(s_route_dist_label, lv_color_hex(COLOR_VALUE), 0);
         lv_label_set_text(s_route_dist_label, "");
 
-        // 24pt, not the 18 it was: stacked, the unit has a line of its own and
-        // the tile has space going spare, and this is the field a rider reads
-        // at a junction.
         s_route_dist_unit = lv_label_create(s_route_dist_row);
         lv_obj_set_style_text_font(s_route_dist_unit, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(s_route_dist_unit, lv_color_hex(COLOR_ACCENT), 0);
         lv_label_set_text(s_route_dist_unit, "");
-        // The 48pt line box carries a lot of descender space the digits never
-        // use, so the two lines look further apart than they are.
-        lv_obj_set_style_pad_top(s_route_dist_unit, -8, 0);
+        // The 48pt line box carries descender space the digits never use, so
+        // without this the two lines look further apart than they are.
+        lv_obj_set_style_pad_top(s_route_dist_unit, -10, 0);
 
-        // The road name is how a rider confirms the turn, so it gets the full
-        // width and the biggest size that still fits a typical name: at 24pt
-        // "Rockingham Rd" is 197px of the 228 available. Longer names ellipsize,
-        // which beats shrinking every name to suit the worst one.
-        s_route_dir_label = lv_label_create(s_nav_cell);
-        lv_obj_set_width(s_route_dir_label, FULL_W - 2 * PAD);
+        // ---- Row 2: the countdown bar ----
+        s_route_bar = lv_bar_create(s_nav_content);
+        lv_obj_set_size(s_route_bar, lv_pct(100), 6);
+        lv_bar_set_range(s_route_bar, 0, 1000);
+        lv_bar_set_value(s_route_bar, 0, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(s_route_bar, lv_color_hex(COLOR_CELL_BORDER), LV_PART_MAIN);
+        lv_obj_set_style_bg_color(s_route_bar, lv_color_hex(COLOR_ACCENT), LV_PART_INDICATOR);
+        lv_obj_set_style_radius(s_route_bar, 3, LV_PART_MAIN);
+        lv_obj_set_style_radius(s_route_bar, 3, LV_PART_INDICATOR);
+
+        // ---- Row 3: what follows the turn, and how far is left ----
+        // Both come from the cached route, so both are hidden until one has
+        // been uploaded and the head unit has a fix to place the rider on it.
+        s_route_secondary_row = lv_obj_create(s_nav_content);
+        lv_obj_remove_style_all(s_route_secondary_row);
+        lv_obj_set_size(s_route_secondary_row, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_clear_flag(s_route_secondary_row, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_flex_flow(s_route_secondary_row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(s_route_secondary_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_add_flag(s_route_secondary_row, LV_OBJ_FLAG_HIDDEN);
+
+        s_route_then_label = lv_label_create(s_route_secondary_row);
+        lv_obj_set_style_text_font(s_route_then_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_route_then_label, lv_color_hex(COLOR_CAPTION), 0);
+        lv_label_set_text(s_route_then_label, "");
+
+        s_route_remaining_label = lv_label_create(s_route_secondary_row);
+        lv_obj_set_style_text_font(s_route_remaining_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_route_remaining_label, lv_color_hex(COLOR_CAPTION), 0);
+        lv_label_set_text(s_route_remaining_label, "");
+
+        // ---- Row 4: the street name ----
+        // The full width, and the largest font the name fits in; see
+        // SetStreetName for why it is not simply ellipsized.
+        s_route_dir_label = lv_label_create(s_nav_content);
+        lv_obj_set_width(s_route_dir_label, lv_pct(100));
         lv_label_set_long_mode(s_route_dir_label, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_font(s_route_dir_label, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(s_route_dir_label, lv_color_hex(COLOR_VALUE), 0);
-        // Centred, because the row above it is an arrow hard left and a
-        // number hard right: a name starting at the left margin made the
-        // whole tile look as though it had slipped sideways.
         lv_obj_set_style_text_align(s_route_dir_label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_align(s_route_dir_label, LV_ALIGN_BOTTOM_MID, 0, -PAD);
     }
 
     // ---- Status line ----
@@ -991,9 +1237,15 @@ void PageDashboard::onViewUnload() {
     s_hr_label = nullptr;
     s_route_arrow_label = nullptr;
     s_route_dir_label = nullptr;
+    s_nav_content = nullptr;
     s_route_dist_row = nullptr;
     s_route_dist_label = nullptr;
     s_route_dist_unit = nullptr;
+    s_route_bar = nullptr;
+    s_route_exit_label = nullptr;
+    s_route_secondary_row = nullptr;
+    s_route_then_label = nullptr;
+    s_route_remaining_label = nullptr;
     s_trip_unit_label = nullptr;
     s_incline_cell = nullptr;
     s_nav_cell = nullptr;
