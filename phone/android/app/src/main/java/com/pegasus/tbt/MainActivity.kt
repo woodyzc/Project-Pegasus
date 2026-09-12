@@ -8,7 +8,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.InputType
+import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -32,6 +35,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var status: TextView
     private lateinit var parseStatus: TextView
+    private lateinit var tokenStatus: TextView
     private lateinit var powerButton: Button
     private val handler = Handler(Looper.getMainLooper())
 
@@ -137,6 +141,46 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // Mapbox's public token, entered here rather than compiled in. A token
+        // in BuildConfig ends up in the dex as a plain string and travels with
+        // every APK; kept in the app's private preferences it needs the device
+        // to be compromised instead. See MapboxToken.
+        tokenStatus = TextView(this).apply { textSize = 13f }
+
+        val tokenInput = EditText(this).apply {
+            hint = "Paste Mapbox public token (pk.…)"
+            // No suggestions and no autofill: a keyboard that learns the token
+            // or an autofill service that stores it is another copy of a
+            // credential, in a place neither of us controls.
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+            // Keep it out of saved instance state, so rotating the screen does
+            // not write the token into a system-managed bundle.
+            isSaveEnabled = false
+        }
+
+        val saveTokenButton = Button(this).apply {
+            text = "Save token"
+            setOnClickListener {
+                val rejection = MapboxToken.save(this@MainActivity, tokenInput.text.toString())
+                if (rejection == null) {
+                    // Clear the field on success: leaving the token on screen
+                    // is how it ends up in a screenshot.
+                    tokenInput.setText("")
+                }
+                syncTokenStatus(rejection)
+            }
+        }
+
+        val clearTokenButton = Button(this).apply {
+            text = "Clear token"
+            setOnClickListener {
+                MapboxToken.clear(this@MainActivity)
+                tokenInput.setText("")
+                syncTokenStatus(null)
+            }
+        }
+
         // The way to turn the thing off. Without it the only apparent option
         // was Force stop, which the rebound notification listener promptly
         // undid -- so the app looked unkillable.
@@ -160,6 +204,10 @@ class MainActivity : AppCompatActivity() {
             addView(testButton)
             addView(clearButton)
             addView(routeButton)
+            addView(tokenStatus)
+            addView(tokenInput)
+            addView(saveTokenButton)
+            addView(clearTokenButton)
             addView(powerButton)
         })
 
@@ -168,6 +216,22 @@ class MainActivity : AppCompatActivity() {
         // user opened the screen to look at the counters.
         TbtService.startIfEnabled(this)
         syncPowerButton()
+        syncTokenStatus(null)
+    }
+
+    /**
+     * Shows which token is stored, redacted, or why the last paste was refused.
+     *
+     * Redacted rather than printed: screenshots of this screen get shared while
+     * debugging, and a token shown in full leaks with the first one.
+     */
+    private fun syncTokenStatus(rejection: String?) {
+        val stored = MapboxToken.Rules.redact(MapboxToken.load(this))
+        tokenStatus.text = if (rejection != null) {
+            "Mapbox token: $stored\nNot saved: $rejection"
+        } else {
+            "Mapbox token: $stored"
+        }
     }
 
     /**

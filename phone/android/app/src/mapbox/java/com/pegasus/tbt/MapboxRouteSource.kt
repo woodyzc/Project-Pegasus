@@ -23,10 +23,11 @@ import com.mapbox.navigation.core.trip.session.RouteProgressObserver
  * ---------------------------------------------------------------------------
  * The Navigation SDK is served from Mapbox's own Maven repository, which
  * refuses anonymous access, so building it needs a Mapbox account: a secret
- * token with the DOWNLOADS:READ scope for Gradle, and a public token for the
- * app. Neither exists on the machine this was written on, so every SDK call
- * below is written from the published API and has not been checked by a
- * compiler, let alone run. Treat it as a starting point that will need
+ * token with the DOWNLOADS:READ scope for Gradle. The public token the app
+ * routes with is not a build input at all -- it is entered on the phone, see
+ * MapboxToken. Neither existed on the machine this was written on, so every
+ * SDK call below is written from the published API and has not been checked by
+ * a compiler, let alone run. Treat it as a starting point that will need
  * adjusting against whatever version you actually resolve -- the SDK's shape
  * changed at v3, and it will change again.
  *
@@ -88,12 +89,15 @@ class MapboxRouteSource(private val context: Context) {
      * identical to being out of network, or to Mapbox being down, or to the
      * route simply not existing.
      */
-    fun unavailableReason(): String? = when {
-        BuildConfig.MAPBOX_ACCESS_TOKEN.isEmpty() ->
-            "No Mapbox token. Put MAPBOX_ACCESS_TOKEN=pk.… in local.properties."
-        !BuildConfig.MAPBOX_ACCESS_TOKEN.startsWith("pk.") ->
-            "Mapbox token is not a public token. It must start with pk., not sk."
-        else -> null
+    fun unavailableReason(): String? {
+        val token = MapboxToken.load(context)
+        if (token.isEmpty()) {
+            return "No Mapbox token. Enter the public pk. token on the main screen."
+        }
+        // Entry already refuses a malformed token, but a token stored by an
+        // older build, or one revoked since, still has to be reported here
+        // rather than becoming a silent routing failure.
+        return MapboxToken.Rules.rejectionReason(token)
     }
 
     fun start() {
@@ -104,7 +108,7 @@ class MapboxRouteSource(private val context: Context) {
         if (!MapboxNavigationApp.isSetup()) {
             // v3 takes the token globally rather than on NavigationOptions,
             // which is one of the things that moved at the major version.
-            MapboxOptions.accessToken = BuildConfig.MAPBOX_ACCESS_TOKEN
+            MapboxOptions.accessToken = MapboxToken.load(context)
             MapboxNavigationApp.setup(NavigationOptions.Builder(context).build())
         }
         navigation = MapboxNavigationApp.current()

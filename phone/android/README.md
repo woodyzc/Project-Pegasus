@@ -52,20 +52,38 @@ To build it:
 
    A secret token is displayed **once, at creation**. Copy it then; if you
    lose it, delete it and make another.
-3. Put the **secret** one in `~/.gradle/gradle.properties` — outside this repo,
-   because it is a credential:
+3. Put the **secret** one where Gradle reads properties from, which is
+   `$GRADLE_USER_HOME/gradle.properties` — `~/.gradle/gradle.properties` only
+   if you have not overridden that variable. The toolchain command under
+   *Building* does override it, so the file to edit is the one in that
+   scratchpad Gradle home. Either way it is outside this repo, because it is a
+   credential:
    ```properties
    MAPBOX_DOWNLOADS_TOKEN=sk.ey...
    ```
-4. Put the **public** one in `phone/android/local.properties`, which git does
-   not track:
-   ```properties
-   MAPBOX_ACCESS_TOKEN=pk.ey...
-   ```
-   The build reads it into `BuildConfig.MAPBOX_ACCESS_TOKEN`, and
-   `MapboxRouteSource.unavailableReason()` reports in words if it is missing or
-   if the two tokens were swapped — which is the failure that otherwise looks
-   like being offline.
+4. Do **not** put the public one in any file here. Install the app, then paste
+   it into *Save token* on the main screen. It is stored in the app's private
+   preferences, and `MapboxRouteSource.unavailableReason()` reports in words if
+   it is missing — which is the failure that otherwise looks like being
+   offline. Entry itself refuses a token that is empty, truncated, broken
+   across lines, or secret rather than public, and names that last case
+   explicitly, since it is the one people hit.
+
+   This used to be a `buildConfigField` read from `local.properties`, and it
+   was changed because that is not safe. A token in `BuildConfig` is compiled
+   into the dex as a plain string: unzip the APK, run `strings` on
+   `classes*.dex`, and it is right there. That was verified with a canary
+   token, not assumed. It meant every APK built here carried a live billing
+   credential, and rotating the token meant a rebuild and a reinstall.
+
+   On the phone it is reachable only by compromising the device — the manifest
+   sets `allowBackup="false"`, so there is no backup path off it either. That
+   is not secrecy; the Navigation SDK needs the token client-side and no
+   client-side token can be kept from the device's owner. It is the difference
+   between one shell command and a rooted phone, and it makes rotation cost a
+   paste. What actually caps the bill is on Mapbox's side: give this app its
+   own token with minimum scopes so it can be revoked alone, and watch the
+   usage graph.
 5. Build with the flag, and **without** `--offline`, since the artifacts are
    not in the local Gradle cache:
    ```sh
@@ -79,11 +97,13 @@ To build it:
 | Used by | the app, at runtime | Gradle, at build time |
 | Purpose | routing requests | downloading the SDK |
 | Scope | default | `DOWNLOADS:READ` |
-| Lives in | `local.properties` | `~/.gradle/gradle.properties` |
+| Lives in | the phone, entered on screen | `$GRADLE_USER_HOME/gradle.properties` |
 | Shown again? | yes, any time | **no, once only** |
 
-Swapping them fails in two confusing ways: Gradle cannot resolve the
-dependency, or routing requests are rejected. Neither says "wrong token".
+Swapping them used to fail in two confusing ways: Gradle cannot resolve the
+dependency, or routing requests are rejected. Neither says "wrong token". The
+app half is now caught at entry by name, so only the Gradle half is still
+silent.
 
 ### Cost
 

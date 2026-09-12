@@ -1,7 +1,3 @@
-// Explicit, because in a Kotlin build script `java` resolves to the Java
-// plugin extension rather than the package, so java.util.Properties does not.
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -23,25 +19,18 @@ plugins {
 //   ./gradlew -PwithMapbox=true assembleDebug
 val withMapbox = providers.gradleProperty("withMapbox").orNull == "true"
 
-// The PUBLIC Mapbox token (pk....), which the app sends with every routing
-// request. Read from local.properties, which is not tracked by git -- a token
-// in a tracked file is a token published to anyone who clones this.
+// The PUBLIC Mapbox token is deliberately NOT read here any more.
 //
-// This is not the same token Gradle needs to DOWNLOAD the SDK. That one is
-// secret (sk....), carries the DOWNLOADS:READ scope, and belongs in
-// ~/.gradle/gradle.properties as MAPBOX_DOWNLOADS_TOKEN -- outside the repo
-// entirely. See settings.gradle.kts.
+// It used to arrive as a buildConfigField from local.properties, which put it
+// in the dex as a plain string -- verified with a canary token: unzip the APK,
+// `strings classes3.dex`, and there it was. That made every APK built here a
+// carrier of a live billing credential, and made rotating the token a rebuild
+// and a reinstall.
 //
-// Empty when absent, so a build without Mapbox is unaffected and a build with
-// it fails at runtime with a clear message rather than at compile time with an
-// obscure one.
-val mapboxAccessToken: String = run {
-    val f = rootProject.file("local.properties")
-    if (!f.exists()) return@run ""
-    Properties().apply { f.inputStream().use { load(it) } }
-        .getProperty("MAPBOX_ACCESS_TOKEN")
-        .orEmpty()
-}
+// It is now entered on the phone and kept in the app's private preferences.
+// See MapboxToken.kt. The only Mapbox credential this build still touches is
+// the SECRET download token, which never reaches the app at all and lives in
+// GRADLE_USER_HOME/gradle.properties -- see settings.gradle.kts.
 
 android {
     namespace = "com.pegasus.tbt"
@@ -56,12 +45,6 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
-
-        buildConfigField("String", "MAPBOX_ACCESS_TOKEN", "\"$mapboxAccessToken\"")
-    }
-
-    buildFeatures {
-        buildConfig = true
     }
 
     sourceSets {
