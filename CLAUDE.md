@@ -94,6 +94,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 5. Navigation Strategy
 - **BLE Turn-by-Turn**: Accept turn arrows and distance metrics pushed over BLE from mobile app.
 - **Offline Breadcrumb Navigation**: Read `.gpx` files from SD card and render breadcrumb trails on LVGL canvas.
+- **Cached-route fallback**: the phone uploads the whole planned route once at
+  ride start, and the head unit navigates from it when the phone stops talking.
+  Two wire formats, both with pure host-tested decoders:
+  `src/navigation/TbtParse.h` for a live turn, `src/navigation/RouteParse.h`
+  for the route download. The geometry is `RouteFollow.h`, the PSRAM store and
+  the source arbitration are `NavRoute.h`.
+
+  Three rules there are load-bearing and each cost something to learn:
+  - **The handover is a timeout on DATA, not on the connection.** A BLE link
+    that is up but silent is exactly as useless to the rider as one that is
+    down, and this hardware produces that state.
+  - **Snap to the polyline and measure ALONG it.** Nearest-maneuver-in-a-
+    straight-line fails on an out-and-back, where the rider is metres from a
+    turn they will not reach for an hour. `test_route_parse.c` has that case.
+  - **The onboard path needs the same 10s keepalive the phone path has.**
+    `Page_Dashboard` drops a turn it has not heard about for 30s, so publishing
+    only on change blanks the panel for a rider stopped at a light -- which is
+    exactly when they are looking at it.
 
 ## 6. Open-Source Reference Repositories (`deps/`)
 Vendored as git submodules. Most are reference only, but **`deps/esp32-ant`
@@ -210,6 +228,19 @@ A Kotlin app that scrapes Google Maps' navigation notification and writes
 turn-by-turn frames to the head unit over BLE — Maps exposes no API, so the
 notification is the only route without root. See its own README.
 
-**`src/navigation/TbtParse.h` is the authority on the wire format**; the app's
-`TbtFrame.kt` is an encoder for it, and `TbtFrameTest` pins the two together
-byte for byte. Change one side and that test should be what notices.
+**`src/navigation/TbtParse.h` and `src/navigation/RouteParse.h` are the
+authorities on the two wire formats**; the app's `TbtFrame.kt` and
+`RouteFrame.kt` are encoders for them, and `TbtFrameTest` / `RouteFrameTest`
+pin each pair together byte for byte. Change one side and those tests should be
+what notices.
+
+The app has two route sources at very different maturities, and the README
+explains the split. Google Maps notifications work and are verified on a real
+route, but Maps ships the arrow as a bitmap and a notification carries no
+geometry at all, so that path can drive the live display and can never supply
+the offline fallback. The Mapbox Navigation SDK plans the route, so it yields
+structured maneuvers and the polyline together -- but it is **opt-in and has
+never been compiled here**, because Mapbox serves it from a repository that
+refuses anonymous access and needs an account with two separate tokens. Build
+it with `-PwithMapbox=true` and without `--offline`. Everything that did not
+need the SDK is outside it and unit tested.

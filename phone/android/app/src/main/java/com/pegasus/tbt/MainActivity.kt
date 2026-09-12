@@ -116,6 +116,27 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { TbtService.link?.send(TbtFrame.clearFrame(), force = true) }
         }
 
+        // Exercises the whole route upload without Mapbox and without a GPS
+        // module, neither of which exists here yet. Everything except turning
+        // a position into a turn is proved by this button: chunking,
+        // reassembly, the head unit's PSRAM store and its progress reporting.
+        val routeButton = Button(this).apply {
+            text = "Send test route (400 m loop)"
+            setOnClickListener {
+                val link = TbtService.link
+                if (link == null || !link.isConnected) {
+                    status.text = "Not connected"
+                    return@setOnClickListener
+                }
+                link.onRouteProgress = { percent, done ->
+                    runOnUiThread {
+                        status.text = if (done) "Route sent" else "Sending route… \$percent%"
+                    }
+                }
+                link.sendRoute(TestRoute.square().encode())
+            }
+        }
+
         // The way to turn the thing off. Without it the only apparent option
         // was Force stop, which the rebound notification listener promptly
         // undid -- so the app looked unkillable.
@@ -138,6 +159,7 @@ class MainActivity : AppCompatActivity() {
             addView(notifButton)
             addView(testButton)
             addView(clearButton)
+            addView(routeButton)
             addView(powerButton)
         })
 
