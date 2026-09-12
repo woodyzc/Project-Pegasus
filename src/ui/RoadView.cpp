@@ -19,6 +19,28 @@ struct RoadStyle {
 // Widths in screen pixels, chosen for a 240px panel rather than scaled from
 // the data: a residential street and a trunk road have to be told apart at
 // arm's length, which is a display question, not a cartographic one.
+// Above this many metres per pixel, a class stops being drawn.
+//
+// Real data forced this. 20874 is 3,560 ways and 45,413 points; drawing all of
+// it at ~40us a segment is 1.8 seconds, which is not a frame, it is a pause.
+// Every map renderer solves it the same way -- show less when zoomed out --
+// and the thresholds are about legibility as much as speed: residential
+// streets at 4km across are a grey smear that hides the road you want.
+//
+// 8 mpp is ~1.9km across this panel, 20 is ~4.8km.
+const double ROAD_MAX_MPP[ROAD_CLASS_COUNT] = {
+    8.0,    // minor      -- only when close in
+    20.0,   // secondary
+    1e9,    // artery     -- always; it is the thing you navigate by
+    1e9,    // water      -- always; the strongest landmark on a small screen
+};
+
+// A ceiling on one frame regardless of what the card holds. The zoom filter
+// bounds things for sane data, this bounds them for data nobody anticipated --
+// a dense city centre, or someone's continent-wide export. 4000 segments is
+// ~160ms, visibly a redraw but not a hang.
+constexpr uint32_t ROAD_MAX_SEGMENTS = 4000;
+
 const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
     {0x333A42, 1}, // minor
     {0x4E5760, 2}, // secondary
@@ -86,8 +108,11 @@ void RoadDrawCb(lv_event_t *e) {
     static const uint8_t ORDER[ROAD_CLASS_COUNT] = {
         ROAD_CLASS_WATER, ROAD_CLASS_MINOR, ROAD_CLASS_SECONDARY, ROAD_CLASS_ARTERY};
 
-    for (int pass = 0; pass < ROAD_CLASS_COUNT; pass++) {
+    for (int pass = 0; pass < ROAD_CLASS_COUNT && segments < ROAD_MAX_SEGMENTS; pass++) {
         const uint8_t klass = ORDER[pass];
+        if (mpp > ROAD_MAX_MPP[klass]) {
+            continue;
+        }
 
         lv_draw_line_dsc_t dsc;
         lv_draw_line_dsc_init(&dsc);
@@ -96,7 +121,7 @@ void RoadDrawCb(lv_event_t *e) {
         dsc.round_start = 1;
         dsc.round_end = 1;
 
-        for (size_t i = 0; i < ways; i++) {
+        for (size_t i = 0; i < ways && segments < ROAD_MAX_SEGMENTS; i++) {
             RoadWay_t way;
             if (!RoadMap_Way(i, &way) || way.klass != klass || way.count < 2) {
                 continue;
