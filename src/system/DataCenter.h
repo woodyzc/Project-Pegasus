@@ -80,6 +80,15 @@ typedef enum {
 
 #define TBT_STREET_NAME_MAX 32 // 31 UTF-8 bytes + NUL
 
+// Where a directive came from. The rider needs to know, because the two are
+// not equally trustworthy: the phone has map matching and live rerouting, the
+// head unit has a cached polyline and its own GPS. A countdown that is being
+// computed on board rather than received should say so.
+typedef enum {
+    TBT_SOURCE_PHONE = 0,    // live over BLE; also the value a zeroed struct has
+    TBT_SOURCE_ONBOARD = 1,  // computed from the cached route and our own fix
+} TBT_Source_t;
+
 // One turn-by-turn directive pushed from the phone (CLAUDE.md §5).
 // Declared here beside the other topic payloads rather than in
 // BLE_TBT_Receiver.h, so DataCenter's topic table can size it without the bus
@@ -89,6 +98,11 @@ typedef struct {
     uint8_t icon_id;                       // a TBT_Icon_t value
     uint32_t distance_m;                   // metres to the maneuver
     char street_name[TBT_STREET_NAME_MAX]; // NUL-terminated, may be empty
+
+    // Appended, not inserted: TBT_SOURCE_PHONE is 0, so every existing
+    // publisher that zeroes this struct keeps its old meaning untouched.
+    uint8_t source;      // a TBT_Source_t value
+    bool off_route;      // onboard only: the fix is not near the cached route
 } TBT_Directive_t;
 
 // Well-known topic names (CLAUDE.md §4 examples: "Sensor/HeartRate", "GPS_Info").

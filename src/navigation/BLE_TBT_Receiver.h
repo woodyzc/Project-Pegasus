@@ -32,6 +32,21 @@
 #define TBT_SERVICE_UUID "a3c87500-8ed3-4bdf-8a39-a01bebede295"
 #define TBT_CHARACTERISTIC_UUID "a3c87501-8ed3-4bdf-8a39-a01bebede295"
 
+// The route download, written once at ride start. Same service, because a
+// phone that can send turns can send the route behind them and a second
+// service would cost another 16 bytes of advertisement for nothing.
+//
+// WRITE only, no WRITE_NR: a live turn is disposable and the next one corrects
+// it, but a dropped route chunk leaves a permanent hole. The ack is what lets
+// the phone know a chunk landed, and RouteParse's chunk indices are what let
+// it resend just the one that did not.
+#define TBT_ROUTE_CHARACTERISTIC_UUID "a3c87502-8ed3-4bdf-8a39-a01bebede295"
+
+// Transfer progress, for the phone to poll and for the rider to see. Reads
+// back four bytes: received chunks u16, total chunks u16, both little-endian.
+// Notifies on change so the phone need not poll during the download.
+#define TBT_STATUS_CHARACTERISTIC_UUID "a3c87503-8ed3-4bdf-8a39-a01bebede295"
+
 // Brings up the GATT server and starts advertising, so the phone can find and
 // connect to the device. Preconditions: DataCenter_Init() has run, and NimBLE
 // is initialised (BLE_HR_Init() does this; call that first).

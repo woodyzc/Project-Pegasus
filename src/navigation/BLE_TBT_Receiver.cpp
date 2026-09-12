@@ -1,5 +1,7 @@
 #include "BLE_TBT_Receiver.h"
 
+#include "NavRoute.h"
+
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
@@ -62,13 +64,22 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         (void)reason;
         s_connected = false;
 
-        // Publish an empty directive so the dashboard drops back to "NO
-        // ROUTE" instead of holding the last turn forever after the phone
-        // walks away.
-        TBT_Directive_t cleared;
-        memset(&cleared, 0, sizeof(cleared));
-        cleared.icon_id = TBT_ICON_NONE;
-        DataCenter_Publish(TOPIC_NAV_TBT, &cleared);
+        // With a route cached, a disconnect is a handover rather than an end:
+        // NavRoute navigates from its own GPS from the next tick. Clearing
+        // here would blank the panel for a second and then refill it, which
+        // reads as a fault rather than as a mode change.
+        NavRoute_NotePhoneGone();
+
+        if (!NavRoute_IsLoaded()) {
+            // No cached route, so there is genuinely nothing left to show.
+            // Publish an empty directive so the dashboard drops back to "NO
+            // ROUTE" instead of holding the last turn forever after the phone
+            // walks away.
+            TBT_Directive_t cleared;
+            memset(&cleared, 0, sizeof(cleared));
+            cleared.icon_id = TBT_ICON_NONE;
+            DataCenter_Publish(TOPIC_NAV_TBT, &cleared);
+        }
 
         // Nothing re-advertises on its own once a peer drops.
         s_advertising = NimBLEDevice::startAdvertising();
@@ -91,15 +102,58 @@ class TbtCallbacks : public NimBLECharacteristicCallbacks {
             return;
         }
 
+        // The phone is demonstrably talking. NavRoute's fallback waits on
+        // this rather than on the connection state, so that a link which is up
+        // but silent still hands navigation back to the head unit.
+        NavRoute_NoteLiveDirective();
+        directive.source = TBT_SOURCE_PHONE;
+
         // Runs on NimBLE's host task (Core 0), which is exactly the pattern
         // DataCenter exists for -- the dashboard consumes it on Core 1.
         DataCenter_Publish(TOPIC_NAV_TBT, &directive);
     }
 };
 
+NimBLECharacteristic *s_status_characteristic = nullptr;
+
+// Publishes the transfer progress on the status characteristic, so the phone
+// can see which chunks landed without the head unit needing a reverse channel
+// of its own. Four bytes: received u16, total u16, little-endian.
+void NotifyRouteProgress() {
+    if (s_status_characteristic == nullptr) {
+        return;
+    }
+    uint16_t received = 0;
+    uint16_t total = 0;
+    NavRoute_Progress(&received, &total);
+
+    uint8_t payload[4];
+    payload[0] = (uint8_t)(received & 0xFF);
+    payload[1] = (uint8_t)((received >> 8) & 0xFF);
+    payload[2] = (uint8_t)(total & 0xFF);
+    payload[3] = (uint8_t)((total >> 8) & 0xFF);
+
+    s_status_characteristic->setValue(payload, sizeof(payload));
+    s_status_characteristic->notify();
+}
+
+class RouteCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &conn_info) override {
+        (void)conn_info;
+        NimBLEAttValue value = characteristic->getValue();
+
+        // The chunk is validated and placed by NavRoute; a rejected one is
+        // simply not acknowledged in the progress count, which is how the
+        // phone learns to resend it.
+        NavRoute_AcceptChunk(value.data(), value.length());
+        NotifyRouteProgress();
+    }
+};
+
 // Callback objects outlive the characteristic; NimBLE keeps raw pointers.
 ServerCallbacks s_server_callbacks;
 TbtCallbacks s_characteristic_callbacks;
+RouteCallbacks s_route_callbacks;
 
 const char *s_start_result = "not started";
 
@@ -177,6 +231,16 @@ void BLE_TBT_Start() {
     NimBLECharacteristic *characteristic = service->createCharacteristic(
         TBT_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     characteristic->setCallbacks(&s_characteristic_callbacks);
+
+    // WRITE with an ack, unlike the turn characteristic above: a lost route
+    // chunk is a permanent hole in the route, not a stale turn that the next
+    // write corrects.
+    NimBLECharacteristic *route = service->createCharacteristic(
+        TBT_ROUTE_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::WRITE);
+    route->setCallbacks(&s_route_callbacks);
+
+    s_status_characteristic = service->createCharacteristic(
+        TBT_STATUS_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
 
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(TBT_SERVICE_UUID);

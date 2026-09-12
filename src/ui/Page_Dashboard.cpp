@@ -34,6 +34,15 @@ constexpr uint32_t COLOR_BG = 0x101820;      // screen background
 constexpr uint32_t COLOR_CAPTION = 0x93A4B8; // small all-caps labels
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;   // primary readouts
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
+
+// Turn-by-turn computed on board from the cached route rather than received
+// live from the phone. Colour rather than a word or an icon: the navigation
+// tile is already the densest thing on the panel, and at a junction the rider
+// has no attention to spare for reading a mode label. Amber says "still
+// navigating, but on my own" at a glance, and red says the fix is nowhere near
+// the route so the countdown cannot be trusted.
+constexpr uint32_t COLOR_NAV_ONBOARD = 0xFFC857;
+constexpr uint32_t COLOR_NAV_OFF_ROUTE = 0xFF6B6B;
 constexpr uint32_t COLOR_BADGE_TEXT = 0x081015;
 constexpr uint32_t COLOR_CELL_BG = 0x141E27;
 constexpr uint32_t COLOR_CELL_BORDER = 0x24313D;
@@ -553,8 +562,15 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 char dist_unit[8];
                 FormatTbtDistance(tbt.distance_m, dist, sizeof(dist), dist_unit,
                                   sizeof(dist_unit));
+                // The arrow carries the source. See the colour constants.
+                uint32_t arrow_colour = COLOR_ACCENT;
+                if (tbt.off_route) {
+                    arrow_colour = COLOR_NAV_OFF_ROUTE;
+                } else if (tbt.source == TBT_SOURCE_ONBOARD) {
+                    arrow_colour = COLOR_NAV_ONBOARD;
+                }
                 lv_img_set_src(s_route_arrow_label, TbtIcon(tbt.icon_id));
-                lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
+                lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(arrow_colour), 0);
                 lv_label_set_text(s_route_dist_label, dist);
                 lv_label_set_text(s_route_dist_unit, dist_unit);
                 lv_label_set_text(s_route_dir_label,

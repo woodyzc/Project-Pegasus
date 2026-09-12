@@ -7,6 +7,7 @@
 #include "hal/Touch.h"
 #include "navigation/BLE_TBT_Receiver.h"
 #include "navigation/GpxTrack.h"
+#include "navigation/NavRoute.h"
 #include "navigation/RideLog.h"
 #include "navigation/RoadMap.h"
 #include "sensors/BLE_HR_Client.h"
@@ -226,5 +227,12 @@ void loop() {
     // the trip odometer costs an NVS write of tens of milliseconds, which
     // would stall the GPS task if it ran in the publish callback.
     Trip_Service();
+
+    // Onboard turn-by-turn, for when the phone is not talking. Returns
+    // immediately unless a route has been downloaded AND the phone has gone
+    // quiet, so this costs nothing on a normal connected ride. Once a second
+    // is the right cadence: it is also how often a GPS fix arrives.
+    NavRoute_Tick(millis());
+
     vTaskDelay(pdMS_TO_TICKS(1000));
 }
