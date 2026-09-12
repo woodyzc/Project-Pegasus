@@ -14,6 +14,7 @@
 #include "../system/Trip.h"
 #include "../navigation/GpxTrack.h"
 #include "../navigation/TbtParse.h"
+#include "../system/TimeSource.h"
 #include "../system/TimeZone.h"
 #include "MapView.h"
 #include "RoadView.h"
@@ -202,6 +203,13 @@ lv_timer_t *s_refresh_timer = nullptr;
 // worst delays a widget update by one 100ms refresh tick, never corrupts
 // state -- a mutex would just add overhead for no correctness benefit here
 // (unlike DataCenter's own cross-topic table, which genuinely needs one).
+// When the GNSS-with-position path last drew the clock. That path resolves the
+// zone from the fix itself and applies real daylight-saving rules, so it is
+// left to win while it is running; RenderClock() only takes over once it has
+// gone quiet.
+uint32_t s_clock_from_fix_ms = 0;
+uint32_t s_clock_drawn_ms = 0;
+
 volatile bool s_gps_dirty = false;
 volatile bool s_hr_dirty = false;
 volatile bool s_imu_dirty = false;
@@ -536,6 +544,50 @@ void ClearTbt() {
     s_tbt_bar_street[0] = '\0';
 }
 
+// Draws the clock from whichever source currently outranks the others.
+//
+// Called on a timer rather than only when a fix arrives, because the phone is
+// now a source too and it writes minutes apart -- a clock that only redrew on
+// a GNSS publish would sit at the same minute for the whole gap, or at dashes
+// forever on a head unit that has never seen a satellite.
+//
+// The GNSS-with-position path above is left alone and still wins when it
+// applies: resolving the zone from the fix gives real daylight-saving rules,
+// where the phone can only state the offset it happens to be using.
+void RenderClock() {
+    TimeReading_t reading;
+    if (!TimeSource_Now(lv_tick_get(), &reading)) {
+        lv_label_set_text(s_clock_label, "--:--");
+        lv_label_set_text(s_clock_caption, "");
+        return;
+    }
+
+    // Applied by arithmetic, not by setenv/tzset. The offset is already
+    // resolved -- the phone sent the one it is actually using, daylight saving
+    // included -- so there is no rule to evaluate, and the zone database this
+    // firmware carries is a coarse position lookup that would only second-
+    // guess it.
+    const int32_t local_seconds =
+        (int32_t)(reading.utc_seconds % 86400u) + (int32_t)reading.offset_min * 60;
+    // The offset can push the local day either side of the UTC one.
+    const int32_t wrapped = ((local_seconds % 86400) + 86400) % 86400;
+
+    lv_label_set_text_fmt(s_clock_label, "%02d:%02d", (int)(wrapped / 3600),
+                          (int)((wrapped % 3600) / 60));
+
+    if (!reading.offset_known) {
+        // A time nobody has placed in a zone. Saying UTC is honest; showing
+        // it as local would be a guess presented as a fact.
+        lv_label_set_text(s_clock_caption, "UTC");
+    } else if (reading.zone[0] != '\0') {
+        lv_label_set_text(s_clock_caption, reading.zone);
+    } else {
+        // No abbreviation, so state the offset itself rather than nothing.
+        const int mins = reading.offset_min;
+        lv_label_set_text_fmt(s_clock_caption, "%+03d:%02d", mins / 60, abs(mins) % 60);
+    }
+}
+
 void RenderSpeedAndTrip() {
     if (s_has_speed) {
         lv_label_set_text_fmt(s_speed_label, "%.1f", Settings_SpeedFromKmh(s_last_speed_kmh));
@@ -557,6 +609,19 @@ void RenderSpeedAndTrip() {
 // ever calls from lvgl_task() on Core 1 (see src/system/LvglTask.cpp).
 void RefreshTimerCallback(lv_timer_t *timer) {
     (void)timer;
+
+    // Once a second, and only when a positioned fix is not already drawing it.
+    // Every second rather than every 100ms because the display shows minutes,
+    // and redrawing a label that has not changed ten times a second is work
+    // for nothing.
+    if (lv_tick_elaps(s_clock_drawn_ms) >= 1000) {
+        s_clock_drawn_ms = lv_tick_get();
+        const bool fix_is_drawing =
+            s_clock_from_fix_ms != 0 && lv_tick_elaps(s_clock_from_fix_ms) < 3000;
+        if (!fix_is_drawing) {
+            RenderClock();
+        }
+    }
 
     if (s_gps_dirty) {
         s_gps_dirty = false;
@@ -582,6 +647,16 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             // timezone and newlib applies its DST rule. No setting, no
             // network. Needs a valid fix as well as valid time -- without a
             // position there is no zone to resolve.
+            // Into the ranking before it is drawn, so a later tick without a
+            // fix can still show the time -- and so the phone's offset is
+            // available to a fix that has no idea what zone it is over.
+            if (gps.time_valid) {
+                TimeSource_SetFromGnss(
+                    (uint32_t)TimeZone_UtcToEpoch(gps.year, gps.month, gps.day, gps.hour,
+                                                  gps.minute, gps.second),
+                    lv_tick_get());
+            }
+
             if (gps.time_valid && gps.fix_valid) {
                 bool approximate = false;
                 const char *tz = TimeZone_PosixFor(gps.lat, gps.lon, &approximate);
@@ -605,11 +680,13 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 char zone[8] = {0};
                 strftime(zone, sizeof(zone), "%Z", &local);
                 lv_label_set_text_fmt(s_clock_caption, approximate ? "~%s" : "%s", zone);
-            } else if (gps.time_valid) {
-                // Time but no fix: UTC is all that can honestly be shown.
-                lv_label_set_text_fmt(s_clock_label, "%02u:%02u", gps.hour, gps.minute);
-                lv_label_set_text(s_clock_caption, "UTC");
+                s_clock_from_fix_ms = lv_tick_get();
             }
+            // No dedicated "time but no fix" branch any more. That case now
+            // falls through to RenderClock() below, which can do better than
+            // the UTC this used to show: the phone's offset outlives the
+            // connection that delivered it, so a fix with no position can
+            // still be displayed in the rider's own zone.
         }
     }
 

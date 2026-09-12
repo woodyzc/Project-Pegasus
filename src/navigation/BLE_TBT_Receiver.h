@@ -47,6 +47,12 @@
 // Notifies on change so the phone need not poll during the download.
 #define TBT_STATUS_CHARACTERISTIC_UUID "a3c87503-8ed3-4bdf-8a39-a01bebede295"
 
+// The phone writes the current time here; see src/system/ClockFrame.h for the
+// format. A separate characteristic rather than a field on the turn frame,
+// because the time matters whether or not anyone is navigating -- a rider not
+// following a route still wants a clock, and ride files are named from it.
+#define TBT_CLOCK_CHARACTERISTIC_UUID "a3c87504-8ed3-4bdf-8a39-a01bebede295"
+
 // Brings up the GATT server and starts advertising, so the phone can find and
 // connect to the device. Preconditions: DataCenter_Init() has run, and NimBLE
 // is initialised (BLE_HR_Init() does this; call that first).

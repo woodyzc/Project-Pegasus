@@ -26,6 +26,13 @@
 #   * test_hr_zone      - heart-rate training zones by reserve, checked
 #                         against the rider's own phone (compiles the real
 #                         src/system/HrZone.c)
+#   * test_clock_frame  - the clock the phone writes over BLE (compiles the
+#                         real src/system/ClockFrame.c). Worth its own suite:
+#                         a wrong clock is written to the card permanently, in
+#                         ride filenames and in every trackpoint stamp.
+#   * test_time_source  - which clock the head unit believes, and when it stops
+#                         believing it (compiles the real
+#                         src/system/TimeSource.c)
 #   * test_route_parse  - the BLE route-download protocol and the offline
 #                         route-following geometry (compiles the real
 #                         src/navigation/RouteParse.c and RouteFollow.c).
@@ -49,7 +56,8 @@ SUFFIX ?=
 BINS := test_parsebpm$(SUFFIX) test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) \
         test_ubx_parse$(SUFFIX) test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) \
         test_track_buffer$(SUFFIX) test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) \
-        test_trip_accum$(SUFFIX) test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX)
+        test_trip_accum$(SUFFIX) test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) \
+        test_clock_frame$(SUFFIX) test_time_source$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -71,6 +79,12 @@ test_ubx_parse$(SUFFIX): test_ubx_parse.c $(SENSORS)/UbxParse.c
 	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $^ -lm
 
 test_timezone$(SUFFIX): test_timezone.c $(SYSTEM)/TimeZone.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^
+
+test_clock_frame$(SUFFIX): test_clock_frame.c $(SYSTEM)/ClockFrame.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^
+
+test_time_source$(SUFFIX): test_time_source.c $(SYSTEM)/TimeSource.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^
 
 test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c

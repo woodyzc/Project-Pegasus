@@ -82,6 +82,7 @@ class BleLink(context: Context) {
     private var characteristic: BluetoothGattCharacteristic? = null
     private var routeCharacteristic: BluetoothGattCharacteristic? = null
     private var statusCharacteristic: BluetoothGattCharacteristic? = null
+    private var clockCharacteristic: BluetoothGattCharacteristic? = null
     private var lastWriteAt = 0L
     private var lastFrame: ByteArray? = null
 
@@ -120,8 +121,10 @@ class BleLink(context: Context) {
         characteristic = null
         routeCharacteristic = null
         statusCharacteristic = null
+        clockCharacteristic = null
         transfer = null
         isConnected = false
+        handler.removeCallbacks(clockTick)
     }
 
     /**
@@ -282,6 +285,8 @@ class BleLink(context: Context) {
                 characteristic = null
                 routeCharacteristic = null
                 statusCharacteristic = null
+                clockCharacteristic = null
+                handler.removeCallbacks(clockTick)
                 // The transfer survives the drop and resumes on reconnect --
                 // see RouteTransfer.onDisconnected, which deliberately does
                 // not spend one of its attempts on a reconnect.
@@ -308,11 +313,19 @@ class BleLink(context: Context) {
             // against it rather than the whole link being refused.
             routeCharacteristic = service.getCharacteristic(RouteFrame.ROUTE_CHARACTERISTIC_UUID)
             statusCharacteristic = service.getCharacteristic(RouteFrame.STATUS_CHARACTERISTIC_UUID)
+            clockCharacteristic = service.getCharacteristic(ClockFrame.CHARACTERISTIC_UUID)
 
             isConnected = true
             report(if (routeCharacteristic != null) "Ready" else "Ready (no route support)")
 
             statusCharacteristic?.let { subscribeToStatus(g, it) }
+
+            // The head unit has no clock of its own until a GNSS module is
+            // fitted, so send one immediately on connecting rather than
+            // waiting for the first timer tick -- the whole point is that the
+            // panel shows a time as soon as the link is up.
+            sendClock()
+            scheduleClock()
 
             // A larger MTU matters more now than it did for turns alone. A
             // route chunk is 186 bytes on the wire, and at the 23-byte default
@@ -430,6 +443,43 @@ class BleLink(context: Context) {
             lastFrame = frame
         }
         return ok
+    }
+
+    /**
+     * Writes the current time to the head unit.
+     *
+     * Unacknowledged: a lost clock frame costs nothing, because the head unit
+     * keeps counting on its own tick and another arrives minutes later. That
+     * is the opposite of a route chunk, where a lost write is a permanent
+     * hole, and it is why this does not go through the route path's machinery.
+     */
+    private fun sendClock() {
+        val chr = clockCharacteristic ?: return
+        val g = gatt ?: return
+        val frame = ClockFrame.now()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(chr, frame, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                chr.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                chr.value = frame
+                g.writeCharacteristic(chr)
+            }
+        }
+    }
+
+    private val clockTick = object : Runnable {
+        override fun run() {
+            sendClock()
+            scheduleClock()
+        }
+    }
+
+    private fun scheduleClock() {
+        handler.removeCallbacks(clockTick)
+        handler.postDelayed(clockTick, ClockFrame.RESEND_INTERVAL_MS)
     }
 
     private fun report(message: String) {

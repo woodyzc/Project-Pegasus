@@ -2,6 +2,9 @@
 
 #include "NavRoute.h"
 
+#include "../system/ClockFrame.h"
+#include "../system/TimeSource.h"
+
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <Preferences.h>
@@ -143,6 +146,30 @@ void NotifyRouteProgress() {
     s_status_characteristic->notify();
 }
 
+class ClockCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &conn_info) override {
+        (void)conn_info;
+        NimBLEAttValue value = characteristic->getValue();
+
+        uint32_t utc_seconds = 0;
+        int16_t offset_min = 0;
+        char zone[CLOCK_ZONE_LEN + 1] = {0};
+
+        if (!Clock_ParseFrame(value.data(), value.length(), &utc_seconds, &offset_min, zone,
+                              sizeof(zone))) {
+            // Dropped silently, like a malformed turn. A clock that is wrong
+            // is worse than one that is blank: it names the ride file and
+            // stamps every trackpoint in it.
+            return;
+        }
+
+        // Ranked against whatever else has spoken, not applied outright --
+        // see TimeSource.h. A fix outranks this for the instant; nothing
+        // outranks it for the zone.
+        TimeSource_SetFromPhone(utc_seconds, offset_min, zone, millis());
+    }
+};
+
 class RouteCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &conn_info) override {
         (void)conn_info;
@@ -160,6 +187,7 @@ class RouteCallbacks : public NimBLECharacteristicCallbacks {
 ServerCallbacks s_server_callbacks;
 TbtCallbacks s_characteristic_callbacks;
 RouteCallbacks s_route_callbacks;
+ClockCallbacks s_clock_callbacks;
 
 const char *s_start_result = "not started";
 
@@ -247,6 +275,13 @@ void BLE_TBT_Start() {
 
     s_status_characteristic = service->createCharacteristic(
         TBT_STATUS_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+
+    // WRITE_NR as well as WRITE: the phone sends this on a timer and a lost
+    // one costs nothing, since the next arrives minutes later and the clock
+    // keeps running from its own tick in between.
+    NimBLECharacteristic *clock = service->createCharacteristic(
+        TBT_CLOCK_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+    clock->setCallbacks(&s_clock_callbacks);
 
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(TBT_SERVICE_UUID);
