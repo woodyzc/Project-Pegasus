@@ -373,10 +373,12 @@ lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
 lv_obj_t *MakeSecondary(lv_obj_t *cell) {
     lv_obj_t *label = lv_label_create(cell);
     lv_label_set_text(label, "AVG --\nMAX --");
-    // 14pt and white, not 10pt grey. At caption size and caption colour these
-    // read as labelling for the live value rather than as two numbers of their
-    // own, and on a ride they are the numbers people actually look at.
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    // 18pt and white. At caption size and caption colour these read as
+    // labelling for the live value rather than as two numbers of their own,
+    // and on a ride they are the numbers people actually look at. 18 is the
+    // ceiling: "AVG 24.6" is about 73px, and the cell has to hold a 32pt live
+    // value beside it inside 150.
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_line_space(label, 2, 0);
@@ -584,6 +586,18 @@ void ClearTbt() {
 // The GNSS-with-position path above is left alone and still wins when it
 // applies: resolving the zone from the fix gives real daylight-saving rules,
 // where the phone can only state the offset it happens to be using.
+// A speed or a ride average, at a precision the cell can actually hold.
+//
+// One decimal below 100 and none above, which is the rule the trip readout
+// already uses. The speed cell shares 150px between a 32pt live value and two
+// 18pt ride figures, and that fits at four characters and does not at five:
+// the simulator drew "105.3" straight through "AVG 104.2". A tenth of a km/h
+// stops being worth anything a long way before three digits, and a bad fix
+// reporting 400 is the case that reaches them.
+void FormatMetric(float value, char *out, size_t size) {
+    snprintf(out, size, (value >= 100.0f || value <= -100.0f) ? "%.0f" : "%.1f", value);
+}
+
 void RenderClock() {
     TimeReading_t reading;
     if (!TimeSource_Now(lv_tick_get(), &reading)) {
@@ -620,7 +634,9 @@ void RenderClock() {
 
 void RenderSpeedAndTrip() {
     if (s_has_speed) {
-        lv_label_set_text_fmt(s_speed_label, "%.1f", Settings_SpeedFromKmh(s_last_speed_kmh));
+        char speed[12];
+        FormatMetric(Settings_SpeedFromKmh(s_last_speed_kmh), speed, sizeof(speed));
+        lv_label_set_text(s_speed_label, speed);
     }
     lv_label_set_text(s_speed_unit_label, Settings_SpeedUnitLabel());
     // Two decimals until three digits are needed, then one. At 40px "123.45"
@@ -646,9 +662,11 @@ void RenderSpeedAndTrip() {
             // Converted like the live value, so all three agree with the unit
             // in the corner. A ride average in km/h beside a speed in mph is
             // the kind of thing nobody notices until they compare two rides.
-            const float avg = Settings_SpeedFromKmh(RideStats_AvgSpeedKmh());
-            const float max = Settings_SpeedFromKmh(max_kmh);
-            lv_label_set_text_fmt(s_speed_stats_label, "AVG %.1f\nMAX %.1f", avg, max);
+            char avg[12];
+            char max[12];
+            FormatMetric(Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()), avg, sizeof(avg));
+            FormatMetric(Settings_SpeedFromKmh(max_kmh), max, sizeof(max));
+            lv_label_set_text_fmt(s_speed_stats_label, "AVG %s\nMAX %s", avg, max);
         }
     }
 }
@@ -1030,7 +1048,7 @@ void PageDashboard::onViewLoad() {
     // other two do not. Trip and incline are a glance rather than a readout:
     // they keep their own column and take a smaller face, which is what pays
     // for the width the left column gains.
-    const lv_coord_t STATS_W = 136;
+    const lv_coord_t STATS_W = 150;
     const lv_coord_t SEC_W = SCREEN_W - STATS_W;               // 92
     const lv_coord_t COL1 = 0;
     const lv_coord_t COL2 = STATS_W;
@@ -1333,28 +1351,30 @@ void PageDashboard::onViewLoad() {
     // which is what pays for the jump from 28 to 34. The widest thing any of
     // them has to hold is a six-character trip ("123.45"), and at 34 that
     // comes to about 104px inside 108px of usable width.
-    // 32pt, not 40. The live value now shares its cell with an average and a
-    // peak at a size worth reading, and 40 leaves them nowhere to go.
+    // 28pt. The live value shares its cell with a ride average and a peak that
+    // are worth reading at 18, and the three of them fit 150px at this size and
+    // collide at 32: the simulator drew "18.5" hard against "AVG 24.6". Still
+    // the largest thing in the cell, which is the hierarchy that matters.
     lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, STATS_W, CELL_H, "SPEED");
-    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
+    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_28);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
     lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
     s_speed_stats_label = MakeSecondary(speed_cell);
 
     lv_obj_t *hr_cell = MakeCell(parent, COL1, ROW2, STATS_W, CELL_H, "HEART RATE");
-    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
+    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_28);
     MakeUnit(hr_cell, "bpm");
     s_hr_stats_label = MakeSecondary(hr_cell);
 
-    // The same 32pt as the live values opposite, so the four cells read as one
-    // grid rather than two sizes of importance. It fits because this column
-    // got wider when the other one stopped needing 40pt.
+    // 28pt against the 32 opposite: near enough that the four cells read as one
+    // grid, small enough that "188.4" fits a column narrowed to give the ride
+    // averages room to be legible.
     lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, SEC_W, CELL_H, "TRIP");
-    s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_32);
+    s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_28);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
 
     s_incline_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "INCLINE");
-    s_incline_label = MakeValueIn(s_incline_cell, "--", COLOR_ACCENT, &lv_font_montserrat_32);
+    s_incline_label = MakeValueIn(s_incline_cell, "--", COLOR_ACCENT, &lv_font_montserrat_28);
     MakeUnit(s_incline_cell, "%");
 
     // ---- Dividing lines ----

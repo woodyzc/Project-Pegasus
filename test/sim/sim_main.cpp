@@ -92,8 +92,59 @@ static void SetTurn(uint8_t icon, uint32_t distance_m, const char *street, uint8
     g_sim.tbt.remaining_m = remaining_m;
 }
 
+// Renders every combination of maneuver, distance and unit, for the HTML
+// viewer to scrub through.
+//
+// The viewer is a viewer and nothing more: it shows frames produced by this
+// program, which is the real page code. A dashboard reimplemented in HTML
+// would be a second layout that drifts from the firmware quietly, and would
+// answer questions about itself rather than about the panel.
+static void RenderGallery(PageDashboard *page, const char *out_dir) {
+    // Chosen to cross every threshold the tile has: the imminent colour at
+    // 30m, the switch from metres to kilometres at 1000, the switch from feet
+    // to miles at 1000ft, and the countdown bar's 500m ceiling.
+    static const uint32_t kDistances[] = {1500, 900, 600, 400, 250, 150, 90, 50, 25, 10};
+    static const uint8_t kIcons[] = {
+        TBT_ICON_STRAIGHT,     TBT_ICON_TURN_LEFT,  TBT_ICON_TURN_RIGHT,
+        TBT_ICON_SLIGHT_LEFT,  TBT_ICON_SLIGHT_RIGHT, TBT_ICON_SHARP_LEFT,
+        TBT_ICON_SHARP_RIGHT,  TBT_ICON_UTURN,      TBT_ICON_ROUNDABOUT,
+        TBT_ICON_ARRIVE,       TBT_ICON_NONE,
+    };
+    static const SpeedUnit_t kUnits[] = {SPEED_UNIT_KMH, SPEED_UNIT_MPH};
+    char path[512];
+
+    // A ride underway, so the metric cells are not all dashes while the turn
+    // is being examined.
+    g_sim.trip_km = 42.18;
+    g_sim.avg_kmh = 24.6f;
+    g_sim.max_kmh = 51.3f;
+    g_sim.avg_bpm = 142;
+    g_sim.max_bpm = 176;
+    g_sim.have_hr = true;
+    g_sim.hr.bpm = 151;
+
+    for (size_t u = 0; u < sizeof(kUnits) / sizeof(kUnits[0]); u++) {
+        g_sim.speed_unit = kUnits[u];
+        for (size_t i = 0; i < sizeof(kIcons) / sizeof(kIcons[0]); i++) {
+            for (size_t d = 0; d < sizeof(kDistances) / sizeof(kDistances[0]); d++) {
+                // A roundabout is the only maneuver an exit number belongs to.
+                const uint8_t exit_number = kIcons[i] == TBT_ICON_ROUNDABOUT ? 3 : 0;
+                SetTurn(kIcons[i], kDistances[d], "Kensington Gardens Road", exit_number,
+                        TBT_ICON_TURN_RIGHT, 60, 12400);
+                Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
+                Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
+                snprintf(path, sizeof(path), "%s/f-%s-%u-%u.ppm", out_dir,
+                         kUnits[u] == SPEED_UNIT_MPH ? "mph" : "kmh", (unsigned)kIcons[i],
+                         (unsigned)kDistances[d]);
+                Render(page, path);
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     const char *out_dir = argc > 1 ? argv[1] : ".";
+    const bool gallery = argc > 2 && strcmp(argv[2], "--gallery") == 0;
     char path[512];
 
     lv_init();
@@ -127,6 +178,11 @@ int main(int argc, char **argv) {
     // The battery is drawn from a publish like everything else.
     Sim_Publish(TOPIC_BATTERY, nullptr, 0);
 
+    if (gallery) {
+        RenderGallery(&page, out_dir);
+        return 0;
+    }
+
     // ---- Scene 1: powered on, nothing connected ----
     snprintf(path, sizeof(path), "%s/01-cold-boot.ppm", out_dir);
     Render(&page, path);
@@ -150,6 +206,18 @@ int main(int argc, char **argv) {
     g_sim.max_bpm = 176;
     g_sim.have_hr = true;
     g_sim.hr.bpm = 151;
+
+    // A live speed, not dashes. The speed cell is the tightest on the panel --
+    // a 32pt number and two 18pt ride figures sharing 150px -- and every scene
+    // before this one left it showing "--", which is the one string that
+    // always fits. fix_valid without time_valid keeps the clock on the phone's
+    // reading rather than sending this through the GNSS zone lookup.
+    g_sim.have_gps = true;
+    g_sim.gps.fix_valid = true;
+    g_sim.gps.time_valid = false;
+    g_sim.gps.speed = 18.5f / 3.6f; // m/s, as the receiver reports it
+    Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+
     SetTurn(TBT_ICON_TURN_LEFT, 420, "Kensington Gardens Road", 0, TBT_ICON_TURN_RIGHT, 60,
             12400);
     Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
@@ -164,10 +232,16 @@ int main(int argc, char **argv) {
     Render(&page, path);
 
     // ---- Scene 5: the worst strings anything has to hold ----
-    // A long street name, a three-digit trip, and a distance in kilometres.
+    // A long street name, a three-digit trip, a distance in kilometres, and
+    // the speed cell's real worst case: a three-digit live value sharing 150px
+    // with two ride figures. A descent does not reach this, but a settling fix
+    // does, and the cell must not draw one number through another when it
+    // happens.
     g_sim.trip_km = 188.44;
-    g_sim.avg_kmh = 31.8f;
-    g_sim.max_kmh = 68.9f;
+    g_sim.avg_kmh = 104.2f;
+    g_sim.max_kmh = 118.7f;
+    g_sim.gps.speed = 105.3f / 3.6f;
+    Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
     SetTurn(TBT_ICON_SHARP_RIGHT, 1250, "Llanfairpwllgwyngyllgogery", 0, TBT_ICON_UTURN, 1500,
             98000);
     Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);

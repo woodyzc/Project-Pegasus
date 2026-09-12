@@ -96,8 +96,10 @@
  * off the bottom, which leaves the two boxes 2px apart. 42 (line_height 46)
  * makes them touch. See the width table in Page_Dashboard's MakeValue for the
  * other half of the fit -- the cell is only 120px wide. */
-/* The metric cells' value size. 40 is too wide for a number sharing its cell
- * with a ride average, and 24 is too small to be the thing a rider glances at. */
+/* The metric cells' value sizes. 40 is too wide for a number sharing its cell
+ * with a ride average, and 24 is too small to be the thing a rider glances at.
+ * 28 is the secondary column's, which is narrower than the other. */
+#define LV_FONT_MONTSERRAT_28 1
 #define LV_FONT_MONTSERRAT_32 1
 #define LV_FONT_MONTSERRAT_40 1
 /* 0 since the turn distance moved to pegasus_font_num_88 (src/ui/NumFont.h),

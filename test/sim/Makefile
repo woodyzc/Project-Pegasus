@@ -35,7 +35,7 @@ APP_C   := $(SRC)/ui/NumFont.c $(SRC)/system/HrZone.c $(SRC)/system/TimeZone.c \
 
 SIM_CXX := sim_main.cpp stubs.cpp
 
-.PHONY: all run png clean
+.PHONY: all run png gallery clean
 
 all: run png
 
@@ -69,7 +69,7 @@ $(OUT)/app/%.o: $(SRC)/%.c lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(OUT)/app/%.o: $(SRC)/%.c lv_conf.hpp
+$(OUT)/app/%.o: $(SRC)/%.cpp lv_conf.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
@@ -100,6 +100,17 @@ png:
 	    sips -z 960 720 "$$f" --out "$(OUT)/3x/$$(basename $$f)" >/dev/null 2>&1; \
 	done
 	@ls $(OUT)/*.png 2>/dev/null || true
+
+# Every maneuver crossed with every distance and both unit settings, for the
+# HTML viewer in test/sim/viewer. Frames only -- the viewer never lays anything
+# out itself.
+gallery: $(OUT)/dashsim
+	@rm -rf $(OUT)/gallery && mkdir -p $(OUT)/gallery
+	@./$(OUT)/dashsim $(OUT)/gallery --gallery >/dev/null
+	@for f in $(OUT)/gallery/*.ppm; do \
+	    sips -s format png "$$f" --out "$${f%.ppm}.png" >/dev/null 2>&1 && rm -f "$$f"; \
+	done
+	@echo "$$(ls $(OUT)/gallery/*.png | wc -l | tr -d ' ') frames in $(OUT)/gallery"
 
 clean:
 	rm -rf $(OUT) lv_conf.h
