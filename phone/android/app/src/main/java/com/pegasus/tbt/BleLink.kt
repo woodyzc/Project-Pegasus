@@ -6,6 +6,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
@@ -60,6 +61,18 @@ class BleLink(context: Context) {
         // Well inside the firmware's window, so a couple of lost writes still
         // do not clear a live route.
         const val KEEPALIVE_INTERVAL_MS = 10_000L
+
+        /**
+         * MTU to ask for. A route chunk is 186 bytes on the wire and ATT
+         * spends 3 bytes of the MTU on its own header, so 189 is the minimum
+         * that carries one whole. Asking for a little more costs nothing and
+         * leaves room if ROUTE_CHUNK_PAYLOAD ever grows.
+         */
+        const val ROUTE_MTU = 200
+
+        /** Client Characteristic Configuration, the standard notify switch. */
+        val CCCD_UUID: java.util.UUID =
+            java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -67,8 +80,15 @@ class BleLink(context: Context) {
 
     private var gatt: BluetoothGatt? = null
     private var characteristic: BluetoothGattCharacteristic? = null
+    private var routeCharacteristic: BluetoothGattCharacteristic? = null
+    private var statusCharacteristic: BluetoothGattCharacteristic? = null
     private var lastWriteAt = 0L
     private var lastFrame: ByteArray? = null
+
+    // The route upload in progress, if any. The state machine is in
+    // RouteTransfer; this class only performs the writes and feeds back what
+    // the head unit reports.
+    private var transfer: RouteTransfer? = null
 
     @Volatile
     var isConnected = false
@@ -76,6 +96,9 @@ class BleLink(context: Context) {
 
     /** Called on state changes so the UI can show something honest. */
     var onStatus: ((String) -> Unit)? = null
+
+    /** Route upload progress, 0..100, and whether it finished. */
+    var onRouteProgress: ((percent: Int, done: Boolean) -> Unit)? = null
 
     private val adapter: BluetoothAdapter?
         get() = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -95,7 +118,89 @@ class BleLink(context: Context) {
         gatt?.close()
         gatt = null
         characteristic = null
+        routeCharacteristic = null
+        statusCharacteristic = null
+        transfer = null
         isConnected = false
+    }
+
+    /**
+     * Uploads a planned route for the head unit to navigate from on its own.
+     *
+     * Replaces any transfer already running: the rider re-planning mid-ride
+     * means the old route is not merely stale, it is wrong, and finishing its
+     * upload would waste the link on geometry nobody will follow.
+     */
+    fun sendRoute(encoded: RouteFrame.Encoded) {
+        transfer = RouteTransfer(encoded.chunks)
+        report("Sending route (\${encoded.chunks.size} chunks)")
+        pumpTransfer()
+    }
+
+    /**
+     * Writes as much of the route as the window allows, then stops. Called
+     * again from the status notification and from the stall tick, which is
+     * what keeps the transfer moving without a thread of its own.
+     */
+    private fun pumpTransfer() {
+        val t = transfer ?: return
+        val chr = routeCharacteristic ?: return
+        val g = gatt ?: return
+
+        while (true) {
+            val chunk = t.nextChunk(System.currentTimeMillis()) ?: break
+            if (!writeChunk(g, chr, chunk)) {
+                // The stack refused the write, which on Android means one is
+                // already in flight. Stop and let the next notification or
+                // tick resume; retrying here would spin.
+                break
+            }
+        }
+
+        onRouteProgress?.invoke(t.percent, t.state == RouteTransfer.State.COMPLETE)
+
+        when (t.state) {
+            RouteTransfer.State.COMPLETE -> {
+                report("Route sent")
+                transfer = null
+            }
+            RouteTransfer.State.FAILED -> {
+                report("Route upload failed")
+                transfer = null
+            }
+            else -> handler.postDelayed(::tickTransfer, RouteTransfer.STALL_TIMEOUT_MS)
+        }
+    }
+
+    private fun tickTransfer() {
+        val t = transfer ?: return
+        if (!t.onTick(System.currentTimeMillis())) {
+            report("Route upload failed")
+            transfer = null
+            return
+        }
+        pumpTransfer()
+    }
+
+    private fun writeChunk(
+        g: BluetoothGatt,
+        chr: BluetoothGattCharacteristic,
+        chunk: ByteArray,
+    ): Boolean {
+        // WRITE_TYPE_DEFAULT, not NO_RESPONSE: a dropped route chunk is a
+        // permanent hole, where a dropped turn is corrected a second later.
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(
+                chr, chunk, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            ) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                chr.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                chr.value = chunk
+                g.writeCharacteristic(chr)
+            }
+        }
     }
 
     private fun scanForDevice() {
@@ -159,6 +264,12 @@ class BleLink(context: Context) {
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 isConnected = false
                 characteristic = null
+                routeCharacteristic = null
+                statusCharacteristic = null
+                // The transfer survives the drop and resumes on reconnect --
+                // see RouteTransfer.onDisconnected, which deliberately does
+                // not spend one of its attempts on a reconnect.
+                transfer?.onDisconnected()
                 g.close()
                 gatt = null
                 report("Disconnected; retrying")
@@ -167,20 +278,101 @@ class BleLink(context: Context) {
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-            val chr = g.getService(TbtFrame.SERVICE_UUID)
-                ?.getCharacteristic(TbtFrame.CHARACTERISTIC_UUID)
+            val service = g.getService(TbtFrame.SERVICE_UUID)
+            val chr = service?.getCharacteristic(TbtFrame.CHARACTERISTIC_UUID)
             if (chr == null) {
                 report("TBT characteristic missing")
                 g.disconnect()
                 return
             }
             characteristic = chr
-            isConnected = true
-            report("Ready")
 
-            // A larger MTU lets a full 39-byte frame through; the 23-byte
-            // default caps the street name at about 12 bytes.
-            g.requestMtu(64)
+            // Both optional: a head unit on older firmware has the turn
+            // characteristic and not these, and live turns must keep working
+            // against it rather than the whole link being refused.
+            routeCharacteristic = service.getCharacteristic(RouteFrame.ROUTE_CHARACTERISTIC_UUID)
+            statusCharacteristic = service.getCharacteristic(RouteFrame.STATUS_CHARACTERISTIC_UUID)
+
+            isConnected = true
+            report(if (routeCharacteristic != null) "Ready" else "Ready (no route support)")
+
+            statusCharacteristic?.let { subscribeToStatus(g, it) }
+
+            // A larger MTU matters more now than it did for turns alone. A
+            // route chunk is 186 bytes on the wire, and at the 23-byte default
+            // every one of them would be rejected.
+            g.requestMtu(ROUTE_MTU)
+        }
+
+        override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+            // Only now is the link able to carry a full chunk, so a transfer
+            // queued before this point starts here.
+            if (transfer != null) {
+                handler.post(::pumpTransfer)
+            }
+        }
+
+        override fun onCharacteristicWrite(
+            g: BluetoothGatt,
+            chr: BluetoothGattCharacteristic,
+            status: Int,
+        ) {
+            // Android allows one outstanding write at a time, so this is the
+            // signal that the queue has room again. Without it the transfer
+            // would move only at the stall timeout.
+            if (chr.uuid == RouteFrame.ROUTE_CHARACTERISTIC_UUID) {
+                handler.post(::pumpTransfer)
+            }
+        }
+
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            chr: BluetoothGattCharacteristic,
+            value: ByteArray,
+        ) {
+            if (chr.uuid == RouteFrame.STATUS_CHARACTERISTIC_UUID) {
+                handleStatus(value)
+            }
+        }
+
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            chr: BluetoothGattCharacteristic,
+        ) {
+            // Pre-Tiramisu callback. Both are needed: the platform calls the
+            // one matching the device's API level, and a head unit talking to
+            // an older phone would otherwise never report progress.
+            if (chr.uuid == RouteFrame.STATUS_CHARACTERISTIC_UUID) {
+                handleStatus(chr.value ?: return)
+            }
+        }
+    }
+
+    /** Four bytes: received u16, total u16, little-endian. */
+    private fun handleStatus(value: ByteArray) {
+        if (value.size < 4) return
+        val received = (value[0].toInt() and 0xFF) or ((value[1].toInt() and 0xFF) shl 8)
+
+        val t = transfer ?: return
+        t.onProgress(received, System.currentTimeMillis())
+        handler.post(::pumpTransfer)
+    }
+
+    private fun subscribeToStatus(g: BluetoothGatt, chr: BluetoothGattCharacteristic) {
+        g.setCharacteristicNotification(chr, true)
+        // Enabling notifications locally is not enough: the descriptor write
+        // is what tells the head unit to send them. Skipping it is a classic
+        // silent failure -- everything looks connected and nothing arrives.
+        val cccd = chr.getDescriptor(CCCD_UUID) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                g.writeDescriptor(cccd)
+            }
         }
     }
 
