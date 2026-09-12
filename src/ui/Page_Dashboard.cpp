@@ -750,48 +750,58 @@ void PageDashboard::onViewLoad() {
         lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
         lv_obj_align(s_route_arrow_label, LV_ALIGN_TOP_LEFT, PAD, STATUS_H - 2);
 
-        // The number and its unit, on one baseline, right of the arrow.
+        // The number, with its unit stacked underneath. Both right-aligned.
         //
-        // They used to be stacked, the unit placed with lv_obj_align_to()
-        // against the number. That is the bug that made the unit invisible on
-        // the bench: align_to resolves immediately against the base object's
-        // CURRENT coordinates, and the number had only just been given an
-        // alignment, which LVGL applies at the next layout pass. So the unit
-        // was positioned against coordinates the number did not have yet, and
-        // landed off the edge of the tile.
+        // Two earlier attempts are worth recording, because each failed in a
+        // way that is invisible until it is on the panel.
         //
-        // A flex row has no such ordering to get wrong. LVGL places both
-        // children itself, at layout time, every time -- and "157 m" reading
-        // as one phrase is what the rider expects anyway.
+        // First the unit was placed with lv_obj_align_to() against the number.
+        // align_to resolves immediately against the base object's CURRENT
+        // coordinates, and the number had only just been given an alignment,
+        // which LVGL does not apply until the next layout pass -- so the unit
+        // was positioned against coordinates the number did not have yet and
+        // landed off the tile. That is why the panel read "157" with no unit
+        // anywhere.
+        //
+        // Then both were put in one content-sized flex row. The unit appeared,
+        // and the number lost its leading digit: a content-sized container
+        // right-aligned into a fixed space has no room to grow leftwards once
+        // the arrow is beside it, so the overflow is simply cut off.
+        //
+        // A fixed-width column solves both. The width is the whole gap beside
+        // the arrow, decided here rather than derived from the text, so the
+        // number cannot outgrow it. Stacking means the row only ever has to
+        // fit the number OR the unit, never the two side by side, which is
+        // what made the width tight in the first place.
+        const lv_coord_t DIST_W = FULL_W - TBT_ICON_PX - 2 * PAD;
         s_route_dist_row = lv_obj_create(s_nav_cell);
         lv_obj_remove_style_all(s_route_dist_row);
-        // Sized by its contents, so the row can never clip the unit off: a
-        // long value grows leftwards into the gap beside the arrow instead.
-        lv_obj_set_size(s_route_dist_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_size(s_route_dist_row, DIST_W, LV_SIZE_CONTENT);
         lv_obj_clear_flag(s_route_dist_row, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_flex_flow(s_route_dist_row, LV_FLEX_FLOW_ROW);
-        // END on the main axis keeps the pair right-aligned, so the digits do
-        // not shuffle sideways as the distance counts down and shortens. END
-        // on the cross axis sits the small unit on the number's bottom edge
-        // rather than floating it at the cap height.
-        lv_obj_set_flex_align(s_route_dist_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END,
+        lv_obj_set_flex_flow(s_route_dist_row, LV_FLEX_FLOW_COLUMN);
+        // Cross axis END right-aligns both lines, so the digits stay put as
+        // the distance counts down and the string shortens.
+        lv_obj_set_flex_align(s_route_dist_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END,
                               LV_FLEX_ALIGN_END);
-        lv_obj_align(s_route_dist_row, LV_ALIGN_TOP_RIGHT, -PAD, STATUS_H + 14);
+        // Sits the block's centre roughly on the arrow's, rather than hanging
+        // it from the top of the tile.
+        lv_obj_align(s_route_dist_row, LV_ALIGN_TOP_RIGHT, -PAD, STATUS_H + 4);
 
         s_route_dist_label = lv_label_create(s_route_dist_row);
         lv_obj_set_style_text_font(s_route_dist_label, &lv_font_montserrat_48, 0);
         lv_obj_set_style_text_color(s_route_dist_label, lv_color_hex(COLOR_VALUE), 0);
         lv_label_set_text(s_route_dist_label, "");
 
+        // 24pt, not the 18 it was: stacked, the unit has a line of its own and
+        // the tile has space going spare, and this is the field a rider reads
+        // at a junction.
         s_route_dist_unit = lv_label_create(s_route_dist_row);
-        lv_obj_set_style_text_font(s_route_dist_unit, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(s_route_dist_unit, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(s_route_dist_unit, lv_color_hex(COLOR_ACCENT), 0);
         lv_label_set_text(s_route_dist_unit, "");
-        // A gap so "157m" does not read as one token, and a lift off the
-        // bottom so the unit sits on the number's baseline instead of hanging
-        // level with its descenders.
-        lv_obj_set_style_pad_left(s_route_dist_unit, 4, 0);
-        lv_obj_set_style_pad_bottom(s_route_dist_unit, 8, 0);
+        // The 48pt line box carries a lot of descender space the digits never
+        // use, so the two lines look further apart than they are.
+        lv_obj_set_style_pad_top(s_route_dist_unit, -8, 0);
 
         // The road name is how a rider confirms the turn, so it gets the full
         // width and the biggest size that still fits a typical name: at 24pt
