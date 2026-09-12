@@ -26,6 +26,42 @@ uint32_t *s_offsets = nullptr;
 // cheap against skipping the projection for every way that is not on screen.
 int32_t *s_way_bounds = nullptr;
 
+// ---- Uniform grid index ----
+// 64x64 over the file's bounds. For a 10km extract that is ~160m a cell, so a
+// 240m view touches four of them and the scan drops from every way in the file
+// to the few dozen actually nearby.
+//
+// Compressed sparse row: s_cell_start[c]..s_cell_start[c+1] indexes into
+// s_cell_ways. One allocation each instead of 4,096 little ones, and each
+// cell's ways are contiguous.
+constexpr int GRID_N = 64;
+uint32_t *s_cell_start = nullptr;
+uint32_t *s_cell_ways = nullptr;
+
+// Marks ways already returned by the current query, so one spanning several
+// visible cells is not drawn repeatedly. Internal RAM: it is touched randomly
+// and is only ~1KB for 8,000 ways.
+uint8_t *s_query_seen = nullptr;
+uint32_t s_query_seen_bytes = 0;
+
+int GridCol(int32_t lon) {
+    const int64_t span = (int64_t)s_bounds[3] - s_bounds[1];
+    if (span <= 0) return 0;
+    int64_t c = ((int64_t)lon - s_bounds[1]) * GRID_N / span;
+    if (c < 0) c = 0;
+    if (c >= GRID_N) c = GRID_N - 1;
+    return (int)c;
+}
+
+int GridRow(int32_t lat) {
+    const int64_t span = (int64_t)s_bounds[2] - s_bounds[0];
+    if (span <= 0) return 0;
+    int64_t r = ((int64_t)lat - s_bounds[0]) * GRID_N / span;
+    if (r < 0) r = 0;
+    if (r >= GRID_N) r = GRID_N - 1;
+    return (int)r;
+}
+
 // Header fields are read through memcpy regardless. They are only touched once
 // per way at load time, so the cost is nothing, and it keeps the loader honest
 // about a file that might not be laid out as promised.
@@ -45,12 +81,79 @@ void Release() {
     heap_caps_free(s_blob);
     heap_caps_free(s_offsets);
     heap_caps_free(s_way_bounds);
+    heap_caps_free(s_cell_start);
+    heap_caps_free(s_cell_ways);
+    heap_caps_free(s_query_seen);
     s_blob = nullptr;
     s_offsets = nullptr;
     s_way_bounds = nullptr;
+    s_cell_start = nullptr;
+    s_cell_ways = nullptr;
+    s_query_seen = nullptr;
+    s_query_seen_bytes = 0;
     s_bytes = 0;
     s_ways = 0;
     s_points = 0;
+}
+
+// Two passes: count how many ways fall in each cell, prefix-sum into starts,
+// then fill. Avoids either growing 4,096 vectors or guessing a per-cell
+// capacity, and leaves each cell's ways contiguous.
+bool BuildGrid() {
+    const uint32_t cells = GRID_N * GRID_N;
+    s_cell_start = (uint32_t *)heap_caps_calloc(cells + 1, sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    if (s_cell_start == nullptr) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < s_ways; i++) {
+        const int c0 = GridCol(s_way_bounds[i * 4 + 1]);
+        const int c1 = GridCol(s_way_bounds[i * 4 + 3]);
+        const int r0 = GridRow(s_way_bounds[i * 4 + 0]);
+        const int r1 = GridRow(s_way_bounds[i * 4 + 2]);
+        for (int r = r0; r <= r1; r++) {
+            for (int c = c0; c <= c1; c++) {
+                s_cell_start[r * GRID_N + c + 1]++;
+            }
+        }
+    }
+    for (uint32_t i = 0; i < cells; i++) {
+        s_cell_start[i + 1] += s_cell_start[i];
+    }
+
+    const uint32_t entries = s_cell_start[cells];
+    s_cell_ways = (uint32_t *)heap_caps_malloc(entries * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    if (s_cell_ways == nullptr) {
+        return false;
+    }
+
+    // Fill using a moving cursor per cell, then the cursor array IS the next
+    // cell's start, so no second copy of the offsets is needed.
+    uint32_t *cursor = (uint32_t *)heap_caps_malloc(cells * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    if (cursor == nullptr) {
+        return false;
+    }
+    memcpy(cursor, s_cell_start, cells * sizeof(uint32_t));
+
+    for (uint32_t i = 0; i < s_ways; i++) {
+        const int c0 = GridCol(s_way_bounds[i * 4 + 1]);
+        const int c1 = GridCol(s_way_bounds[i * 4 + 3]);
+        const int r0 = GridRow(s_way_bounds[i * 4 + 0]);
+        const int r1 = GridRow(s_way_bounds[i * 4 + 2]);
+        for (int r = r0; r <= r1; r++) {
+            for (int c = c0; c <= c1; c++) {
+                s_cell_ways[cursor[r * GRID_N + c]++] = i;
+            }
+        }
+    }
+    heap_caps_free(cursor);
+
+    s_query_seen_bytes = (s_ways + 7) / 8;
+    s_query_seen = (uint8_t *)heap_caps_calloc(s_query_seen_bytes, 1, MALLOC_CAP_INTERNAL);
+    if (s_query_seen == nullptr) {
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -133,7 +236,8 @@ bool RoadMap_Load(const char *path) {
         s_points += count;
         at += bytes;
     }
-    return true;
+
+    return BuildGrid();
 }
 
 bool RoadMap_IsLoaded() {
@@ -168,6 +272,46 @@ bool RoadMap_Way(size_t index, RoadWay_t *out) {
     out->max_lat = s_way_bounds[index * 4 + 2];
     out->max_lon = s_way_bounds[index * 4 + 3];
     return true;
+}
+
+size_t RoadMap_Query(int32_t min_lat, int32_t min_lon, int32_t max_lat, int32_t max_lon,
+                     uint32_t *out, size_t max_out) {
+    if (!RoadMap_IsLoaded() || out == nullptr || max_out == 0 || s_cell_ways == nullptr) {
+        return 0;
+    }
+
+    memset(s_query_seen, 0, s_query_seen_bytes);
+
+    const int c0 = GridCol(min_lon);
+    const int c1 = GridCol(max_lon);
+    const int r0 = GridRow(min_lat);
+    const int r1 = GridRow(max_lat);
+
+    size_t found = 0;
+    for (int r = r0; r <= r1 && found < max_out; r++) {
+        for (int c = c0; c <= c1 && found < max_out; c++) {
+            const uint32_t cell = r * GRID_N + c;
+            const uint32_t end = s_cell_start[cell + 1];
+            for (uint32_t e = s_cell_start[cell]; e < end && found < max_out; e++) {
+                const uint32_t w = s_cell_ways[e];
+
+                // A way wider than one cell appears in several, and the view
+                // may show more than one of them.
+                if (s_query_seen[w >> 3] & (1u << (w & 7))) {
+                    continue;
+                }
+                s_query_seen[w >> 3] |= (uint8_t)(1u << (w & 7));
+
+                // The cell only says "near"; the box still has to be checked.
+                if (s_way_bounds[w * 4 + 2] < min_lat || s_way_bounds[w * 4 + 0] > max_lat ||
+                    s_way_bounds[w * 4 + 3] < min_lon || s_way_bounds[w * 4 + 1] > max_lon) {
+                    continue;
+                }
+                out[found++] = w;
+            }
+        }
+    }
+    return found;
 }
 
 bool RoadMap_Bounds(double *min_lat, double *min_lon, double *max_lat, double *max_lon) {

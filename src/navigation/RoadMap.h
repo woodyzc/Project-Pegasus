@@ -89,6 +89,22 @@ uint32_t RoadMap_Bytes();
 // stay valid until the next RoadMap_Load().
 bool RoadMap_Way(size_t index, RoadWay_t *out);
 
+// ---- Spatial index ----
+// Ways whose bounding box may intersect the given box, written into `out`.
+// Returns how many, never more than max_out.
+//
+// Exists because the obvious alternative -- test every way every frame -- was
+// measured at 9,904us of a 12,272us frame to find 23 visible ways out of
+// 7,964. The arithmetic is trivial; the cost is touching 7,964 scattered
+// records in PSRAM, which is far slower than internal RAM for random access.
+//
+// A uniform grid over the map's bounds, built once at load. A cell list is
+// contiguous, so the scan that remains is sequential, which is the access
+// pattern PSRAM is actually good at. Ways spanning several visible cells are
+// returned once.
+size_t RoadMap_Query(int32_t min_lat, int32_t min_lon, int32_t max_lat, int32_t max_lon,
+                     uint32_t *out, size_t max_out);
+
 // Bounding box of everything loaded, in degrees.
 bool RoadMap_Bounds(double *min_lat, double *min_lon, double *max_lat, double *max_lon);
 

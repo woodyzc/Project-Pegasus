@@ -11,6 +11,8 @@ namespace {
 volatile uint32_t g_draw_us = 0;
 volatile uint32_t g_segments = 0;
 volatile uint32_t g_visible = 0;
+volatile uint32_t g_cull_us = 0;
+volatile uint32_t g_draw_only_us = 0;
 
 struct RoadStyle {
     uint32_t colour;
@@ -137,33 +139,39 @@ void RoadDrawCb(lv_event_t *e) {
     MapProjection_t proj;
     Map_PrepareProjection(&proj, clat, clon, mpp, (int16_t)(w / 2), (int16_t)(h / 2));
 
+    // Timed in two halves, because three rounds of optimising the drawing have
+    // each moved the number less than expected. Guessing which half is
+    // expensive has a poor record here; the split says outright.
     const uint32_t started = micros();
     uint32_t segments = 0;
-    const size_t ways = RoadMap_WayCount();
 
-    // Cull ONCE, then draw from what survived.
+    // Ask the index once, then draw from what it returned.
     //
-    // The first version tested every way again on every class pass -- four
-    // times 3,560 ways for the Germantown extract, and 7.7ms measured to draw
-    // precisely nothing when the view was elsewhere. The bounds test is cheap;
-    // doing it four times over the whole file is not.
-    static uint16_t visible[ROAD_VISIBLE_MAX];
-    uint16_t visible_count = 0;
+    // The grid answers "which ways are near here" without touching the rest
+    // of the file. Scanning every way cost 9,904us of a 12,272us frame to find
+    // 23 of 7,964 -- not arithmetic, but 7,964 scattered PSRAM reads.
+    static uint32_t visible[ROAD_VISIBLE_MAX];
+    uint16_t visible_count = (uint16_t)RoadMap_Query(view_min_lat, view_min_lon, view_max_lat,
+                                                     view_max_lon, visible, ROAD_VISIBLE_MAX);
 
-    for (size_t i = 0; i < ways && visible_count < ROAD_VISIBLE_MAX; i++) {
+    // The zoom filter still has to run, but now over a handful of candidates
+    // rather than the whole map. Compacting in place keeps the draw passes
+    // walking a short contiguous list.
+    uint16_t kept = 0;
+    for (uint16_t i = 0; i < visible_count; i++) {
         RoadWay_t way;
-        if (!RoadMap_Way(i, &way) || way.count < 2) {
+        if (!RoadMap_Way(visible[i], &way) || way.count < 2) {
             continue;
         }
         if (mpp > ROAD_MAX_MPP[way.klass]) {
-            continue; // too far out for this class to be legible
-        }
-        if (way.max_lat < view_min_lat || way.min_lat > view_max_lat ||
-            way.max_lon < view_min_lon || way.min_lon > view_max_lon) {
             continue;
         }
-        visible[visible_count++] = (uint16_t)i;
+        visible[kept++] = visible[i];
     }
+    visible_count = kept;
+
+    g_cull_us = micros() - started;
+    const uint32_t draw_started = micros();
 
     // Water, then minor, then secondary, then arteries -- painter's order, so
     // a trunk road crosses a river rather than being cut by it.
@@ -229,6 +237,7 @@ void RoadDrawCb(lv_event_t *e) {
     }
 
     g_visible = visible_count;
+    g_draw_only_us = micros() - draw_started;
     g_draw_us = micros() - started;
     g_segments = segments;
 }
@@ -282,4 +291,12 @@ uint32_t RoadView_LastSegments() {
 
 uint32_t RoadView_LastVisibleWays() {
     return g_visible;
+}
+
+uint32_t RoadView_LastCullUs() {
+    return g_cull_us;
+}
+
+uint32_t RoadView_LastDrawOnlyUs() {
+    return g_draw_only_us;
 }
