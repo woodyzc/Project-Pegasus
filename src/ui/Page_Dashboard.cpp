@@ -50,6 +50,10 @@ constexpr uint32_t COLOR_NAV_OFF_ROUTE = 0xFF6B6B;
 // is less certain", where this means the opposite -- act now.
 constexpr uint32_t COLOR_NAV_IMMINENT = 0x7CE38B;
 
+// The countdown bar's unfilled track. Light enough to read as a track on the
+// tile's dark background, dark enough not to compete with the arrow.
+constexpr uint32_t COLOR_BAR_TRACK = 0x33475B;
+
 // Distance at which a turn stops being something to expect and becomes
 // something to do. At 25 km/h this is about four seconds of warning, which is
 // roughly the point where a rider should already be in the right lane.
@@ -961,11 +965,22 @@ void PageDashboard::onViewLoad() {
         lv_obj_set_size(s_nav_content, FULL_W - 2 * PAD, NAV_H - STATUS_H - PAD);
         lv_obj_clear_flag(s_nav_content, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_flex_flow(s_nav_content, LV_FLEX_FLOW_COLUMN);
-        // SPACE_BETWEEN rather than START: whatever slack the hidden rows leave
-        // is spread between the rows that remain, instead of pooling into one
-        // gap at the bottom.
-        lv_obj_set_flex_align(s_nav_content, LV_FLEX_ALIGN_SPACE_BETWEEN,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        // CENTER, not SPACE_BETWEEN.
+        //
+        // SPACE_BETWEEN spreads the spare height between the rows, which is
+        // reasonable when all four are showing and wrong when two are hidden:
+        // on the bench every pixel the missing rows freed went into one gap
+        // between the number and the street name, and the arrow was pushed up
+        // under the clock.
+        //
+        // Centring keeps the rows together as one block and puts the slack
+        // outside it, so the tile reads the same whether it is showing two
+        // rows or four.
+        lv_obj_set_flex_align(s_nav_content, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                              LV_FLEX_ALIGN_CENTER);
+        // A deliberate gap between rows, now that the layout is not
+        // manufacturing one.
+        lv_obj_set_style_pad_row(s_nav_content, 6, 0);
 
         // ---- Row 1: the arrow, and the distance to it ----
         lv_obj_t *turn_row = lv_obj_create(s_nav_content);
@@ -1023,7 +1038,10 @@ void PageDashboard::onViewLoad() {
         lv_obj_set_size(s_route_bar, lv_pct(100), 6);
         lv_bar_set_range(s_route_bar, 0, 1000);
         lv_bar_set_value(s_route_bar, 0, LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(s_route_bar, lv_color_hex(COLOR_CELL_BORDER), LV_PART_MAIN);
+        // The unfilled track needs to be visible as a track. At the cell
+        // border colour it vanished into the background, and 6px of invisible
+        // widget between the number and the street name just read as more gap.
+        lv_obj_set_style_bg_color(s_route_bar, lv_color_hex(COLOR_BAR_TRACK), LV_PART_MAIN);
         lv_obj_set_style_bg_color(s_route_bar, lv_color_hex(COLOR_ACCENT), LV_PART_INDICATOR);
         lv_obj_set_style_radius(s_route_bar, 3, LV_PART_MAIN);
         lv_obj_set_style_radius(s_route_bar, 3, LV_PART_INDICATOR);
