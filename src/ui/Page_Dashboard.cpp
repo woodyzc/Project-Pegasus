@@ -516,7 +516,9 @@ const char *ManeuverWord(uint8_t icon_id) {
         case TBT_ICON_UTURN: return "U-turn";
         case TBT_ICON_ROUNDABOUT: return "roundabout";
         case TBT_ICON_ARRIVE: return "arrive";
-        case TBT_ICON_STRAIGHT: return "straight on";
+        // "ahead", not "straight on": the same instruction in six characters
+        // rather than eleven, on the one line that keeps running out of room.
+        case TBT_ICON_STRAIGHT: return "ahead";
         default: return "";
     }
 }
@@ -629,12 +631,22 @@ void RenderSpeedAndTrip() {
     }
 
     if (s_speed_stats_label != nullptr) {
-        // Converted like the live value, so all three agree with the unit in
-        // the corner. A ride average shown in km/h beside a speed in mph is
-        // the kind of thing nobody notices until they are comparing rides.
-        const float avg = Settings_SpeedFromKmh(RideStats_AvgSpeedKmh());
-        const float max = Settings_SpeedFromKmh(RideStats_MaxSpeedKmh());
-        lv_label_set_text_fmt(s_speed_stats_label, "AVG %.1f\nMAX %.1f", avg, max);
+        const float max_kmh = RideStats_MaxSpeedKmh();
+        if (max_kmh <= 0.0f) {
+            // Dashes, not zeros, before anything has moved. The heart-rate
+            // block already did this and speed did not, which the simulator
+            // showed side by side on a cold boot: "AVG 0.0 / MAX 0.0" reads as
+            // a ride that went nowhere, where dashes read as a ride that has
+            // not started.
+            lv_label_set_text(s_speed_stats_label, "AVG --\nMAX --");
+        } else {
+            // Converted like the live value, so all three agree with the unit
+            // in the corner. A ride average in km/h beside a speed in mph is
+            // the kind of thing nobody notices until they compare two rides.
+            const float avg = Settings_SpeedFromKmh(RideStats_AvgSpeedKmh());
+            const float max = Settings_SpeedFromKmh(max_kmh);
+            lv_label_set_text_fmt(s_speed_stats_label, "AVG %.1f\nMAX %.1f", avg, max);
+        }
     }
 }
 
@@ -890,7 +902,10 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                     char then_unit[8];
                     FormatTbtDistance(tbt.then_distance_m, then_dist, sizeof(then_dist),
                                       then_unit, sizeof(then_unit));
-                    lv_label_set_text_fmt(s_route_then_label, "then %s in %s %s",
+                    // "then right 60 m", not "then right in 60 m". The
+                    // preposition is two characters of meaning and eight of
+                    // width on a line that has none to spare.
+                    lv_label_set_text_fmt(s_route_then_label, "then %s %s%s",
                                           ManeuverWord(tbt.then_icon_id), then_dist,
                                           then_unit);
                     any_secondary = true;
@@ -902,7 +917,7 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                     char left_unit[8];
                     FormatTbtDistance(tbt.remaining_m, left_dist, sizeof(left_dist),
                                       left_unit, sizeof(left_unit));
-                    lv_label_set_text_fmt(s_route_remaining_label, "%s %s to go", left_dist,
+                    lv_label_set_text_fmt(s_route_remaining_label, "%s%s left", left_dist,
                                           left_unit);
                     any_secondary = true;
                 } else {
@@ -1150,17 +1165,24 @@ void PageDashboard::onViewLoad() {
         lv_obj_set_style_img_recolor_opa(s_route_arrow_label, LV_OPA_COVER, 0);
         lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
 
-        // Which exit, over the middle of the arrow. Costs no layout height,
-        // which is the only reason it can exist on a tile this full.
-        s_route_exit_label = lv_label_create(turn_row);
+        // Which exit, in the middle of the roundabout. Costs no layout height,
+        // which is the only reason it fits on a tile this full.
+        //
+        // A CHILD of the arrow, centred, rather than a sibling aligned to it.
+        // Aligning to it resolved once, before flex had placed the arrow, so
+        // the number landed to the right of the icon instead of inside it --
+        // the same one-shot trap that put the distance's unit off the tile and
+        // the clock's zone on top of the time. A child is positioned relative
+        // to its parent on every layout pass, and follows the arrow for free.
+        s_route_exit_label = lv_label_create(s_route_arrow_label);
         lv_obj_set_style_text_font(s_route_exit_label, &lv_font_montserrat_24, 0);
+        // White, not the tile's background colour. The roundabout icon is a
+        // ring, so its middle is transparent and dark text there is dark text
+        // on a dark tile -- which the simulator rendered as no number at all.
         lv_obj_set_style_text_color(s_route_exit_label, lv_color_hex(COLOR_VALUE), 0);
         lv_label_set_text(s_route_exit_label, "");
         lv_obj_add_flag(s_route_exit_label, LV_OBJ_FLAG_HIDDEN);
-        // Ignored by the flex layout so it can sit on top of the arrow rather
-        // than taking a column of its own.
-        lv_obj_add_flag(s_route_exit_label, LV_OBJ_FLAG_FLOATING);
-        lv_obj_align_to(s_route_exit_label, s_route_arrow_label, LV_ALIGN_CENTER, 0, 6);
+        lv_obj_center(s_route_exit_label);
 
         // The number over its unit, both right-aligned so the digits stay put
         // as the distance counts down and the string shortens.
@@ -1210,13 +1232,25 @@ void PageDashboard::onViewLoad() {
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         lv_obj_add_flag(s_route_secondary_row, LV_OBJ_FLAG_HIDDEN);
 
+        // Both are given a share of the width and told to ellipsize.
+        //
+        // SPACE_BETWEEN alone does not stop two labels colliding: when their
+        // combined width exceeds the row, flex lets them overlap and the text
+        // is drawn on top of itself. The simulator caught exactly that --
+        // "then straight on in 800 m" and "11.0 km left" printed through each
+        // other. A width each makes the failure a clipped word instead.
         s_route_then_label = lv_label_create(s_route_secondary_row);
-        lv_obj_set_style_text_font(s_route_then_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(s_route_then_label, &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_color(s_route_then_label, lv_color_hex(COLOR_CAPTION), 0);
+        lv_obj_set_width(s_route_then_label, lv_pct(60));
+        lv_label_set_long_mode(s_route_then_label, LV_LABEL_LONG_DOT);
         lv_label_set_text(s_route_then_label, "");
 
         s_route_remaining_label = lv_label_create(s_route_secondary_row);
-        lv_obj_set_style_text_font(s_route_remaining_label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(s_route_remaining_label, &lv_font_montserrat_12, 0);
+        lv_obj_set_width(s_route_remaining_label, lv_pct(38));
+        lv_label_set_long_mode(s_route_remaining_label, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_align(s_route_remaining_label, LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_set_style_text_color(s_route_remaining_label, lv_color_hex(COLOR_CAPTION), 0);
         lv_label_set_text(s_route_remaining_label, "");
 
