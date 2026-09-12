@@ -137,6 +137,56 @@ uint32_t LvglFs_LastReadBytes() {
     return s_read_bytes;
 }
 
+void LvglFs_Probe(const char *path, char *out, size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return;
+    }
+    out[0] = '\0';
+
+    // Longest existing prefix, component by component. The first component
+    // that is missing is the answer.
+    char probe[96] = {0};
+    char deepest[96] = "/";
+    size_t len = strnlen(path, sizeof(probe) - 1);
+
+    for (size_t i = 1; i <= len; i++) {
+        if (path[i] != '/' && path[i] != '\0') {
+            continue;
+        }
+        memcpy(probe, path, i);
+        probe[i] = '\0';
+        if (!SD_MMC.exists(probe)) {
+            break;
+        }
+        strncpy(deepest, probe, sizeof(deepest) - 1);
+        deepest[sizeof(deepest) - 1] = '\0';
+    }
+
+    // Then what is inside it, so a near-miss (MAP vs map, 15 vs 15/) is
+    // visible rather than inferred.
+    char kids[64] = {0};
+    File dir = SD_MMC.open(deepest);
+    if (dir && dir.isDirectory()) {
+        for (File e = dir.openNextFile(); e; e = dir.openNextFile()) {
+            const char *name = strrchr(e.name(), '/');
+            name = (name != nullptr) ? name + 1 : e.name();
+            if (strlen(kids) + strlen(name) + 2 >= sizeof(kids)) {
+                strncat(kids, "...", sizeof(kids) - strlen(kids) - 1);
+                break;
+            }
+            if (kids[0] != '\0') {
+                strncat(kids, " ", sizeof(kids) - strlen(kids) - 1);
+            }
+            strncat(kids, name, sizeof(kids) - strlen(kids) - 1);
+        }
+    }
+    if (dir) {
+        dir.close();
+    }
+
+    snprintf(out, out_size, "have %s -> %s", deepest, kids[0] ? kids : "(empty)");
+}
+
 uint32_t LvglFs_OpenFailures() {
     return s_open_failures;
 }

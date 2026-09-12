@@ -67,8 +67,11 @@ void TileStatTimer(lv_timer_t *timer) {
     }
 
     if (LvglFs_OpenFailures() > 0) {
-        lv_label_set_text_fmt(s_tile_stat, "tile: not found\n%s",
-                              LvglFs_LastFailedPath());
+        // Ask the card what it does have, rather than leaving the reader to
+        // guess which component of the path is wrong.
+        char probe[96];
+        LvglFs_Probe(TILE_SPIKE_PATH, probe, sizeof(probe));
+        lv_label_set_text_fmt(s_tile_stat, "no %s\n%s", LvglFs_LastFailedPath(), probe);
         return;
     }
     lv_label_set_text(s_tile_stat, "tile: header only, not drawn yet");

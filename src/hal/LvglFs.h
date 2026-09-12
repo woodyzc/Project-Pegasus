@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 #ifndef __cplusplus
 #include <stdbool.h>
@@ -54,6 +55,15 @@ uint32_t LvglFs_LastReadBytes();
 // bring-up failure, and the path was wrong by one directory.
 uint32_t LvglFs_OpenFailures();
 const char *LvglFs_LastFailedPath();
+
+// Walks the components of `path` and reports the deepest one that exists,
+// followed by what is actually inside it.
+//
+// "Not found" plus a path says the firmware looked in the right place; it does
+// not say whether the card has /MAP, or /MAP/15, or a differently-cased
+// variant of either. Rather than another guess-and-reflash round trip, ask the
+// card. Writes a single line suitable for a label.
+void LvglFs_Probe(const char *path, char *out, size_t out_size);
 
 #ifdef __cplusplus
 }

@@ -176,7 +176,17 @@ def cmd_synth(args) -> int:
     print(f"{made} tiles -> {args.out}/{args.zoom}/")
     print(f"total {total} bytes ({total / 1024:.0f} KB), {total // made} bytes each")
     print()
-    print("Copy the MAP directory to the SD card root, then the firmware path is:")
+
+    # The firmware looks under /MAP, so the output directory has to BE the MAP
+    # directory -- naming it anything else produces tiles the device cannot
+    # find, which is exactly how the first bring-up went.
+    leaf = os.path.basename(os.path.normpath(args.out))
+    if leaf != "MAP":
+        print(f"WARNING: the firmware reads tiles from /MAP on the card, and this")
+        print(f"         wrote to a directory named {leaf!r}. Either rename it to")
+        print(f"         MAP or re-run with an output path ending in /MAP.")
+        print()
+    print("Copy that directory to the SD card root so the card reads:")
     print(f"  /MAP/{args.zoom}/{args.x}/{args.y}.bin")
     return 0
 
