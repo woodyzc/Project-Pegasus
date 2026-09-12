@@ -1,15 +1,4 @@
-/* LVGL configuration for the host simulator.
- *
- * A copy of include/lv_conf.h with the two things the firmware config assumes
- * about an ESP32 replaced: the tick source, which is Arduino's millis() on the
- * board, and the colour depth's byte order, which the panel needs swapped and a
- * PNG does not.
- *
- * Everything else -- and in particular every LV_FONT_* switch -- is kept
- * identical on purpose. A simulator built with different fonts to the firmware
- * would answer layout questions about a screen that does not exist.
- */
-#pragma once
+/* GENERATED from ../../include/lv_conf.h by the Makefile -- do not edit. */
 /**
  * @file lv_conf.h
  * Minimal working configuration for LVGL v8.3.x on ESP32-S3 (Arduino framework).
@@ -49,7 +38,7 @@
 #define LV_DISP_DEF_REFR_PERIOD 30      /* ms */
 #define LV_INDEV_DEF_READ_PERIOD 30     /* ms */
 
-#define LV_TICK_CUSTOM 1  /* host tick, see below */
+#define LV_TICK_CUSTOM 1
 #define LV_TICK_CUSTOM_INCLUDE "sim_tick.h"
 #define LV_TICK_CUSTOM_SYS_TIME_EXPR (sim_millis())
 
@@ -107,6 +96,9 @@
  * off the bottom, which leaves the two boxes 2px apart. 42 (line_height 46)
  * makes them touch. See the width table in Page_Dashboard's MakeValue for the
  * other half of the fit -- the cell is only 120px wide. */
+/* The metric cells' value size. 40 is too wide for a number sharing its cell
+ * with a ride average, and 24 is too small to be the thing a rider glances at. */
+#define LV_FONT_MONTSERRAT_32 1
 #define LV_FONT_MONTSERRAT_40 1
 /* 0 since the turn distance moved to pegasus_font_num_88 (src/ui/NumFont.h),
  * which is generated at a size LVGL's built-ins do not reach. Nothing else

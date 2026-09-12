@@ -373,8 +373,11 @@ lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
 lv_obj_t *MakeSecondary(lv_obj_t *cell) {
     lv_obj_t *label = lv_label_create(cell);
     lv_label_set_text(label, "AVG --\nMAX --");
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
+    // 14pt and white, not 10pt grey. At caption size and caption colour these
+    // read as labelling for the live value rather than as two numbers of their
+    // own, and on a ride they are the numbers people actually look at.
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_style_text_line_space(label, 2, 0);
     lv_obj_align(label, LV_ALIGN_BOTTOM_RIGHT, -CELL_PAD, CELL_VALUE_Y);
@@ -1027,7 +1030,7 @@ void PageDashboard::onViewLoad() {
     // other two do not. Trip and incline are a glance rather than a readout:
     // they keep their own column and take a smaller face, which is what pays
     // for the width the left column gains.
-    const lv_coord_t STATS_W = 148;
+    const lv_coord_t STATS_W = 136;
     const lv_coord_t SEC_W = SCREEN_W - STATS_W;               // 92
     const lv_coord_t COL1 = 0;
     const lv_coord_t COL2 = STATS_W;
@@ -1330,27 +1333,28 @@ void PageDashboard::onViewLoad() {
     // which is what pays for the jump from 28 to 34. The widest thing any of
     // them has to hold is a six-character trip ("123.45"), and at 34 that
     // comes to about 104px inside 108px of usable width.
+    // 32pt, not 40. The live value now shares its cell with an average and a
+    // peak at a size worth reading, and 40 leaves them nowhere to go.
     lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, STATS_W, CELL_H, "SPEED");
-    s_speed_label = MakeValue(speed_cell, "--", COLOR_VALUE);
+    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
     lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
     s_speed_stats_label = MakeSecondary(speed_cell);
 
     lv_obj_t *hr_cell = MakeCell(parent, COL1, ROW2, STATS_W, CELL_H, "HEART RATE");
-    s_hr_label = MakeValue(hr_cell, "--", COLOR_VALUE);
+    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
     MakeUnit(hr_cell, "bpm");
     s_hr_stats_label = MakeSecondary(hr_cell);
 
-    // 24pt, not 40. The narrower column cannot hold a six-character trip at
-    // the larger face -- "123.45" wants about 119px against 80px of usable
-    // width here -- and the choice is between a smaller number and a wrong
-    // one. These two are a glance, where speed and heart rate are read.
+    // The same 32pt as the live values opposite, so the four cells read as one
+    // grid rather than two sizes of importance. It fits because this column
+    // got wider when the other one stopped needing 40pt.
     lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, SEC_W, CELL_H, "TRIP");
-    s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_24);
+    s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_32);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
 
     s_incline_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "INCLINE");
-    s_incline_label = MakeValueIn(s_incline_cell, "--", COLOR_ACCENT, &lv_font_montserrat_24);
+    s_incline_label = MakeValueIn(s_incline_cell, "--", COLOR_ACCENT, &lv_font_montserrat_32);
     MakeUnit(s_incline_cell, "%");
 
     // ---- Dividing lines ----
