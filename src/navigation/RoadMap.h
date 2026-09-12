@@ -63,6 +63,13 @@ typedef struct {
     uint8_t klass;
     uint16_t count;
     const int32_t *points; // interleaved lat, lon -- 2 * count int32s
+
+    // Bounding box, computed once at load. Culling a way costs four integer
+    // comparisons against this; projecting one to find out it was off-screen
+    // costs two trigonometric-ish conversions per point. On a city extract
+    // almost every way is off-screen, so this is the difference between a map
+    // that scales and one that does not.
+    int32_t min_lat, min_lon, max_lat, max_lon;
 } RoadWay_t;
 
 #ifdef __cplusplus

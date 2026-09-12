@@ -1,9 +1,7 @@
 #include "Page_Map.h"
 
 #include <Arduino.h>
-#include <stdio.h>
 
-#include "../hal/LvglFs.h"
 
 #include "../navigation/GpxTrack.h"
 #include "../navigation/MapProject.h"
@@ -35,68 +33,23 @@ constexpr lv_coord_t MAP_Y = 36;
 constexpr lv_coord_t MAP_W = 240;
 constexpr lv_coord_t MAP_H = 262;
 
-// The one tile the spike draws.
-//
-// Under /MAP rather than loose at the card root. That is where tilegen.py
-// writes them and where the first bring-up actually put them -- the firmware
-// was looking at the root and reported "not found", which is the correct
-// answer to the wrong question. A prefix is better anyway: thousands of zoom
-// directories scattered beside a rider's .gpx files is not a filesystem
-// anyone wants to look at.
-#define TILE_Z 15
-#define TILE_X 8721
-#define TILE_Y 12556
-#define TILE_SPIKE_PATH "/MAP/15/8721/12556.bin"
+lv_obj_t *s_road_stat = nullptr;
+lv_timer_t *s_road_timer = nullptr;
 
-// Half a tile, so both seams of the 2x2 fall inside the window rather than
-// off its edges where they prove nothing.
-#define ROADMAP_SPIKE_PATH "/MAP/roads.prd"
-
-#define TILE_OFF_X 120
-#define TILE_OFF_Y 100
-
-lv_obj_t *s_tile_layer = nullptr;
-lv_obj_t *s_tile_img = nullptr;
-lv_obj_t *s_tile_stat = nullptr;
-lv_timer_t *s_tile_timer = nullptr;
-
-// Reports what the tile cost, or why there wasn't one. The failure case names
+// Reports the road map: ways loaded, segments drawn of points held, and the
 // the path it tried: "not found" on its own sent the first bring-up looking in
 // the wrong place, when the answer was one directory away.
-void TileStatTimer(lv_timer_t *timer) {
+void RoadStatTimer(lv_timer_t *timer) {
     (void)timer;
-    if (s_tile_stat == nullptr) {
+    if (s_road_stat == nullptr) {
         return;
     }
-
-    if (!LvglFs_IsReady()) {
-        lv_label_set_text(s_tile_stat, "no fs driver (card not mounted?)");
-        return;
-    }
-
-    // Roads are the headline now, and they are reported even when absent. An
-    // earlier version only mentioned them on success, so a card without
-    // roads.prd showed the tile line instead and looked like the road code had
-    // never been flashed.
     if (RoadMap_IsLoaded()) {
-        lv_label_set_text_fmt(s_tile_stat, "roads %u B, %u ways, %u seg in %u us",
-                              (unsigned)RoadMap_Bytes(), (unsigned)RoadMap_WayCount(),
-                              (unsigned)RoadView_LastSegments(), (unsigned)RoadView_LastDrawUs());
-        return;
-    }
-
-    // No roads: say where they were looked for, and what the card does have
-    // there, rather than leaving the reader to guess which half is wrong.
-    char probe[96];
-    LvglFs_Probe(ROADMAP_SPIKE_PATH, probe, sizeof(probe));
-
-    const uint32_t bytes = LvglFs_LastReadBytes();
-    if (bytes >= 4096) {
-        // Tiles are working even though roads are not, which is worth saying:
-        // it means the card and the filesystem driver are both fine.
-        lv_label_set_text_fmt(s_tile_stat, "no roads.prd (tiles ok)\n%s", probe);
+        lv_label_set_text_fmt(s_road_stat, "roads %u ways, %u/%u seg in %u us",
+                              (unsigned)RoadMap_WayCount(), (unsigned)RoadView_LastSegments(),
+                              (unsigned)RoadMap_PointCount(), (unsigned)RoadView_LastDrawUs());
     } else {
-        lv_label_set_text_fmt(s_tile_stat, "no roads.prd, no tiles\n%s", probe);
+        lv_label_set_text(s_road_stat, "no /MAP/roads.prd on the card");
     }
 }
 
@@ -156,6 +109,8 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         // The trail stays drawn, framed on itself -- only the rider marker is
         // meaningless without a fix, and MapView hides it.
         MapView_SetPosition(&s_view, &gps);
+    RoadView_Refresh();
+        RoadView_Refresh();
         lv_label_set_text(s_status_label, "Waiting for fix");
         lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
         return;
@@ -209,73 +164,12 @@ void PageMap::onViewLoad() {
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
     lv_obj_align(s_status_label, LV_ALIGN_TOP_RIGHT, -8, 12);
 
-    // ---- Spike: one tile behind the track ----
-    // Step 2 of the offline-map scope, and deliberately the stupidest version
-    // that can answer anything: a hardcoded path, no projection, no cache, no
-    // position. It exists to establish two facts that everything downstream
-    // assumes -- that LVGL can read an image off this card at all, and how
-    // long one 128KB tile actually takes on this board's SD bus.
-    //
-    // Created BEFORE MapView so the track draws on top of it.
     // ---- The map ----
     MapView_Create(&s_view, parent, MAP_X, MAP_Y, MAP_W, MAP_H, s_points, s_projected,
                    MAX_POLY_POINTS);
 
-    // ---- Map underlay: tiles, then roads, then MapView's own trail ----
-    // Both go INSIDE MapView's container, and that is the whole point.
-    //
-    // They were siblings created before it, which meant MapView's opaque
-    // background was drawn on top and hid both completely. The tile was being
-    // read off the card and drawn correctly the entire time -- the byte
-    // counter proved it -- and then painted over, which is why it never
-    // appeared and the measurement looked like the only thing working.
-    //
-    // Inside the container they land above its background. lv_obj_move_to_index
-    // then puts them behind the trail: roads to the back, then tiles behind
-    // those, leaving bg -> tiles -> roads -> trail -> marker.
-    if (LvglFs_IsReady()) {
-        // A clipping container, so tiles can hang off the edges. LVGL clips
-        // children to their parent, which is the only way a tile can start at
-        // a negative offset without painting over the ROUTE title.
-        s_tile_layer = lv_obj_create(s_view.container);
-        lv_obj_set_pos(s_tile_layer, 0, 0);
-        lv_obj_set_size(s_tile_layer, MAP_W, MAP_H);
-        lv_obj_set_style_bg_opa(s_tile_layer, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(s_tile_layer, 0, 0);
-        lv_obj_set_style_pad_all(s_tile_layer, 0, 0);
-        lv_obj_clear_flag(s_tile_layer, LV_OBJ_FLAG_SCROLLABLE);
-        // Same reason as RoadView: a backdrop must not eat touches meant for
-        // whatever sits under it.
-        lv_obj_clear_flag(s_tile_layer, LV_OBJ_FLAG_CLICKABLE);
-
-        // 2x2, deliberately offset.
-        //
-        // One 256px tile all but fills a 240x262 window -- 0.94 by 1.02 of it
-        // -- so a single tile shows nothing about whether neighbours line up.
-        // Offsetting by roughly half a tile puts both seams on screen, which
-        // is the only thing worth checking at this stage: a road that jumps
-        // at a seam means the projection is wrong, and that is the failure
-        // step 3 exists to avoid.
-        for (int tx = 0; tx < 2; tx++) {
-            for (int ty = 0; ty < 2; ty++) {
-                lv_obj_t *img = lv_img_create(s_tile_layer);
-                char path[64];
-                snprintf(path, sizeof(path), "S:/MAP/%d/%d/%d.bin", TILE_Z,
-                         TILE_X + tx, TILE_Y + ty);
-                lv_img_set_src(img, path);
-                lv_obj_set_pos(img, tx * 256 - TILE_OFF_X, ty * 256 - TILE_OFF_Y);
-                lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
-                if (tx == 0 && ty == 0) {
-                    s_tile_img = img;
-                }
-            }
-        }
-    }
-
+    // Roads behind the trail, sharing this view's projection.
     RoadView_Attach(&s_view);
-    if (s_tile_layer != nullptr) {
-        lv_obj_move_to_index(s_tile_layer, 0);
-    }
 
 
     // ---- Footer ----
@@ -285,25 +179,19 @@ void PageMap::onViewLoad() {
     lv_obj_align(s_scale_label, LV_ALIGN_BOTTOM_LEFT, 8, -4);
     lv_label_set_text(s_scale_label, "");
 
-    // The measurement, on the panel, because serial cannot carry it. Reports
-    // what the tile above cost: bytes, milliseconds, and the implied rate.
-    s_tile_stat = lv_label_create(parent);
-    lv_obj_set_style_text_font(s_tile_stat, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(s_tile_stat, lv_color_hex(0x61DAFB), 0);
-    lv_obj_set_width(s_tile_stat, 224);
-    lv_label_set_long_mode(s_tile_stat, LV_LABEL_LONG_WRAP);
-    lv_obj_align(s_tile_stat, LV_ALIGN_TOP_LEFT, 8, 26);
-    lv_label_set_text(s_tile_stat, "tile: waiting");
+    // The measurement, on the panel, because serial cannot carry it.
+    s_road_stat = lv_label_create(parent);
+    lv_obj_set_style_text_font(s_road_stat, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_road_stat, lv_color_hex(0x61DAFB), 0);
+    lv_obj_set_width(s_road_stat, 224);
+    lv_label_set_long_mode(s_road_stat, LV_LABEL_LONG_WRAP);
+    lv_obj_align(s_road_stat, LV_ALIGN_TOP_LEFT, 8, 26);
+    lv_label_set_text(s_road_stat, "roads: waiting");
 
-    // On a timer, not once here.
-    //
-    // lv_img_set_src() reads only the 4-byte header -- LVGL defers the pixels
-    // to draw time, which has not happened yet when this page is being built.
-    // Sampling now reported 4 bytes at best and nothing at worst, and never
-    // the tile. The first tick after the first draw is when the real figure
-    // exists.
-    s_tile_timer = lv_timer_create(TileStatTimer, 500, nullptr);
-    TileStatTimer(nullptr);
+    // On a timer: the draw figure only exists after the first draw, which has
+    // not happened while this page is still being built.
+    s_road_timer = lv_timer_create(RoadStatTimer, 500, nullptr);
+    RoadStatTimer(nullptr);
 
     lv_obj_t *name = lv_label_create(parent);
     lv_obj_set_style_text_font(name, &lv_font_montserrat_10, 0);
@@ -317,6 +205,7 @@ void PageMap::onViewLoad() {
         // Frame the whole trail until a fix arrives, so the first look shows
         // the route rather than an arbitrary zoom.
         MapView_FitTrack(&s_view);
+        RoadView_Refresh();
         lv_label_set_text(name, GpxTrack_LoadedName());
         UpdateScale();
     } else {
@@ -337,15 +226,13 @@ void PageMap::onViewUnload() {
     // Same reasoning as the refresh timer above: it outlives the widgets
     // unless torn down here, and would write to freed lv_obj pointers on its
     // next tick.
-    if (s_tile_timer != nullptr) {
-        lv_timer_del(s_tile_timer);
-        s_tile_timer = nullptr;
+    if (s_road_timer != nullptr) {
+        lv_timer_del(s_road_timer);
+        s_road_timer = nullptr;
     }
     DataCenter_Unsubscribe(TOPIC_GPS_INFO, &s_gps_account);
 
     s_status_label = nullptr;
     s_scale_label = nullptr;
-    s_tile_layer = nullptr;
-    s_tile_img = nullptr;
-    s_tile_stat = nullptr;
+    s_road_stat = nullptr;
 }

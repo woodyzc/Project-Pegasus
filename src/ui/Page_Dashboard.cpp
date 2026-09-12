@@ -457,6 +457,7 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             // the speed readout.
             if (s_nav_is_map) {
                 MapView_SetPosition(&s_map_view, &gps);
+                RoadView_Refresh();
             }
 
             // Local time, derived from the fix itself: the position picks the
@@ -690,6 +691,7 @@ void PageDashboard::onViewLoad() {
         // question about which street is which.
         RoadView_Attach(&s_map_view);
         MapView_FitTrack(&s_map_view);
+        RoadView_Refresh();
 
         // Tapping it opens the full-screen map, where the trail gets the
         // whole panel.

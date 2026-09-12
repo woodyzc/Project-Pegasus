@@ -21,6 +21,11 @@ int32_t s_bounds[4] = {0, 0, 0, 0};
 // O(n^2) crawl over the file.
 uint32_t *s_offsets = nullptr;
 
+// Per-way bounding boxes, parallel to s_offsets: min_lat, min_lon, max_lat,
+// max_lon. Four int32 a way, so a 10,000-way extract costs 160KB of PSRAM --
+// cheap against skipping the projection for every way that is not on screen.
+int32_t *s_way_bounds = nullptr;
+
 // Header fields are read through memcpy regardless. They are only touched once
 // per way at load time, so the cost is nothing, and it keeps the loader honest
 // about a file that might not be laid out as promised.
@@ -39,8 +44,10 @@ uint16_t Rd16(const uint8_t *p) {
 void Release() {
     heap_caps_free(s_blob);
     heap_caps_free(s_offsets);
+    heap_caps_free(s_way_bounds);
     s_blob = nullptr;
     s_offsets = nullptr;
+    s_way_bounds = nullptr;
     s_bytes = 0;
     s_ways = 0;
     s_points = 0;
@@ -85,7 +92,8 @@ bool RoadMap_Load(const char *path) {
     }
 
     s_offsets = (uint32_t *)heap_caps_malloc(s_ways * sizeof(uint32_t), MALLOC_CAP_SPIRAM);
-    if (s_offsets == nullptr) {
+    s_way_bounds = (int32_t *)heap_caps_malloc(s_ways * 4 * sizeof(int32_t), MALLOC_CAP_SPIRAM);
+    if (s_offsets == nullptr || s_way_bounds == nullptr) {
         Release();
         return false;
     }
@@ -105,6 +113,23 @@ bool RoadMap_Load(const char *path) {
             Release();
             return false;
         }
+        // Bounds while the way is already in cache, rather than a second pass.
+        int32_t lo_la = INT32_MAX, lo_lo = INT32_MAX;
+        int32_t hi_la = INT32_MIN, hi_lo = INT32_MIN;
+        const uint8_t *pts = s_blob + at + 4;
+        for (uint16_t k = 0; k < count; k++) {
+            const int32_t la = (int32_t)Rd32(pts + k * 8);
+            const int32_t lo = (int32_t)Rd32(pts + k * 8 + 4);
+            if (la < lo_la) lo_la = la;
+            if (lo < lo_lo) lo_lo = lo;
+            if (la > hi_la) hi_la = la;
+            if (lo > hi_lo) hi_lo = lo;
+        }
+        s_way_bounds[i * 4 + 0] = lo_la;
+        s_way_bounds[i * 4 + 1] = lo_lo;
+        s_way_bounds[i * 4 + 2] = hi_la;
+        s_way_bounds[i * 4 + 3] = hi_lo;
+
         s_points += count;
         at += bytes;
     }
@@ -138,6 +163,10 @@ bool RoadMap_Way(size_t index, RoadWay_t *out) {
     // 8 bytes a point. See the format note in RoadMap.h -- this cast is only
     // safe because of that padding.
     out->points = (const int32_t *)(p + 4);
+    out->min_lat = s_way_bounds[index * 4 + 0];
+    out->min_lon = s_way_bounds[index * 4 + 1];
+    out->max_lat = s_way_bounds[index * 4 + 2];
+    out->max_lon = s_way_bounds[index * 4 + 3];
     return true;
 }
 
