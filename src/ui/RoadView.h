@@ -48,6 +48,15 @@ uint32_t RoadView_LastSegments();
 // town looks like.
 uint32_t RoadView_LastVisibleWays();
 
+// The draw split in two: deciding what is visible, and projecting and drawing
+// what survived. Split because three rounds of optimising the second half
+// barely moved the total, which is the signature of the cost being in the
+// first -- and it was, 9,904us of a 12,272us frame. Keep both numbers: the
+// cull is now ~128us via the grid index, and a regression there would
+// otherwise hide inside a total that looks reasonable.
+uint32_t RoadView_LastCullUs();
+uint32_t RoadView_LastDrawOnlyUs();
+
 #ifdef __cplusplus
 }
 #endif
