@@ -244,6 +244,9 @@ void PageMap::onViewLoad() {
         lv_obj_set_style_border_width(s_tile_layer, 0, 0);
         lv_obj_set_style_pad_all(s_tile_layer, 0, 0);
         lv_obj_clear_flag(s_tile_layer, LV_OBJ_FLAG_SCROLLABLE);
+        // Same reason as RoadView: a backdrop must not eat touches meant for
+        // whatever sits under it.
+        lv_obj_clear_flag(s_tile_layer, LV_OBJ_FLAG_CLICKABLE);
 
         // 2x2, deliberately offset.
         //
@@ -261,6 +264,7 @@ void PageMap::onViewLoad() {
                          TILE_X + tx, TILE_Y + ty);
                 lv_img_set_src(img, path);
                 lv_obj_set_pos(img, tx * 256 - TILE_OFF_X, ty * 256 - TILE_OFF_Y);
+                lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
                 if (tx == 0 && ty == 0) {
                     s_tile_img = img;
                 }

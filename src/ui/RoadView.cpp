@@ -100,6 +100,16 @@ void RoadView_Attach(MapView_t *view) {
     lv_obj_set_style_border_width(layer, 0, 0);
     lv_obj_set_style_pad_all(layer, 0, 0);
     lv_obj_clear_flag(layer, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Not clickable, and this matters more than it looks. lv_obj_create sets
+    // LV_OBJ_FLAG_CLICKABLE by default, so this layer -- which covers the
+    // whole map -- swallowed every touch and the dashboard's navigation tile
+    // stopped opening the ROUTE page. MapView's own trail does not do this
+    // because lv_line clears the flag in its constructor.
+    //
+    // Nothing here is interactive: it is a backdrop, and touches belong to
+    // whatever is underneath it.
+    lv_obj_clear_flag(layer, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(layer, RoadDrawCb, LV_EVENT_DRAW_MAIN, nullptr);
 
     // Behind the trail, in front of the container's background. Index 0 is the
