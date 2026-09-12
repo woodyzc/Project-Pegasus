@@ -26,6 +26,12 @@
 #   * test_hr_zone      - heart-rate training zones by reserve, checked
 #                         against the rider's own phone (compiles the real
 #                         src/system/HrZone.c)
+#   * test_route_parse  - the BLE route-download protocol and the offline
+#                         route-following geometry (compiles the real
+#                         src/navigation/RouteParse.c and RouteFollow.c).
+#                         Carries more weight than most: the offline half of
+#                         turn-by-turn cannot be exercised on the bench,
+#                         because no GPS module has ever been attached.
 #
 #   cd test/host && make          # build + run everything
 #   cd test/host && make asan     # same under ASan/UBSan
@@ -43,7 +49,7 @@ SUFFIX ?=
 BINS := test_parsebpm$(SUFFIX) test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) \
         test_ubx_parse$(SUFFIX) test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) \
         test_track_buffer$(SUFFIX) test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) \
-        test_trip_accum$(SUFFIX) test_hr_zone$(SUFFIX)
+        test_trip_accum$(SUFFIX) test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -86,6 +92,13 @@ test_trip_accum$(SUFFIX): test_trip_accum.c $(SYSTEM)/TripAccum.c
 
 test_hr_zone$(SUFFIX): test_hr_zone.c $(SYSTEM)/HrZone.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^ -lm
+
+# The route download protocol and the route-following geometry together. They
+# are tested as one because the geometry only ever runs on a blob the protocol
+# assembled, and a test that built its own blob by hand would stop proving the
+# two agree.
+test_route_parse$(SUFFIX): test_route_parse.c $(NAV)/RouteParse.c $(NAV)/RouteFollow.c
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
 
 # Both suites under the sanitizers.
 asan:
