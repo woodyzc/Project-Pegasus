@@ -27,15 +27,20 @@
 // LV_COLOR_SCREEN_TRANSP -- that is the flag whose absence made lv_canvas
 // panic the board (lv_conf.h), and it does not apply here.
 //
-// Cost: 112x112 bytes each, 11 icons, ~135KB of flash. Worth it here: the
+// Cost: 88x88 bytes each, 11 icons, ~83KB of flash. Worth it here: the
 // navigation tile is 240x184 and the arrow is the one thing on it that has to
 // be read without looking directly at the screen.
+//
+// 88 rather than 112 because a countdown bar, a "then" line and a
+// distance-to-go now share the tile's height. Regenerated at the smaller size
+// rather than scaled at runtime: lv_img_set_zoom on these assets drew nothing
+// at all on the panel, and the arrow simply vanished.
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define TBT_ICON_PX 112
+#define TBT_ICON_PX 88
 
 // Never returns null. TBT_ICON_NONE and any unknown id fall back to the
 // straight-ahead arrow, which the caller is expected to grey out rather than

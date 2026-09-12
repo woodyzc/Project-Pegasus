@@ -96,7 +96,10 @@
  * makes them touch. See the width table in Page_Dashboard's MakeValue for the
  * other half of the fit -- the cell is only 120px wide. */
 #define LV_FONT_MONTSERRAT_40 1
-#define LV_FONT_MONTSERRAT_48 1 /* primary speed readout */
+/* 0 since the turn distance moved to pegasus_font_num_88 (src/ui/NumFont.h),
+ * which is generated at a size LVGL's built-ins do not reach. Nothing else
+ * asked for 48pt, and the linker was already discarding it. */
+#define LV_FONT_MONTSERRAT_48 0
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
 /* lv_label_set_text_fmt() goes through LVGL's own printf, not the C library's,

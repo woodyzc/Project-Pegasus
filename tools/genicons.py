@@ -10,7 +10,7 @@ Output is LV_IMG_CF_ALPHA_8BIT: one byte of coverage per pixel, no colour.
 The colour comes from lv_obj_set_style_img_recolor() at runtime, so the same
 asset can be drawn in the accent colour or greyed out when a route ends.
 
-    python genicons.py <out.cpp> <preview.png>
+    python genicons.py <out.cpp> <preview.png> [size_px]
 
 Output must be .cpp, not .c: TbtIcons.h pulls in DataCenter.h for the
 TBT_ICON_* enum, and DataCenter.h declares a C++ class.
@@ -19,7 +19,15 @@ import sys
 import math
 from PIL import Image, ImageDraw
 
-SIZE = 112        # final icon, px
+# Final icon size, px. Overridable from the command line because the
+# navigation tile's height budget changed when a countdown bar, a "then" line
+# and a distance-to-go joined it there.
+#
+# Drawn at the size it is displayed at, never scaled at runtime: an attempt to
+# zoom the 112px asset down with lv_img_set_zoom drew nothing at all on the
+# panel, and a bitmap resampled by Pillow at 4x supersampling looks better than
+# one the renderer squeezes anyway.
+SIZE = int(sys.argv[3]) if len(sys.argv) > 3 else 112
 SS = 4             # supersample factor
 W = SIZE * SS
 # Proportional to the icon, NOT absolute pixels. They were absolute, and when

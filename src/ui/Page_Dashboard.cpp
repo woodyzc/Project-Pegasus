@@ -18,6 +18,7 @@
 #include "MapView.h"
 #include "RoadView.h"
 #include "Page_Map.h"
+#include "NumFont.h"
 #include "TbtIcons.h"
 
 // Visual design ported from the agents/lvgl-ui-layout-speed-odometer-clock
@@ -60,17 +61,16 @@ constexpr uint32_t TBT_IMMINENT_M = 30;
 // ride and teach the rider to ignore it.
 constexpr uint32_t TBT_BAR_MAX_M = 500;
 
-// The arrow asset is 112px square and the tile cannot afford that much height
-// now that a countdown bar, a "then" line and a distance-to-go share it.
-// Drawn at 88 via LVGL's image zoom rather than regenerating the bitmaps,
-// which needs Pillow and would risk the arrows' appearance for 24px.
-constexpr lv_coord_t TBT_ARROW_DRAW_PX = 88;
+// The arrow asset's own size. The bitmaps are generated at exactly the size
+// they are drawn at (tools/genicons.py takes it as an argument), because
+// scaling them at runtime with lv_img_set_zoom made the arrow disappear
+// entirely -- a transformed ALPHA_8BIT image drew nothing on this build.
+constexpr lv_coord_t TBT_ARROW_DRAW_PX = TBT_ICON_PX;
 
 // Usable width inside the navigation tile: the 240px panel less the tile's
 // padding on both sides. At file scope because the street name is re-fitted
 // on every directive, long after Create()'s locals have gone.
 constexpr lv_coord_t TBT_TEXT_W = 240 - 2 * 6;
-constexpr uint16_t TBT_ARROW_ZOOM = (uint16_t)((256 * TBT_ARROW_DRAW_PX) / TBT_ICON_PX);
 constexpr uint32_t COLOR_BADGE_TEXT = 0x081015;
 constexpr uint32_t COLOR_CELL_BG = 0x141E27;
 constexpr uint32_t COLOR_CELL_BORDER = 0x24313D;
@@ -982,10 +982,6 @@ void PageDashboard::onViewLoad() {
         // ALPHA_8BIT image draws in the theme's default, not the accent.
         lv_obj_set_style_img_recolor_opa(s_route_arrow_label, LV_OPA_COVER, 0);
         lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(COLOR_ACCENT), 0);
-        // Zoomed down, and the object sized to match: an lv_img keeps the
-        // asset's own dimensions otherwise, and flex would reserve all 112px.
-        lv_img_set_zoom(s_route_arrow_label, TBT_ARROW_ZOOM);
-        lv_obj_set_size(s_route_arrow_label, TBT_ARROW_DRAW_PX, TBT_ARROW_DRAW_PX);
 
         // Which exit, over the middle of the arrow. Costs no layout height,
         // which is the only reason it can exist on a tile this full.
@@ -1010,7 +1006,7 @@ void PageDashboard::onViewLoad() {
                               LV_FLEX_ALIGN_END);
 
         s_route_dist_label = lv_label_create(s_route_dist_row);
-        lv_obj_set_style_text_font(s_route_dist_label, &lv_font_montserrat_48, 0);
+        lv_obj_set_style_text_font(s_route_dist_label, &pegasus_font_num_88, 0);
         lv_obj_set_style_text_color(s_route_dist_label, lv_color_hex(COLOR_VALUE), 0);
         lv_label_set_text(s_route_dist_label, "");
 
@@ -1018,9 +1014,9 @@ void PageDashboard::onViewLoad() {
         lv_obj_set_style_text_font(s_route_dist_unit, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(s_route_dist_unit, lv_color_hex(COLOR_ACCENT), 0);
         lv_label_set_text(s_route_dist_unit, "");
-        // The 48pt line box carries descender space the digits never use, so
-        // without this the two lines look further apart than they are.
-        lv_obj_set_style_pad_top(s_route_dist_unit, -10, 0);
+        // No negative pad any more. The generated face's line box is measured
+        // from the glyphs it actually contains, so it carries no descender
+        // space to claw back.
 
         // ---- Row 2: the countdown bar ----
         s_route_bar = lv_bar_create(s_nav_content);
