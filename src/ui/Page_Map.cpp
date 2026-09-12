@@ -1,5 +1,7 @@
 #include "Page_Map.h"
 
+#include <stdio.h>
+
 #include "../hal/LvglFs.h"
 
 #include "../navigation/GpxTrack.h"
@@ -37,8 +39,17 @@ constexpr lv_coord_t MAP_H = 262;
 // answer to the wrong question. A prefix is better anyway: thousands of zoom
 // directories scattered beside a rider's .gpx files is not a filesystem
 // anyone wants to look at.
+#define TILE_Z 15
+#define TILE_X 8721
+#define TILE_Y 12556
 #define TILE_SPIKE_PATH "/MAP/15/8721/12556.bin"
 
+// Half a tile, so both seams of the 2x2 fall inside the window rather than
+// off its edges where they prove nothing.
+#define TILE_OFF_X 120
+#define TILE_OFF_Y 100
+
+lv_obj_t *s_tile_layer = nullptr;
 lv_obj_t *s_tile_img = nullptr;
 lv_obj_t *s_tile_stat = nullptr;
 lv_timer_t *s_tile_timer = nullptr;
@@ -195,13 +206,38 @@ void PageMap::onViewLoad() {
     //
     // Created BEFORE MapView so the track draws on top of it.
     if (LvglFs_IsReady()) {
-        s_tile_img = lv_img_create(parent);
-        lv_img_set_src(s_tile_img, "S:" TILE_SPIKE_PATH);
-        lv_obj_set_pos(s_tile_img, MAP_X, MAP_Y);
-        // The tile is 256 square and the window is 240x262, so it is clipped
-        // rather than scaled -- scaling would make the read time meaningless.
-        lv_obj_add_flag(s_tile_img, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_clear_flag(s_tile_img, LV_OBJ_FLAG_SCROLLABLE);
+        // A clipping container, so tiles can hang off the edges. LVGL clips
+        // children to their parent, which is the only way a tile can start at
+        // a negative offset without painting over the ROUTE title.
+        s_tile_layer = lv_obj_create(parent);
+        lv_obj_set_pos(s_tile_layer, MAP_X, MAP_Y);
+        lv_obj_set_size(s_tile_layer, MAP_W, MAP_H);
+        lv_obj_set_style_bg_opa(s_tile_layer, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(s_tile_layer, 0, 0);
+        lv_obj_set_style_pad_all(s_tile_layer, 0, 0);
+        lv_obj_clear_flag(s_tile_layer, LV_OBJ_FLAG_SCROLLABLE);
+
+        // 2x2, deliberately offset.
+        //
+        // One 256px tile all but fills a 240x262 window -- 0.94 by 1.02 of it
+        // -- so a single tile shows nothing about whether neighbours line up.
+        // Offsetting by roughly half a tile puts both seams on screen, which
+        // is the only thing worth checking at this stage: a road that jumps
+        // at a seam means the projection is wrong, and that is the failure
+        // step 3 exists to avoid.
+        for (int tx = 0; tx < 2; tx++) {
+            for (int ty = 0; ty < 2; ty++) {
+                lv_obj_t *img = lv_img_create(s_tile_layer);
+                char path[64];
+                snprintf(path, sizeof(path), "S:/MAP/%d/%d/%d.bin", TILE_Z,
+                         TILE_X + tx, TILE_Y + ty);
+                lv_img_set_src(img, path);
+                lv_obj_set_pos(img, tx * 256 - TILE_OFF_X, ty * 256 - TILE_OFF_Y);
+                if (tx == 0 && ty == 0) {
+                    s_tile_img = img;
+                }
+            }
+        }
     }
 
     // ---- The map ----
@@ -275,6 +311,7 @@ void PageMap::onViewUnload() {
 
     s_status_label = nullptr;
     s_scale_label = nullptr;
+    s_tile_layer = nullptr;
     s_tile_img = nullptr;
     s_tile_stat = nullptr;
 }

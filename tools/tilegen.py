@@ -5,6 +5,7 @@ Step 1 of the offline-map scope. The device cannot decode PNG -- there is no
 decoder in the firmware and no room to want one -- so tiles are converted to
 LVGL's own raw format on a computer and the firmware just reads bytes.
 
+    tilegen.py mapsim  OUT_DIR  [--n 3] [--seed 7] [--preview sheet.png]
     tilegen.py synth   OUT_DIR  [--zoom 15] [--x 8721] [--y 12556] [--n 3]
     tilegen.py convert IN.png   OUT.bin
     tilegen.py verify  IN.bin   [OUT.png]
@@ -164,6 +165,99 @@ def synth_tile(z: int, x: int, y: int) -> Image.Image:
     return img
 
 
+def draw_region(n: int, seed: int) -> Image.Image:
+    """Render an n x n tile region as ONE image, to be sliced afterwards.
+
+    Drawn whole rather than per tile because that is the only way roads and
+    rivers run continuously across tile seams. Generating each tile
+    independently gives nine squares that obviously do not join, which would
+    hide exactly the alignment errors these tiles exist to expose.
+
+    Styled dark, like Carto's Dark Matter, because the head unit's UI is dark
+    and a white map dropped into it would be blinding at night.
+    """
+    import random
+    rnd = random.Random(seed)
+
+    SS = 2
+    span = n * TILE * SS
+    img = Image.new("RGB", (span, span), (0x1A, 0x1E, 0x23))
+    d = ImageDraw.Draw(img)
+
+    # Parkland first: everything else sits on top of it.
+    for _ in range(max(2, n)):
+        cx, cy = rnd.randint(0, span), rnd.randint(0, span)
+        r = rnd.randint(span // 12, span // 6)
+        d.ellipse([cx - r, cy - r * 3 // 4, cx + r, cy + r * 3 // 4],
+                  fill=(0x1B, 0x2A, 0x20))
+
+    # A river, wandering top to bottom, drawn under the roads so bridges read
+    # as roads crossing water rather than water cutting the road.
+    x = rnd.randint(span // 4, span * 3 // 4)
+    river = []
+    for y in range(-20, span + 20, span // 24):
+        x += rnd.randint(-span // 22, span // 22)
+        river.append((max(0, min(span, x)), y))
+    # Wide and a touch brighter than instinct says: the minor street grid is
+    # drawn over it, and at 256px a subtle river simply disappears under the
+    # roads.
+    d.line(river, fill=(0x1C, 0x3E, 0x5C), width=14 * SS, joint="curve")
+
+    def road(pts, width, colour):
+        # Casing under fill: the dark outline is what stops two roads that
+        # cross from merging into one blob at this scale.
+        d.line(pts, fill=(0x10, 0x14, 0x18), width=width + 3 * SS, joint="curve")
+        d.line(pts, fill=colour, width=width, joint="curve")
+
+    # Minor streets: a jittered grid, so blocks look built rather than plotted.
+    step = span // (n * 6)
+    for i in range(0, span + step, step):
+        j = i + rnd.randint(-step // 5, step // 5)
+        road([(j, 0), (j, span)], 2 * SS, (0x33, 0x3A, 0x42))
+        j = i + rnd.randint(-step // 5, step // 5)
+        road([(0, j), (span, j)], 2 * SS, (0x33, 0x3A, 0x42))
+
+    # Secondary roads, a coarser grid on top.
+    step2 = span // (n * 2)
+    for i in range(step2 // 2, span, step2):
+        road([(i, 0), (i, span)], 4 * SS, (0x4E, 0x57, 0x60))
+        road([(0, i), (span, i)], 4 * SS, (0x4E, 0x57, 0x60))
+
+    # Two arterials, the brightest thing on the map, deliberately not straight.
+    for horizontal in (True, False):
+        base = rnd.randint(span // 3, span * 2 // 3)
+        pts = []
+        for t in range(0, span + 1, span // 10):
+            base += rnd.randint(-span // 40, span // 40)
+            pts.append((t, base) if horizontal else (base, t))
+        road(pts, 7 * SS, (0xC8, 0xA0, 0x50))
+
+    return img.resize((n * TILE, n * TILE), Image.LANCZOS)
+
+
+def cmd_mapsim(args) -> int:
+    region = draw_region(args.n, args.seed)
+    total = made = 0
+    for dx in range(args.n):
+        for dy in range(args.n):
+            x, y = args.x + dx, args.y + dy
+            tile = region.crop((dx * TILE, dy * TILE, (dx + 1) * TILE, (dy + 1) * TILE))
+            path = os.path.join(args.out, str(args.zoom), str(x), f"{y}.bin")
+            total += write_tile(path, tile)
+            made += 1
+
+    if args.preview:
+        region.save(args.preview)
+        print(f"preview -> {args.preview}")
+
+    print(f"{made} tiles -> {args.out}/{args.zoom}/  ({total / 1024:.0f} KB)")
+    leaf = os.path.basename(os.path.normpath(args.out))
+    if leaf != "MAP":
+        print(f"WARNING: firmware reads /MAP; this wrote to {leaf!r}")
+    print(f"centre tile: /MAP/{args.zoom}/{args.x + args.n // 2}/{args.y + args.n // 2}.bin")
+    return 0
+
+
 def cmd_synth(args) -> int:
     total = 0
     made = 0
@@ -203,6 +297,16 @@ def main() -> int:
     s.add_argument("--y", type=int, default=12556)
     s.add_argument("--n", type=int, default=3, help="n x n grid")
     s.set_defaults(fn=cmd_synth)
+
+    m = sub.add_parser("mapsim", help="fake but map-like tiles, continuous across seams")
+    m.add_argument("out")
+    m.add_argument("--zoom", type=int, default=15)
+    m.add_argument("--x", type=int, default=8721)
+    m.add_argument("--y", type=int, default=12556)
+    m.add_argument("--n", type=int, default=3, help="n x n grid")
+    m.add_argument("--seed", type=int, default=7)
+    m.add_argument("--preview", help="also save the whole region as a PNG")
+    m.set_defaults(fn=cmd_mapsim)
 
     c = sub.add_parser("convert", help="image file -> LVGL .bin")
     c.add_argument("src")
