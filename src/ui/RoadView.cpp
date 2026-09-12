@@ -10,6 +10,7 @@ namespace {
 
 volatile uint32_t g_draw_us = 0;
 volatile uint32_t g_segments = 0;
+volatile uint32_t g_visible = 0;
 
 struct RoadStyle {
     uint32_t colour;
@@ -40,6 +41,10 @@ const double ROAD_MAX_MPP[ROAD_CLASS_COUNT] = {
 // a dense city centre, or someone's continent-wide export. 4000 segments is
 // ~160ms, visibly a redraw but not a hang.
 constexpr uint32_t ROAD_MAX_SEGMENTS = 4000;
+
+// Ways that can be on screen at once. Static rather than on the stack: this
+// runs on the LVGL task, whose stack is 8KB, and 2048 entries is 4KB of it.
+constexpr uint16_t ROAD_VISIBLE_MAX = 2048;
 
 const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
     {0x333A42, 1}, // minor
@@ -103,6 +108,30 @@ void RoadDrawCb(lv_event_t *e) {
     uint32_t segments = 0;
     const size_t ways = RoadMap_WayCount();
 
+    // Cull ONCE, then draw from what survived.
+    //
+    // The first version tested every way again on every class pass -- four
+    // times 3,560 ways for the Germantown extract, and 7.7ms measured to draw
+    // precisely nothing when the view was elsewhere. The bounds test is cheap;
+    // doing it four times over the whole file is not.
+    static uint16_t visible[ROAD_VISIBLE_MAX];
+    uint16_t visible_count = 0;
+
+    for (size_t i = 0; i < ways && visible_count < ROAD_VISIBLE_MAX; i++) {
+        RoadWay_t way;
+        if (!RoadMap_Way(i, &way) || way.count < 2) {
+            continue;
+        }
+        if (mpp > ROAD_MAX_MPP[way.klass]) {
+            continue; // too far out for this class to be legible
+        }
+        if (way.max_lat < view_min_lat || way.min_lat > view_max_lat ||
+            way.max_lon < view_min_lon || way.min_lon > view_max_lon) {
+            continue;
+        }
+        visible[visible_count++] = (uint16_t)i;
+    }
+
     // Water, then minor, then secondary, then arteries -- painter's order, so
     // a trunk road crosses a river rather than being cut by it.
     static const uint8_t ORDER[ROAD_CLASS_COUNT] = {
@@ -110,9 +139,6 @@ void RoadDrawCb(lv_event_t *e) {
 
     for (int pass = 0; pass < ROAD_CLASS_COUNT && segments < ROAD_MAX_SEGMENTS; pass++) {
         const uint8_t klass = ORDER[pass];
-        if (mpp > ROAD_MAX_MPP[klass]) {
-            continue;
-        }
 
         lv_draw_line_dsc_t dsc;
         lv_draw_line_dsc_init(&dsc);
@@ -121,19 +147,11 @@ void RoadDrawCb(lv_event_t *e) {
         dsc.round_start = 1;
         dsc.round_end = 1;
 
-        for (size_t i = 0; i < ways && segments < ROAD_MAX_SEGMENTS; i++) {
+        for (uint16_t v = 0; v < visible_count && segments < ROAD_MAX_SEGMENTS; v++) {
             RoadWay_t way;
-            if (!RoadMap_Way(i, &way) || way.klass != klass || way.count < 2) {
+            if (!RoadMap_Way(visible[v], &way) || way.klass != klass) {
                 continue;
             }
-            // Four integer comparisons to skip a way entirely. On a real
-            // extract nearly every way fails this, which is what keeps the
-            // draw bounded by the screen rather than by the file.
-            if (way.max_lat < view_min_lat || way.min_lat > view_max_lat ||
-                way.max_lon < view_min_lon || way.min_lon > view_max_lon) {
-                continue;
-            }
-
             lv_point_t prev;
             for (uint16_t k = 0; k < way.count; k++) {
                 int16_t x, y;
@@ -150,6 +168,7 @@ void RoadDrawCb(lv_event_t *e) {
         }
     }
 
+    g_visible = visible_count;
     g_draw_us = micros() - started;
     g_segments = segments;
 }
@@ -199,4 +218,8 @@ uint32_t RoadView_LastDrawUs() {
 
 uint32_t RoadView_LastSegments() {
     return g_segments;
+}
+
+uint32_t RoadView_LastVisibleWays() {
+    return g_visible;
 }

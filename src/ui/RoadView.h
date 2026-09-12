@@ -43,6 +43,11 @@ void RoadView_Refresh();
 uint32_t RoadView_LastDrawUs();
 uint32_t RoadView_LastSegments();
 
+// Ways that survived culling in the last draw. Zero with a loaded map means
+// the roads are somewhere else entirely -- which is what a .prd for the wrong
+// town looks like.
+uint32_t RoadView_LastVisibleWays();
+
 #ifdef __cplusplus
 }
 #endif

@@ -45,9 +45,14 @@ void RoadStatTimer(lv_timer_t *timer) {
         return;
     }
     if (RoadMap_IsLoaded()) {
-        lv_label_set_text_fmt(s_road_stat, "roads %u ways, %u/%u seg in %u us",
-                              (unsigned)RoadMap_WayCount(), (unsigned)RoadView_LastSegments(),
-                              (unsigned)RoadMap_PointCount(), (unsigned)RoadView_LastDrawUs());
+        // Visible ways matter as much as segments: zero visible with a map
+        // loaded means the roads are for somewhere else, which looks identical
+        // to a broken renderer until the number is on screen.
+        lv_label_set_text_fmt(s_road_stat, "%u/%u ways, %u seg, %u us",
+                              (unsigned)RoadView_LastVisibleWays(),
+                              (unsigned)RoadMap_WayCount(),
+                              (unsigned)RoadView_LastSegments(),
+                              (unsigned)RoadView_LastDrawUs());
     } else {
         lv_label_set_text(s_road_stat, "no /MAP/roads.prd on the card");
     }
