@@ -17,6 +17,13 @@ lv_obj_t *s_root = nullptr;
 lv_obj_t *s_status = nullptr;
 lv_timer_t *s_timer = nullptr;
 
+// Whether the server actually took the radio. It decides what the button at
+// the bottom does, and that is not cosmetic: if nothing was taken there is
+// nothing to give back, and rebooting anyway would punish the rider for a
+// refusal that was not their fault -- a missing card, a ride in progress, or
+// a firmware built without the feature.
+bool s_took_radio = false;
+
 lv_obj_t *MakeCaption(lv_obj_t *parent, const char *text) {
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, text);
@@ -35,8 +42,26 @@ lv_obj_t *MakeValue(lv_obj_t *parent, const char *text, const lv_font_t *font, u
     return label;
 }
 
+void Dismiss() {
+    if (s_timer != nullptr) {
+        lv_timer_del(s_timer);
+        s_timer = nullptr;
+    }
+    if (s_root != nullptr) {
+        lv_obj_del(s_root);
+        s_root = nullptr;
+    }
+    s_status = nullptr;
+}
+
 void OnStopClicked(lv_event_t *e) {
     (void)e;
+    if (!s_took_radio) {
+        // Never started, so the Bluetooth stack is untouched and the card
+        // still has its usual readers. Just go back.
+        Dismiss();
+        return;
+    }
     // Does not return. The timer and the overlay go with the reboot, so there
     // is nothing to tear down first.
     FileServer_StopAndRestart();
@@ -77,7 +102,8 @@ void Overlay_FileTransfer_Show() {
         return;
     }
 
-    const bool started = FileServer_Start();
+    s_took_radio = FileServer_Start();
+    const bool started = s_took_radio;
     s_root = MakeOverlay();
 
     lv_obj_t *title = MakeValue(s_root, LV_SYMBOL_WIFI "  FILE TRANSFER", &lv_font_montserrat_14,
@@ -86,8 +112,7 @@ void Overlay_FileTransfer_Show() {
 
     if (!started) {
         MakeValue(s_root, FileServer_StatusText(), &lv_font_montserrat_12, COLOR_DANGER);
-        MakeValue(s_root,
-                  "Nothing was changed. Restart to go back to riding.",
+        MakeValue(s_root, "Nothing was changed. Bluetooth and the card are as they were.",
                   &lv_font_montserrat_10, COLOR_CAPTION);
     } else {
         MakeCaption(s_root, "JOIN THIS NETWORK");
@@ -119,7 +144,9 @@ void Overlay_FileTransfer_Show() {
     lv_obj_add_event_cb(stop, OnStopClicked, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *stop_label = lv_label_create(stop);
-    lv_label_set_text(stop_label, LV_SYMBOL_POWER "  Stop and restart");
+    lv_label_set_text(stop_label,
+                      started ? (LV_SYMBOL_POWER "  Stop and restart")
+                              : (LV_SYMBOL_CLOSE "  Back"));
     lv_obj_set_style_text_font(stop_label, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(stop_label, lv_color_hex(COLOR_DANGER), 0);
     lv_obj_center(stop_label);

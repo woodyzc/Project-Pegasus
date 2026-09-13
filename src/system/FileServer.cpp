@@ -1,5 +1,10 @@
 #include "FileServer.h"
 
+// Compiled out by -D PEGASUS_WIFI_FILES=0. See FileServer.h: this is the only
+// way the cost actually goes away, because the cost is code in the image and a
+// runtime switch cannot un-link code.
+#if PEGASUS_WIFI_FILES
+
 #include <Arduino.h>
 #include <SD_MMC.h>
 #include <WebServer.h>
@@ -422,3 +427,20 @@ uint32_t FileServer_RequestCount() {
 const char *FileServer_StatusText() {
     return s_status;
 }
+
+#else // PEGASUS_WIFI_FILES
+
+// The same API, answering honestly. Keeping the surface identical means the
+// settings page and the overlay compile either way and the flag is one line
+// in platformio.ini rather than ifdefs scattered through the UI.
+bool FileServer_Start() { return false; }
+void FileServer_StopAndRestart() {}
+bool FileServer_IsRunning() { return false; }
+const char *FileServer_Ssid() { return ""; }
+const char *FileServer_Password() { return ""; }
+const char *FileServer_Url() { return ""; }
+int FileServer_ClientCount() { return 0; }
+uint32_t FileServer_RequestCount() { return 0; }
+const char *FileServer_StatusText() { return "not built into this firmware"; }
+
+#endif // PEGASUS_WIFI_FILES

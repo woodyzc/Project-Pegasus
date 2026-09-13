@@ -254,6 +254,21 @@ Three constraints shape it, and none are negotiable:
   only input in this firmware that arrives from off-device and reaches the
   filesystem. Widen it there, with tests, or not at all.
 
+`-D PEGASUS_WIFI_FILES=0` in `platformio.ini` removes the whole feature, and
+that is the **only** thing that recovers what it costs. Measured on this board:
+
+| | with it | without it |
+|---|---|---|
+| Static RAM | 140,224 B (42.8%) | 119,388 B (36.4%) |
+| Flash | 1,657,877 B (25.3%) | 1,238,549 B (18.9%) |
+
+410KB of flash and 20KB of static RAM, essentially all of it the WiFi stack.
+A *runtime* switch would recover none of it: that expense is code linked into
+the image and buffers reserved at link time, and the radio itself is already
+only started when the button is pressed, so there is no idle cost left to
+save. Everything still compiles and links with the flag off — the API answers
+false and says why, so the UI carries no conditionals.
+
 The access-point password is regenerated every session and shown on the panel.
 It is deliberately **not** derived from the MAC: the access point's BSSID *is*
 the MAC, so anything derived from it is printed on the outside of the thing it

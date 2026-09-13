@@ -31,6 +31,20 @@
 //
 // What may be read and written is FilePath.h's business, and it is host
 // tested. Nothing here widens it.
+//
+// ---------------------------------------------------------------------------
+// Compiling it out
+// ---------------------------------------------------------------------------
+// -D PEGASUS_WIFI_FILES=0 removes the whole feature, and that is the only
+// thing that recovers what it costs. A runtime switch would not: the WiFi
+// stack's expense is code in the flash image and buffers reserved at link
+// time, and neither is affected by whether a button is ever pressed. The
+// radio itself is already only started on demand, so there is no idle cost
+// left for a switch to save.
+//
+// Everything below still compiles and links with the flag off; it answers
+// false and says why, so the UI needs no conditionals of its own.
+// ---------------------------------------------------------------------------
 
 // Brings up the access point and starts serving. Returns false if the card is
 // not mounted, a ride is being recorded, or the radio would not start; the
