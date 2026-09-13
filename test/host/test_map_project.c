@@ -154,10 +154,43 @@ int main(void) {
         for (i = 0; i < 400; i++) {
             TrackBuffer_Add(&track, 38.80 + (double)i * 0.001, -77.0);
         }
-        check(Map_BuildPolyline(&track, 38.85, -77.0, 1.0, 120, 160, poly, 16) == 16,
+        /* A scale that puts the track's early points a couple of pixels apart
+           and on screen, so the buffer really does fill. */
+        check(Map_BuildPolyline(&track, 38.85, -77.0, 55.0, 120, 160, poly, 16) == 16,
               "stops at max_points");
-        check(Map_BuildPolyline(&track, 38.85, -77.0, 1.0, 120, 160, poly, 0) == 0,
+        check(Map_BuildPolyline(&track, 38.85, -77.0, 55.0, 120, 160, poly, 0) == 0,
               "zero capacity writes nothing");
+        check(Map_BuildPolyline(&track, 38.85, -77.0, 1.0, 120, 160, poly, 16) <= 16,
+              "never exceeds max_points, however much is off screen");
+    }
+    printf("done\n");
+
+    printf("- a small buffer still reaches the visible part of a long track: ");
+    /* The bug this guards: the walk used to fill the buffer with the START of
+       the track and stop. Zoom in far enough that the visible stretch needs
+       more points than the buffer holds, and the map drew a piece of the
+       track's beginning and nothing where the rider actually was -- an empty
+       map, which looks like the trail failing to load rather than a projection
+       running out of room. */
+    TrackBuffer_Init(&track, lat_store, lon_store, CAP);
+    {
+        int i;
+        int inside = 0;
+        size_t written;
+        size_t j;
+        for (i = 0; i < 400; i++) {
+            TrackBuffer_Add(&track, 38.80 + (double)i * 0.001, -77.0);
+        }
+        /* Centred near the END of the track, zoomed in hard, with room for far
+           fewer points than the track holds. */
+        written = Map_BuildPolyline(&track, 39.19, -77.0, 1.0, 120, 160, poly, 16);
+        for (j = 0; j < written; j++) {
+            if (poly[j].x >= 0 && poly[j].x <= 240 && poly[j].y >= 0 && poly[j].y <= 320) {
+                inside++;
+            }
+        }
+        check(written > 0, "something is drawn");
+        check(inside > 0, "and some of it is on screen");
     }
     printf("done\n");
 

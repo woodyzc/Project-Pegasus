@@ -61,13 +61,16 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // by the one shared point, the ridden colour wins and the join is clean.
     view->trail = lv_line_create(view->container);
     lv_obj_set_style_line_color(view->trail, lv_color_hex(COLOR_TRAIL_AHEAD), 0);
-    lv_obj_set_style_line_width(view->trail, 2, 0);
+    // 4px, not 2. The roads under it are drawn 1 to 4px wide, and a route the
+    // same weight as the streets it crosses is a route the eye has to hunt
+    // for. This is the one line on the map that is not scenery.
+    lv_obj_set_style_line_width(view->trail, 4, 0);
     lv_obj_set_style_line_rounded(view->trail, true, 0);
     lv_obj_set_pos(view->trail, 0, 0);
 
     view->trail_done = lv_line_create(view->container);
     lv_obj_set_style_line_color(view->trail_done, lv_color_hex(COLOR_TRAIL_DONE), 0);
-    lv_obj_set_style_line_width(view->trail_done, 2, 0);
+    lv_obj_set_style_line_width(view->trail_done, 4, 0);
     lv_obj_set_style_line_rounded(view->trail_done, true, 0);
     lv_obj_set_pos(view->trail_done, 0, 0);
 

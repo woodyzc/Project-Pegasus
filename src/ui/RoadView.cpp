@@ -80,10 +80,13 @@ const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
     {0x4E5760, 2}, // secondary
     // Arteries in blue, not the amber they were. Amber is the trail's own
     // colour family now that the ridden part of it is yellow, and a road
-    // sharing that family is a road a rider mistakes for the route. Brighter
-    // and cooler than water below, which is the only other blue here and is
-    // both darker and drawn thicker.
-    {0x4A90D9, 3}, // artery
+    // sharing that family is a road a rider mistakes for the route.
+    //
+    // Muted rather than the bright blue this first was. Roads are the backdrop
+    // the route is read against, and a bright artery pulled the eye off the
+    // one line on the map that matters. Still a step lighter than the water
+    // below it, which is darker again and drawn thicker.
+    {0x2F6389, 3}, // artery
     {0x1C3E5C, 4}, // water
 };
 
