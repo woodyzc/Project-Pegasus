@@ -65,6 +65,14 @@ void Settings_NoteRadioBringUpOk();
 // True when this boot fell back to GPX because the previous one didn't finish.
 bool Settings_DidNavModeFallBack();
 
+// ---- Deep sleep ----
+// Off by default. Dimming and blanking always happen; this is only the last
+// step, and PowerManager.h explains why it is opt-in: waking depends on the
+// touch controller's interrupt line, which has never been tested on this
+// board, and there is no BAT button here to fall back on.
+bool Settings_GetSleepEnabled();
+void Settings_SetSleepEnabled(bool enabled);
+
 // ---- Heart-rate zone personalisation ----
 // The resting and maximum rate that HrZone.h needs to place a reading in a
 // zone. Defaults are the rider's own measured pair, so the bands agree with

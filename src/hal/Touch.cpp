@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include "../system/PowerManager.h"
 
 // FT6336G I2C address and register map. FT6336G is register-compatible
 // with the wider FocalTech FT6x06 family (FT6206/FT6236/FT6336) -- this is
@@ -129,6 +130,17 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     }
     if (TOUCH_INVERT_Y) {
         y = TFT_HEIGHT - 1 - y;
+    }
+
+    // A press on a dark screen spends itself waking the screen up, and LVGL
+    // never sees it. Otherwise the first touch after the backlight times out
+    // lands on whatever button happens to be under the finger, which on this
+    // firmware could be "Start new ride" or the file server.
+    const bool was_off = PowerManager_ScreenIsOff();
+    PowerManager_NoteActivity();
+    if (was_off) {
+        data->state = LV_INDEV_STATE_REL;
+        return;
     }
 
     data->point.x = MapAxis(x, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, TFT_WIDTH);

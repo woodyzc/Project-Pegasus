@@ -22,6 +22,7 @@ constexpr char KEY_NAV_MODE[] = "navmode";
 constexpr char KEY_HR_REST[] = "hrrest";
 constexpr char KEY_HR_MAX[] = "hrmax";
 constexpr char KEY_BOOT_COUNT[] = "boots";
+constexpr char KEY_SLEEP[] = "sleepen";
 
 constexpr uint8_t DEFAULT_BRIGHTNESS = 100;
 constexpr float KM_TO_MILES = 0.621371f;
@@ -57,6 +58,9 @@ bool s_ready = false;
 uint8_t s_brightness = DEFAULT_BRIGHTNESS;
 SpeedUnit_t s_speed_unit = SPEED_UNIT_KMH;
 NavMode_t s_nav_mode = DEFAULT_NAV_MODE;
+// Opt-in: see Settings.h. An untested wake source that leaves the device
+// looking dead is a poor default however mild the recovery.
+bool s_sleep_enabled = false;
 bool s_nav_fell_back = false;
 uint8_t s_hr_rest = DEFAULT_HR_REST;
 uint8_t s_hr_max = DEFAULT_HR_MAX;
@@ -108,6 +112,7 @@ void Settings_Init() {
         s_brightness = s_prefs.getUChar(KEY_BRIGHTNESS, DEFAULT_BRIGHTNESS);
         s_speed_unit = (SpeedUnit_t)s_prefs.getUChar(KEY_SPEED_UNIT, SPEED_UNIT_KMH);
         s_nav_mode = (NavMode_t)s_prefs.getUChar(KEY_NAV_MODE, DEFAULT_NAV_MODE);
+        s_sleep_enabled = s_prefs.getUChar(KEY_SLEEP, 0) != 0;
         s_hr_rest = s_prefs.getUChar(KEY_HR_REST, DEFAULT_HR_REST);
         s_hr_max = s_prefs.getUChar(KEY_HR_MAX, DEFAULT_HR_MAX);
     }
@@ -289,6 +294,20 @@ void Settings_SetHrMaxBpm(uint8_t bpm) {
     s_hr_max = next;
     if (s_ready) {
         s_prefs.putUChar(KEY_HR_MAX, s_hr_max);
+    }
+}
+
+bool Settings_GetSleepEnabled() {
+    return s_sleep_enabled;
+}
+
+void Settings_SetSleepEnabled(bool enabled) {
+    if (enabled == s_sleep_enabled) {
+        return;
+    }
+    s_sleep_enabled = enabled;
+    if (s_ready) {
+        s_prefs.putUChar(KEY_SLEEP, s_sleep_enabled ? 1 : 0);
     }
 }
 

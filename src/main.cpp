@@ -15,6 +15,7 @@
 #include "system/DataCenter.h"
 #include "system/LvglTask.h"
 #include "system/PageManager/PageManager.h"
+#include "system/PowerManager.h"
 #include "system/Settings.h"
 #include "system/RideStats.h"
 #include "system/Trip.h"
@@ -136,6 +137,10 @@ void setup() {
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);
     s_page_manager.Push(PAGE_NAME_DASHBOARD);
 
+    // Before the LVGL task, because it creates an LVGL timer and LVGL here has
+    // no lock: everything lv_* belongs to that task once it is running.
+    PowerManager_Init();
+
     LvglTask_Start(); // Core 1: lv_timer_handler() loop (CLAUDE.md §4)
 
     // Core 0 power monitoring. Started before the radios because it is cheap
@@ -232,6 +237,7 @@ void loop() {
     // quiet, so this costs nothing on a normal connected ride. Once a second
     // is the right cadence: it is also how often a GPS fix arrives.
     NavRoute_Tick(millis());
+
 
     vTaskDelay(pdMS_TO_TICKS(1000));
 }

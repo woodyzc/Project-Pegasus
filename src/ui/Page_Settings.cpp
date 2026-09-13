@@ -14,6 +14,7 @@
 #include "../sensors/BLE_HR_Client.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
+#include "../system/PowerManager.h"
 #include "../system/Settings.h"
 #include "Page_Dashboard.h"
 
@@ -35,6 +36,7 @@ lv_obj_t *s_trip_status = nullptr;
 lv_obj_t *s_uptime_value = nullptr;
 lv_obj_t *s_ridelog_value = nullptr;
 lv_obj_t *s_selftest_status = nullptr;
+lv_obj_t *s_power_status = nullptr;
 lv_obj_t *s_hrlink_value = nullptr;
 lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
@@ -288,6 +290,30 @@ void RefreshSelfTestStatus() {
                           : "Writes three points to /rides and reads them back");
 }
 
+void RefreshPowerStatus() {
+    if (s_power_status == nullptr) {
+        return;
+    }
+    const char *blocked = PowerManager_InhibitText();
+    if (blocked[0] != '\0') {
+        lv_label_set_text_fmt(s_power_status, "Screen: %s. Will not sleep: %s.",
+                              PowerManager_StageText(), blocked);
+    } else {
+        const uint32_t idle_ms = PowerManager_IdleMs();
+        const uint32_t left_s = (idle_ms >= POWER_SLEEP_AFTER_MS)
+                                    ? 0u
+                                    : ((POWER_SLEEP_AFTER_MS - idle_ms) / 1000u);
+        lv_label_set_text_fmt(s_power_status, "Screen: %s. Sleeps in %u s.",
+                              PowerManager_StageText(), (unsigned)left_s);
+    }
+}
+
+void OnSleepToggled(lv_event_t *e) {
+    lv_obj_t *sw = lv_event_get_target(e);
+    Settings_SetSleepEnabled(lv_obj_has_state(sw, LV_STATE_CHECKED));
+    RefreshPowerStatus();
+}
+
 void OnFileTransferClicked(lv_event_t *e) {
     (void)e;
     // Everything from here is the overlay's: it takes the radio, the card and
@@ -336,6 +362,7 @@ void InfoTimerCallback(lv_timer_t *timer) {
     }
 
     RefreshSelfTestStatus();
+    RefreshPowerStatus();
 
     if (s_ridelog_value != nullptr) {
         if (RideLog_IsRecording()) {
@@ -694,6 +721,53 @@ void PageSettings::onViewLoad() {
     lv_obj_set_width(s_selftest_status, LV_PCT(100));
     RefreshSelfTestStatus();
 
+    // ---- Power ----
+    // The two stages that always happen are described rather than offered:
+    // dimming and blanking carry no risk, and nothing is gained by letting the
+    // rider switch off the single biggest saving on the board. Only the last
+    // step, which depends on an untested wake source, is a choice.
+    lv_obj_t *power_card = MakeCard(body, "POWER");
+
+    lv_obj_t *power_row = lv_obj_create(power_card);
+    lv_obj_set_size(power_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(power_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(power_row, 0, 0);
+    lv_obj_set_style_pad_all(power_row, 0, 0);
+    lv_obj_clear_flag(power_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(power_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(power_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *sleep_label = lv_label_create(power_row);
+    lv_label_set_text(sleep_label, "Deep sleep when idle");
+    lv_obj_set_style_text_font(sleep_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(sleep_label, lv_color_hex(COLOR_VALUE), 0);
+
+    lv_obj_t *sleep_sw = lv_switch_create(power_row);
+    if (Settings_GetSleepEnabled()) {
+        lv_obj_add_state(sleep_sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(sleep_sw, OnSleepToggled, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    lv_obj_t *power_hint = lv_label_create(power_card);
+    lv_label_set_text(power_hint,
+                      "Screen dims after 1 min and goes dark after 3, always.\n"
+                      "Deep sleep follows at 5 min, and only a touch wakes it. That "
+                      "wake has never been tested here: if it fails, the board looks "
+                      "switched off until you unplug it.\n"
+                      "Never sleeps on USB, mid-ride, or during file transfer.");
+    lv_obj_set_style_text_font(power_hint, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(power_hint, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_long_mode(power_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(power_hint, LV_PCT(100));
+
+    s_power_status = lv_label_create(power_card);
+    lv_obj_set_style_text_font(s_power_status, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_power_status, lv_color_hex(COLOR_ACCENT), 0);
+    lv_label_set_long_mode(s_power_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_power_status, LV_PCT(100));
+    RefreshPowerStatus();
+
     // ---- WiFi file transfer ----
     // In the ride-log neighbourhood because rides are what most people come
     // to fetch, even though it also carries routes and maps in the other
@@ -831,6 +905,7 @@ void PageSettings::onViewUnload() {
     s_uptime_value = nullptr;
     s_ridelog_value = nullptr;
     s_selftest_status = nullptr;
+    s_power_status = nullptr;
     s_hrlink_value = nullptr;
     s_tbtlink_value = nullptr;
     s_heap_value = nullptr;

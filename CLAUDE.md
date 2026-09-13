@@ -80,7 +80,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Core 0 (Background Data Core)**:
   - Task 1: MAX-M10S UBX parsing with low-speed anti-drift and Kalman filtering.
   - Task 2: NimBLE BLE client reception (heart rate).
-  - Task 3: Power & IMU monitoring (detect 5-min inactivity to trigger Deep Sleep).
+  - Task 3: Battery monitoring. The idle/sleep half of this is **not** a Core 0
+    task: it changes the backlight and puts a widget on screen, and LVGL here
+    has no lock, so `PowerManager` runs on an LVGL timer instead
+    (`src/system/PowerManager.h`). The decision logic is pure and host-tested in
+    `src/system/IdlePolicy.h`; deep sleep is opt-in because the wake source has
+    never been proven. IMU-based motion detection is still absent, because the
+    board on the bench has no IMU.
 - **Core 1 (UI & Life Cycle Core)**:
   - Task 1: LVGL rendering loop (`lv_timer_handler()`).
   - Task 2: X-TRACK `PageManager` life cycle management.

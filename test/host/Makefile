@@ -31,6 +31,8 @@
 #   * test_time_source  - which clock the head unit believes, and when it stops
 #                         believing it (compiles the real
 #                         src/system/TimeSource.c)
+#   * test_idle_policy  - when the screen dims, blanks and sleeps (compiles the
+#                         real src/system/IdlePolicy.c)
 #   * test_file_path    - which paths the WiFi file server may touch (compiles
 #                         the real src/system/FilePath.c). The only host suite
 #                         covering an adversarial input rather than a mistake.
@@ -60,7 +62,8 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) test_track_buffer$(SUFFIX) \
         test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) test_trip_accum$(SUFFIX) \
         test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) test_clock_frame$(SUFFIX) \
-        test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX)
+        test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX) \
+        test_idle_policy$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -108,6 +111,12 @@ test_ride_stats$(SUFFIX): test_ride_stats.c $(SYSTEM)/RideStatsCore.c
 # Carries more weight than its size suggests: this is the only input in the
 # firmware that arrives from outside the device and reaches the filesystem.
 test_file_path$(SUFFIX): test_file_path.c $(SYSTEM)/FilePath.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
+
+# Thresholds here are minutes long, so the alternative to testing this is
+# waiting -- and the failure modes are a device that dies at lunchtime or one
+# that blanks while the rider is reading it.
+test_idle_policy$(SUFFIX): test_idle_policy.c $(SYSTEM)/IdlePolicy.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
 
 test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c
