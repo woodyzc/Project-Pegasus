@@ -209,6 +209,18 @@ void OnRouteChosen(lv_event_t *e) {
     // where this one is. Dropped along with the rider's pan and zoom, so the
     // new route is framed on itself.
     MapView_ForgetCamera();
+
+    // And the roads under it. A route in another county wants another extract,
+    // and the card may well carry it. Silent when nothing covers the new
+    // route: the old streets are wrong, but a blank map is not better, and the
+    // trail is what the rider came to see.
+    {
+        double lat = 0.0;
+        double lon = 0.0;
+        if (GpxTrack_Center(&lat, &lon)) {
+            RoadMap_LoadCovering(lat, lon);
+        }
+    }
     MapView_Recenter(&s_view);
     s_view.zoom_locked = false;
     MapView_FitTrack(&s_view);
@@ -242,7 +254,31 @@ void OnChooseRouteClicked(lv_event_t *e) {
     lv_label_set_text(title, "CHOOSE ROUTE");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+
+    // Which road extract is under the route, because choosing a route can
+    // change it and a rider who sees no streets should be able to tell a
+    // missing extract from a broken one without leaving this screen.
+    {
+        lv_obj_t *map_name = lv_label_create(s_picker);
+        const char *loaded = RoadMap_LoadedPath();
+        const char *shown = loaded;
+        // Leading directory trimmed: every one of them starts "/MAP/".
+        for (const char *p = loaded; *p != '\0'; p++) {
+            if (*p == '/') {
+                shown = p + 1;
+            }
+        }
+        lv_label_set_text_fmt(map_name, "roads: %s", shown[0] != '\0' ? shown : "none");
+        lv_obj_set_style_text_font(map_name, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_color(map_name, lv_color_hex(COLOR_CAPTION), 0);
+        lv_obj_set_width(map_name, 180);
+        lv_label_set_long_mode(map_name, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_align(map_name, LV_TEXT_ALIGN_CENTER, 0);
+        // Below the close button, not beside it: centred at this width the
+        // caption ran under the button's left edge.
+        lv_obj_align(map_name, LV_ALIGN_TOP_MID, 0, 38);
+    }
 
     lv_obj_t *close = lv_btn_create(s_picker);
     lv_obj_set_size(close, 40, 30);
@@ -275,7 +311,7 @@ void OnChooseRouteClicked(lv_event_t *e) {
     }
 
     lv_obj_t *list = lv_obj_create(s_picker);
-    lv_obj_set_size(list, 228, 268);
+    lv_obj_set_size(list, 228, 246);
     lv_obj_align(list, LV_ALIGN_BOTTOM_MID, 0, -6);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list, 0, 0);

@@ -116,8 +116,22 @@ void setup() {
 
         // Vector roads, if the card carries them. Optional by design: the
         // breadcrumb and every metric work without it, so a card with no
-        // roads.prd is not an error, just a map with no streets on it.
-        RoadMap_Load("/MAP/roads.prd");
+        // roads is not an error, just a map with no streets on it.
+        //
+        // Chosen by where the loaded route is, not by filename. A card can
+        // hold an extract per riding area and the right one comes up on its
+        // own; the old fixed /MAP/roads.prd meant riding somewhere else needed
+        // a laptop and a rename.
+        double route_lat = 0.0;
+        double route_lon = 0.0;
+        if (GpxTrack_Center(&route_lat, &route_lon) &&
+            RoadMap_LoadCovering(route_lat, route_lon)) {
+            // Loaded the extract that covers the route.
+        } else {
+            // No route, or nothing covering it. The old name is the fallback
+            // so a card built before any of this still works.
+            RoadMap_Load("/MAP/roads.prd");
+        }
     }
 
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);

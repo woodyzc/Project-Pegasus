@@ -158,8 +158,114 @@ bool BuildGrid() {
 
 } // namespace
 
+namespace {
+char s_loaded_path[ROADMAP_PATH_MAX] = {0};
+} // namespace
+
+bool RoadMap_PeekBounds(const char *path, double *out_min_lat, double *out_min_lon,
+                        double *out_max_lat, double *out_max_lon) {
+    if (path == nullptr) {
+        return false;
+    }
+    File file = SD_MMC.open(path, FILE_READ);
+    if (!file || file.isDirectory()) {
+        return false;
+    }
+
+    uint8_t header[24];
+    const uint32_t got = file.read(header, sizeof(header));
+    file.close();
+    if (got != sizeof(header) || memcmp(header, ROADMAP_MAGIC, 4) != 0) {
+        return false;
+    }
+
+    if (out_min_lat != nullptr) {
+        *out_min_lat = (double)(int32_t)Rd32(header + 8) / 1e7;
+    }
+    if (out_min_lon != nullptr) {
+        *out_min_lon = (double)(int32_t)Rd32(header + 12) / 1e7;
+    }
+    if (out_max_lat != nullptr) {
+        *out_max_lat = (double)(int32_t)Rd32(header + 16) / 1e7;
+    }
+    if (out_max_lon != nullptr) {
+        *out_max_lon = (double)(int32_t)Rd32(header + 20) / 1e7;
+    }
+    return true;
+}
+
+bool RoadMap_LoadCovering(double lat, double lon) {
+    File dir = SD_MMC.open("/MAP");
+    if (!dir || !dir.isDirectory()) {
+        return false;
+    }
+
+    char best[ROADMAP_PATH_MAX] = {0};
+    double best_area = 0.0;
+
+    for (File entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
+        if (entry.isDirectory()) {
+            continue;
+        }
+        const char *name = entry.name();
+        const size_t len = strlen(name);
+        if (len < 4 || strcasecmp(name + len - 4, ".prd") != 0) {
+            continue;
+        }
+
+        char path[ROADMAP_PATH_MAX];
+        // SD_MMC hands back names with and without a leading slash depending
+        // on the release, and sometimes the full path already.
+        int written;
+        if (name[0] == '/') {
+            written = snprintf(path, sizeof(path), "%s", name);
+        } else {
+            written = snprintf(path, sizeof(path), "/MAP/%s", name);
+        }
+        if (written <= 0 || (size_t)written >= sizeof(path)) {
+            continue;
+        }
+
+        double min_lat;
+        double min_lon;
+        double max_lat;
+        double max_lon;
+        if (!RoadMap_PeekBounds(path, &min_lat, &min_lon, &max_lat, &max_lon)) {
+            continue;
+        }
+        if (lat < min_lat || lat > max_lat || lon < min_lon || lon > max_lon) {
+            continue;
+        }
+
+        // Smallest wins. A tight local extract culls faster than a regional
+        // one, and a rider with both on the card made the small one on purpose.
+        const double area = (max_lat - min_lat) * (max_lon - min_lon);
+        if (best[0] == '\0' || area < best_area) {
+            best_area = area;
+            strncpy(best, path, sizeof(best) - 1);
+            best[sizeof(best) - 1] = '\0';
+        }
+    }
+    dir.close();
+
+    if (best[0] == '\0') {
+        // Nothing covers it. Deliberately leaves the loaded map alone: a map
+        // of the wrong town is worse than the one already on screen.
+        return false;
+    }
+    if (strcmp(best, s_loaded_path) == 0) {
+        return true; // Already the right one; reloading 3MB would be for show.
+    }
+    return RoadMap_Load(best);
+}
+
+const char *RoadMap_LoadedPath() {
+    return s_loaded_path;
+}
+
 bool RoadMap_Load(const char *path) {
     Release();
+    s_loaded_path[0] = '\0';
 
     File file = SD_MMC.open(path, FILE_READ);
     if (!file || file.isDirectory()) {
@@ -237,7 +343,14 @@ bool RoadMap_Load(const char *path) {
         at += bytes;
     }
 
-    return BuildGrid();
+    if (!BuildGrid()) {
+        return false;
+    }
+    // Recorded only now: a half-loaded file must not look like the map on
+    // screen, or the next LoadCovering would skip reloading it.
+    strncpy(s_loaded_path, path, sizeof(s_loaded_path) - 1);
+    s_loaded_path[sizeof(s_loaded_path) - 1] = '\0';
+    return true;
 }
 
 bool RoadMap_IsLoaded() {

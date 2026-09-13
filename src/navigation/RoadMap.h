@@ -80,6 +80,35 @@ extern "C" {
 // Preconditions: GpxTrack_MountCard() has succeeded.
 bool RoadMap_Load(const char *path);
 
+// ---- Several extracts on one card ----
+//
+// One file used to be hardcoded, which meant riding somewhere else needed a
+// laptop and a rename. It is also the wrong shape for the problem: a box
+// covering two riding areas twenty miles apart is mostly farmland nobody
+// rides, and coverage costs memory on load and time on every cull whether it
+// is looked at or not. Several small extracts are cheaper than one large one.
+//
+// The header already carries a bounding box, so which file covers a route can
+// be answered by reading 24 bytes from each rather than loading any of them.
+
+// Longest path offered, including the leading '/' and the NUL.
+#define ROADMAP_PATH_MAX 64
+
+// Reads just the header. True if `path` is a .prd and its bounds came back.
+bool RoadMap_PeekBounds(const char *path, double *out_min_lat, double *out_min_lon,
+                        double *out_max_lat, double *out_max_lon);
+
+// Loads whichever extract in /MAP covers (lat, lon), preferring the smallest
+// that does -- a tight local extract draws faster than a regional one, and if
+// both are on the card the rider put them there for a reason.
+//
+// False when nothing covers the point, leaving whatever was loaded alone: a
+// map of the wrong town is worse than the one already on screen.
+bool RoadMap_LoadCovering(double lat, double lon);
+
+// Path of the extract currently loaded, or "" if none.
+const char *RoadMap_LoadedPath();
+
 bool RoadMap_IsLoaded();
 size_t RoadMap_WayCount();
 size_t RoadMap_PointCount();

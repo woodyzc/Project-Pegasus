@@ -258,6 +258,9 @@ const TrackBuffer_t *GpxTrack_Buffer() {
 
 bool RoadMap_IsLoaded() { return false; }
 size_t RoadMap_WayCount() { return 0; }
+const char *RoadMap_LoadedPath() { return "/MAP/germantown-10mi.prd"; }
+bool RoadMap_LoadCovering(double, double) { return true; }
+bool RoadMap_PeekBounds(const char *, double *, double *, double *, double *) { return false; }
 uint32_t RoadView_LastCullUs() { return 0; }
 uint32_t RoadView_LastDrawOnlyUs() { return 0; }
 uint32_t RoadView_LastSegments() { return 0; }
