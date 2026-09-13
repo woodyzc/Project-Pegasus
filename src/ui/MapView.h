@@ -92,3 +92,25 @@ void MapView_Recenter(MapView_t *view);
 // True when the view has been moved or zoomed by hand, so the UI can offer a
 // way back rather than leaving someone stranded over empty countryside.
 bool MapView_IsManual(const MapView_t *view);
+
+// ---- The camera the two map views share ----
+//
+// The dashboard's inline map and the full-screen route page are separate
+// MapView_t instances of different sizes, and each used to frame the track
+// itself on load. So enlarging the map, panning it, going back and enlarging
+// it again threw the rider's framing away and refitted -- which reads as the
+// map resetting itself for no reason.
+//
+// Saving where the map is looking rather than which page was looking at it
+// keeps the two in step. The scale travels as metres per pixel, which means
+// the same thing in a 184px tile and a 262px page; the taller one simply shows
+// more of the same ground.
+void MapView_SaveCamera(const MapView_t *view);
+
+// Applies the saved camera. False when nothing has been saved yet, which is
+// the caller's cue to frame the track instead.
+bool MapView_RestoreCamera(MapView_t *view);
+
+// Forgets it, so the next page to open frames the track again. For loading a
+// different route, where the old camera points at another part of the world.
+void MapView_ForgetCamera();

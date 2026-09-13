@@ -262,6 +262,51 @@ void MapView_Recenter(MapView_t *view) {
     MapView_FitTrack(view);
 }
 
+namespace {
+
+// Shared by every MapView_t, because it describes the map rather than a page.
+double s_cam_lat = 0.0;
+double s_cam_lon = 0.0;
+double s_cam_mpp = 0.0;
+bool s_cam_zoom_locked = false;
+bool s_cam_pan_locked = false;
+bool s_cam_have = false;
+
+} // namespace
+
+void MapView_SaveCamera(const MapView_t *view) {
+    if (view == nullptr || !view->have_center) {
+        return;
+    }
+    s_cam_lat = view->center_lat;
+    s_cam_lon = view->center_lon;
+    s_cam_mpp = view->metres_per_pixel;
+    s_cam_zoom_locked = view->zoom_locked;
+    s_cam_pan_locked = view->pan_locked;
+    s_cam_have = true;
+}
+
+bool MapView_RestoreCamera(MapView_t *view) {
+    if (view == nullptr || !s_cam_have || s_cam_mpp <= 0.0) {
+        return false;
+    }
+    view->center_lat = s_cam_lat;
+    view->center_lon = s_cam_lon;
+    view->metres_per_pixel = s_cam_mpp;
+    view->have_center = true;
+    // The locks travel too. A rider who panned away from their fix expects it
+    // to stay panned when they come back, and one who never touched the map
+    // expects it to keep following them.
+    view->zoom_locked = s_cam_zoom_locked;
+    view->pan_locked = s_cam_pan_locked;
+    MapView_Redraw(view);
+    return true;
+}
+
+void MapView_ForgetCamera() {
+    s_cam_have = false;
+}
+
 bool MapView_IsManual(const MapView_t *view) {
     return view != nullptr && (view->pan_locked || view->zoom_locked);
 }

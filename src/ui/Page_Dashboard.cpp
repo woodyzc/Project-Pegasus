@@ -1074,6 +1074,21 @@ Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 
 } // namespace
 
+void PageDashboard::onViewWillAppear() {
+    // Adopt whatever the route page was showing, so the small map does not
+    // snap back to its own framing the moment the big one is closed.
+    if (s_nav_is_map) {
+        MapView_RestoreCamera(&s_map_view);
+        RoadView_Refresh();
+    }
+}
+
+void PageDashboard::onViewDidDisappear() {
+    if (s_nav_is_map) {
+        MapView_SaveCamera(&s_map_view);
+    }
+}
+
 void Page_Dashboard_ResetTrip() {
     Trip_Reset();
     // The averages and maxima describe the same ride as the distance, so they

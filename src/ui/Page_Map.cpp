@@ -227,6 +227,10 @@ void OnRouteChosen(lv_event_t *e) {
     // mean anything: MapView_Recenter drops the manual flag, and FitTrack then
     // frames the whole of what was just loaded rather than keeping a scale
     // chosen for the last one.
+    // The saved camera points at wherever the last route was, which is not
+    // where this one is. Dropped along with the rider's pan and zoom, so the
+    // new route is framed on itself.
+    MapView_ForgetCamera();
     MapView_Recenter(&s_view);
     s_view.zoom_locked = false;
     MapView_FitTrack(&s_view);
@@ -434,7 +438,7 @@ void PageMap::onViewLoad() {
     // seeing it.
     s_recenter_btn = lv_btn_create(parent);
     lv_obj_set_size(s_recenter_btn, 44, 44);
-    lv_obj_align(s_recenter_btn, LV_ALIGN_TOP_RIGHT, -6, MAP_Y + 120);
+    lv_obj_align(s_recenter_btn, LV_ALIGN_TOP_RIGHT, -6, MAP_Y + 172);
     lv_obj_set_style_radius(s_recenter_btn, 8, 0);
     lv_obj_set_style_shadow_width(s_recenter_btn, 0, 0);
     lv_obj_set_style_bg_color(s_recenter_btn, lv_color_hex(0x101820), 0);
@@ -457,7 +461,7 @@ void PageMap::onViewLoad() {
     {
         lv_obj_t *btn = lv_btn_create(parent);
         lv_obj_set_size(btn, 44, 44);
-        lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, -6, MAP_Y + 172);
+        lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, -6, MAP_Y + 120);
         lv_obj_set_style_radius(btn, 8, 0);
         lv_obj_set_style_shadow_width(btn, 0, 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x101820), 0);
@@ -517,9 +521,16 @@ void PageMap::onViewLoad() {
     lv_obj_align(name, LV_ALIGN_BOTTOM_RIGHT, -8, -4);
 
     if (GpxTrack_PointCount() > 0) {
-        // Frame the whole trail until a fix arrives, so the first look shows
-        // the route rather than an arbitrary zoom.
-        MapView_FitTrack(&s_view);
+        // Where the map was last looking, if anywhere. Only when nothing has
+        // been saved does this frame the trail -- otherwise enlarging the
+        // dashboard's map, going back and enlarging it again would throw the
+        // rider's own framing away and refit, which reads as the map resetting
+        // itself for no reason.
+        if (!MapView_RestoreCamera(&s_view)) {
+            // First look of the boot: the whole trail, rather than an
+            // arbitrary zoom on a corner of it.
+            MapView_FitTrack(&s_view);
+        }
         RoadView_Refresh();
         lv_label_set_text(name, GpxTrack_LoadedName());
         UpdateScale();
@@ -542,6 +553,10 @@ void Page_Map_ClosePickerForTest() {
 }
 
 void PageMap::onViewUnload() {
+    // Before the widgets go: the dashboard's inline map picks this up so the
+    // small map shows what the big one was showing.
+    MapView_SaveCamera(&s_view);
+
     if (s_refresh_timer != nullptr) {
         lv_timer_del(s_refresh_timer);
         s_refresh_timer = nullptr;

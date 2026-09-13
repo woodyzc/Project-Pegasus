@@ -15,6 +15,12 @@ public:
 
     virtual void onViewLoad() override;
     virtual void onViewUnload() override;
+
+    // The inline map shares its camera with the full-screen route page, and
+    // this page is cached -- onViewLoad runs once for the life of the boot, so
+    // it cannot be where that is picked up. These two fire on every visit.
+    virtual void onViewWillAppear() override;
+    virtual void onViewDidDisappear() override;
 };
 
 // Zero the trip accumulator. Called from the settings page; safe only from
