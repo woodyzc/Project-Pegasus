@@ -237,6 +237,17 @@ void MapView_Redraw(MapView_t *view) {
     const size_t ahead_from = (split > 0) ? split - 1 : 0;
     lv_line_set_points(view->trail, view->points + ahead_from,
                        (uint16_t)(written - ahead_from));
+
+    // The camera is saved here, on every redraw, rather than when a page is
+    // torn down.
+    //
+    // Saving on teardown looked right and was not: PageManager runs the
+    // outgoing page's unload AFTER the incoming page's will-appear, so the
+    // dashboard restored a camera the route page had not saved yet and the map
+    // appeared to reset itself anyway. Every zoom, pan, recentre and fix goes
+    // through this function, so saving here is always current and depends on
+    // no ordering at all.
+    MapView_SaveCamera(view);
 }
 
 double MapView_MetresAcross(const MapView_t *view) {

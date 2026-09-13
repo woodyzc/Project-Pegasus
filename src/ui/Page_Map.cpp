@@ -33,31 +33,10 @@ constexpr lv_coord_t MAP_Y = 36;
 constexpr lv_coord_t MAP_W = 240;
 constexpr lv_coord_t MAP_H = 262;
 
-lv_obj_t *s_road_stat = nullptr;
-lv_timer_t *s_road_timer = nullptr;
 
 // Reports the road map: ways loaded, segments drawn of points held, and the
 // the path it tried: "not found" on its own sent the first bring-up looking in
 // the wrong place, when the answer was one directory away.
-void RoadStatTimer(lv_timer_t *timer) {
-    (void)timer;
-    if (s_road_stat == nullptr) {
-        return;
-    }
-    if (RoadMap_IsLoaded()) {
-        // Visible ways matter as much as segments: zero visible with a map
-        // loaded means the roads are for somewhere else, which looks identical
-        // to a broken renderer until the number is on screen.
-        lv_label_set_text_fmt(s_road_stat, "%u/%u ways %u seg  cull %u draw %u",
-                              (unsigned)RoadView_LastVisibleWays(),
-                              (unsigned)RoadMap_WayCount(),
-                              (unsigned)RoadView_LastSegments(),
-                              (unsigned)RoadView_LastCullUs(),
-                              (unsigned)RoadView_LastDrawOnlyUs());
-    } else {
-        lv_label_set_text(s_road_stat, "no /MAP/roads.prd on the card");
-    }
-}
 
 // Twice the dashboard's allowance, because this view has roughly twice the
 // area to resolve. Its own arrays rather than the dashboard's: during a page
@@ -71,7 +50,6 @@ MapView_t s_view;
 lv_obj_t *s_recenter_btn = nullptr;
 lv_obj_t *s_status_label = nullptr;
 lv_obj_t *s_scale_label = nullptr;
-lv_obj_t *s_name_label = nullptr;
 // The route picker, built on demand and destroyed on choosing. Held so a
 // second press of the button cannot stack two of them.
 lv_obj_t *s_picker = nullptr;
@@ -217,8 +195,8 @@ void OnRouteChosen(lv_event_t *e) {
     ClosePicker();
 
     if (!GpxTrack_Load(path)) {
-        if (s_name_label != nullptr) {
-            lv_label_set_text_fmt(s_name_label, "%s: no track points", path);
+        if (s_status_label != nullptr) {
+            lv_label_set_text(s_status_label, "No track points");
         }
         return;
     }
@@ -237,9 +215,6 @@ void OnRouteChosen(lv_event_t *e) {
     RoadView_Refresh();
     UpdateRecenterButton();
     UpdateScale();
-    if (s_name_label != nullptr) {
-        lv_label_set_text(s_name_label, GpxTrack_LoadedName());
-    }
 }
 
 // The list of .gpx files on the card, over the map.
@@ -496,29 +471,7 @@ void PageMap::onViewLoad() {
     lv_obj_align(s_scale_label, LV_ALIGN_BOTTOM_LEFT, 8, -4);
     lv_label_set_text(s_scale_label, "");
 
-    // The measurement, on the panel, because serial cannot carry it.
-    s_road_stat = lv_label_create(parent);
-    lv_obj_set_style_text_font(s_road_stat, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(s_road_stat, lv_color_hex(0x61DAFB), 0);
-    lv_obj_set_width(s_road_stat, 224);
-    lv_label_set_long_mode(s_road_stat, LV_LABEL_LONG_WRAP);
-    lv_obj_align(s_road_stat, LV_ALIGN_TOP_LEFT, 8, 26);
-    lv_label_set_text(s_road_stat, "roads: waiting");
-
-    // On a timer: the draw figure only exists after the first draw, which has
-    // not happened while this page is still being built.
     UpdateRecenterButton();
-    s_road_timer = lv_timer_create(RoadStatTimer, 500, nullptr);
-    RoadStatTimer(nullptr);
-
-    s_name_label = lv_label_create(parent);
-    lv_obj_t *name = s_name_label;
-    lv_obj_set_style_text_font(name, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(name, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_set_width(name, 140);
-    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(name, LV_ALIGN_BOTTOM_RIGHT, -8, -4);
 
     if (GpxTrack_PointCount() > 0) {
         // Where the map was last looking, if anywhere. Only when nothing has
@@ -532,12 +485,13 @@ void PageMap::onViewLoad() {
             MapView_FitTrack(&s_view);
         }
         RoadView_Refresh();
-        lv_label_set_text(name, GpxTrack_LoadedName());
         UpdateScale();
-    } else {
-        // Say which of the two reasons applies: a missing card and an
-        // unreadable one need different things from the rider.
-        lv_label_set_text(name, GpxTrack_CardMounted() ? "No .gpx on card" : "No SD card");
+    } else if (s_status_label != nullptr) {
+        // The status corner rather than a line of its own: with no trail there
+        // is no scale and no satellite count to show either, so the corner is
+        // free and is already where this page says what it knows.
+        lv_label_set_text(s_status_label,
+                          GpxTrack_CardMounted() ? "No .gpx on card" : "No SD card");
     }
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
@@ -553,28 +507,19 @@ void Page_Map_ClosePickerForTest() {
 }
 
 void PageMap::onViewUnload() {
-    // Before the widgets go: the dashboard's inline map picks this up so the
-    // small map shows what the big one was showing.
-    MapView_SaveCamera(&s_view);
-
+    // No camera save here any more: MapView_Redraw does it on every change, so
+    // by the time this runs the camera is already whatever the rider left the
+    // map looking at. Saving here as well was not merely redundant, it ran too
+    // late -- the dashboard's will-appear fires before this.
     if (s_refresh_timer != nullptr) {
         lv_timer_del(s_refresh_timer);
         s_refresh_timer = nullptr;
-    }
-    // Same reasoning as the refresh timer above: it outlives the widgets
-    // unless torn down here, and would write to freed lv_obj pointers on its
-    // next tick.
-    if (s_road_timer != nullptr) {
-        lv_timer_del(s_road_timer);
-        s_road_timer = nullptr;
     }
     DataCenter_Unsubscribe(TOPIC_GPS_INFO, &s_gps_account);
 
     s_status_label = nullptr;
     s_scale_label = nullptr;
-    s_name_label = nullptr;
     s_recenter_btn = nullptr;
-    s_road_stat = nullptr;
     // Not deleted: it is a child of the page's root, which LVGL is tearing
     // down around us. Only the pointer needs clearing.
     s_picker = nullptr;
