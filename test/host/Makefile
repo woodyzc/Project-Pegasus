@@ -71,56 +71,71 @@ all: run
 run: $(BINS)
 	@for t in $(BINS); do echo "== $$t =="; ./$$t || exit 1; echo; done
 
+# Every binary is built from its sources in one step, so there are no object
+# files for `cc -MMD` to hang dependencies off. Depend on all the headers
+# instead: a header edit then rebuilds everything, which costs about a second
+# for fifteen small binaries and removes the failure mode that cost real time
+# three times over -- a changed constant in a .h, a `make` that reports PASS,
+# and a suite that never recompiled against it.
+HEADERS := $(wildcard $(SYSTEM)/*.h) $(wildcard $(SENSORS)/*.h) \
+           $(wildcard $(NAV)/*.h) $(wildcard $(ANT)/include/*.h)
+
+$(BINS): $(HEADERS)
+
+# The headers are prerequisites but not inputs to the compiler, so every recipe
+# passes $(CSRC) rather than $^ -- clang refuses `-o` when handed a header.
+CSRC = $(filter %.c,$^)
+
 test_parsebpm$(SUFFIX): test_parsebpm.c $(ANT)/src/antplus_profiles.c
-	$(CC) $(CFLAGS) -I$(ANT)/include -o $@ $^
+	$(CC) $(CFLAGS) -I$(ANT)/include -o $@ $(CSRC)
 
 test_ble_hr_parse$(SUFFIX): test_ble_hr_parse.c $(SENSORS)/BleHrParse.c
-	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $^
+	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC)
 
 test_tbt_parse$(SUFFIX): test_tbt_parse.c $(NAV)/TbtParse.c
-	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC)
 
 test_ubx_parse$(SUFFIX): test_ubx_parse.c $(SENSORS)/UbxParse.c
-	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
 
 test_timezone$(SUFFIX): test_timezone.c $(SYSTEM)/TimeZone.c
-	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
 
 test_clock_frame$(SUFFIX): test_clock_frame.c $(SYSTEM)/ClockFrame.c
-	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
 
 test_time_source$(SUFFIX): test_time_source.c $(SYSTEM)/TimeSource.c
-	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
 
 test_ride_stats$(SUFFIX): test_ride_stats.c $(SYSTEM)/RideStatsCore.c
-	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC) -lm
 
 test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c
-	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
 
 test_track_buffer$(SUFFIX): test_track_buffer.c $(NAV)/TrackBuffer.c
-	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
 
 test_map_project$(SUFFIX): test_map_project.c $(NAV)/MapProject.c $(NAV)/TrackBuffer.c
-	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
 
 # Compiles GpxParse.c alongside the writer so the round-trip test reads back
 # what it wrote using the same parser that loads route files from the card.
 test_gpx_write$(SUFFIX): test_gpx_write.c $(NAV)/GpxWrite.c $(NAV)/GpxParse.c
-	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
 
 test_trip_accum$(SUFFIX): test_trip_accum.c $(SYSTEM)/TripAccum.c
-	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC) -lm
 
 test_hr_zone$(SUFFIX): test_hr_zone.c $(SYSTEM)/HrZone.c
-	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC) -lm
 
 # The route download protocol and the route-following geometry together. They
 # are tested as one because the geometry only ever runs on a blob the protocol
 # assembled, and a test that built its own blob by hand would stop proving the
 # two agree.
 test_route_parse$(SUFFIX): test_route_parse.c $(NAV)/RouteParse.c $(NAV)/RouteFollow.c
-	$(CC) $(CFLAGS) -I$(NAV) -o $@ $^ -lm
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
 
 # Both suites under the sanitizers.
 asan:

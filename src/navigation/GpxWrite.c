@@ -78,7 +78,14 @@ size_t GpxWrite_Header(char *out, size_t out_size, const char *track_name) {
         out, out_size,
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
         "<gpx version=\"1.1\" creator=\"Project Pegasus\"\n"
-        "     xmlns=\"http://www.topografix.com/GPX/1/1\">\n"
+        "     xmlns=\"http://www.topografix.com/GPX/1/1\"\n"
+        // Declared whether or not a strap is present. A namespace costs ~90
+        // bytes once and cannot be added later: the header is written when the
+        // file is created, and a rider who pairs a strap mid-ride would
+        // otherwise produce points referring to a prefix the file never
+        // declared -- which is not well-formed XML, and every tool rejects the
+        // whole ride rather than the extension.
+        "     xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\">\n"
         "  <trk>\n"
         "    <name>%s</name>\n"
         "    <trkseg>\n",
@@ -98,29 +105,61 @@ size_t GpxWrite_Point(char *out,
                       uint8_t day,
                       uint8_t hour,
                       uint8_t minute,
-                      uint8_t second) {
+                      uint8_t second,
+                      uint8_t bpm) {
     if (out == NULL || out_size == 0) {
         return 0;
     }
 
+    // The heart rate, in the extension Garmin defined and Strava, Garmin
+    // Connect and every analysis tool reads. GPX 1.1 has no element of its own
+    // for it, so this is the convention rather than a choice.
+    //
+    // Zero means no reading, which is also what an unplausible one becomes:
+    // a strap that has lost skin contact reports 0, and stamping that on a
+    // trackpoint would record a rider whose heart stopped.
+    //
+    // 112 bytes, for a fixed 108-byte element: the buffer is oversized on
+    // purpose and the result checked anyway, because a truncated extension
+    // would be an unclosed tag -- and one of those invalidates the whole file,
+    // not the point it appears on.
+    char hr[112];
+    hr[0] = '\0';
+    if (bpm >= GPX_WRITE_MIN_BPM && bpm <= GPX_WRITE_MAX_BPM) {
+        const int hr_len = snprintf(hr, sizeof(hr),
+                                    "<extensions><gpxtpx:TrackPointExtension>"
+                                    "<gpxtpx:hr>%u</gpxtpx:hr>"
+                                    "</gpxtpx:TrackPointExtension></extensions>",
+                                    (unsigned)bpm);
+        if (hr_len < 0 || (size_t)hr_len >= sizeof(hr)) {
+            out[0] = '\0';
+            return 0;
+        }
+    }
+
     // 7 decimal places is about 11mm at the equator -- past what the receiver
     // resolves, and the convention every GPX tool expects.
+    //
+    // Extensions go last inside trkpt, which the GPX 1.1 schema requires: a
+    // file with them before <time> is rejected by a validating reader.
     int written;
     if (has_time) {
         written = snprintf(out, out_size,
                            "      <trkpt lat=\"%.7f\" lon=\"%.7f\">"
                            "<ele>%.1f</ele>"
                            "<time>%04u-%02u-%02uT%02u:%02u:%02uZ</time>"
+                           "%s"
                            "</trkpt>\n",
                            lat, lon, (double)alt_m,
                            (unsigned)year, (unsigned)month, (unsigned)day,
-                           (unsigned)hour, (unsigned)minute, (unsigned)second);
+                           (unsigned)hour, (unsigned)minute, (unsigned)second, hr);
     } else {
         written = snprintf(out, out_size,
                            "      <trkpt lat=\"%.7f\" lon=\"%.7f\">"
                            "<ele>%.1f</ele>"
+                           "%s"
                            "</trkpt>\n",
-                           lat, lon, (double)alt_m);
+                           lat, lon, (double)alt_m, hr);
     }
 
     return Finish(written, out_size, out);

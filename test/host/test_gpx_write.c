@@ -63,7 +63,7 @@ int main(void) {
 
     printf("- a point carries coordinates, elevation and time: ");
     check(GpxWrite_Point(line, sizeof(line), 38.8894, -77.0352, 17.5,
-                         true, 2026, 9, 10, 14, 30, 5) > 0, "writes");
+                         true, 2026, 9, 10, 14, 30, 5, 0) > 0, "writes");
     check(strstr(line, "lat=\"38.8894000\"") != NULL, "latitude at 7 decimals");
     check(strstr(line, "lon=\"-77.0352000\"") != NULL, "longitude at 7 decimals");
     check(strstr(line, "<ele>17.5</ele>") != NULL, "elevation");
@@ -71,7 +71,8 @@ int main(void) {
     printf("done\n");
 
     printf("- a point with no resolved time omits it rather than guessing: ");
-    check(GpxWrite_Point(line, sizeof(line), 1.0, 2.0, 3.0, false, 0, 0, 0, 0, 0, 0) > 0, "writes");
+    check(GpxWrite_Point(line, sizeof(line), 1.0, 2.0, 3.0, false, 0, 0, 0, 0, 0, 0, 0) > 0,
+          "writes");
     check(strstr(line, "<time>") == NULL, "no time element");
     check(strstr(line, "<trkpt") != NULL, "still a point");
     printf("done\n");
@@ -79,7 +80,7 @@ int main(void) {
     printf("- a line that will not fit writes nothing at all: ");
     char small[20];
     check(GpxWrite_Point(small, sizeof(small), 38.8894, -77.0352, 17.5,
-                         true, 2026, 9, 10, 14, 30, 5) == 0, "reports failure");
+                         true, 2026, 9, 10, 14, 30, 5, 0) == 0, "reports failure");
     check(small[0] == '\0', "no truncated tag left in the buffer");
     check(GpxWrite_Header(small, sizeof(small), "x") == 0, "header too");
     check(GpxWrite_Footer(small, sizeof(small)) == 0, "footer too");
@@ -90,6 +91,61 @@ int main(void) {
     check(strcmp(buf, "/rides/2026-09-10_143005.gpx") == 0, "timestamped name");
     check(GpxWrite_FileName(buf, sizeof(buf), false, 0, 0, 0, 0, 0, 0, 7) > 0, "writes");
     check(strcmp(buf, "/rides/ride-0007.gpx") == 0, "sequence fallback");
+    printf("done\n");
+
+    printf("- a heart rate is written in the extension analysis tools read: ");
+    check(GpxWrite_Point(line, sizeof(line), 38.8894, -77.0352, 17.5,
+                         true, 2026, 9, 10, 14, 30, 5, 142) > 0, "writes");
+    check(strstr(line, "<gpxtpx:hr>142</gpxtpx:hr>") != NULL, "the reading itself");
+    check(strstr(line, "<extensions><gpxtpx:TrackPointExtension>") != NULL, "wrapped as Garmin");
+    check(strstr(line, "</gpxtpx:TrackPointExtension></extensions>") != NULL, "and closed");
+    // The GPX 1.1 schema fixes this order, and a validating reader rejects the
+    // file outright if extensions precede time.
+    check(strstr(line, "<time>") < strstr(line, "<extensions>"), "extensions last inside trkpt");
+    check(strstr(line, "</extensions></trkpt>") != NULL, "inside the point, not after it");
+    // The prefix used here has to be one the header declared, or the document
+    // is not well-formed however correct the element is.
+    check(GpxWrite_Header(buf, sizeof(buf), "x") > 0, "header writes");
+    check(strstr(buf, "xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\"")
+              != NULL,
+          "and the header declares that prefix");
+    printf("done\n");
+
+    printf("- a point with no strap says nothing rather than guessing: ");
+    check(GpxWrite_Point(line, sizeof(line), 38.8894, -77.0352, 17.5,
+                         true, 2026, 9, 10, 14, 30, 5, 0) > 0, "writes");
+    check(strstr(line, "gpxtpx") == NULL, "no extension at all");
+    check(strstr(line, "<extensions>") == NULL, "not even an empty one");
+    printf("done\n");
+
+    printf("- an implausible reading is treated as no reading: ");
+    // A strap that has lost skin contact reports 0, and a half-decoded packet
+    // can report anything; writing either would record a heart rate that the
+    // rider never had, indistinguishable afterwards from one they did.
+    const uint8_t rejected[] = { 0, 1, GPX_WRITE_MIN_BPM - 1, GPX_WRITE_MAX_BPM + 1, 255 };
+    for (size_t i = 0; i < sizeof(rejected) / sizeof(rejected[0]); i++) {
+        check(GpxWrite_Point(line, sizeof(line), 1.0, 2.0, 3.0,
+                             false, 0, 0, 0, 0, 0, 0, rejected[i]) > 0, "still writes the point");
+        check(strstr(line, "gpxtpx") == NULL, "but omits the extension");
+    }
+    // ...and the edges of the range are kept, not rounded away with them.
+    check(GpxWrite_Point(line, sizeof(line), 1.0, 2.0, 3.0,
+                         false, 0, 0, 0, 0, 0, 0, GPX_WRITE_MIN_BPM) > 0, "writes");
+    check(strstr(line, "gpxtpx:hr") != NULL, "lowest plausible rate kept");
+    check(GpxWrite_Point(line, sizeof(line), 1.0, 2.0, 3.0,
+                         false, 0, 0, 0, 0, 0, 0, GPX_WRITE_MAX_BPM) > 0, "writes");
+    check(strstr(line, "gpxtpx:hr") != NULL, "highest plausible rate kept");
+    printf("done\n");
+
+    printf("- the longest possible point still fits GPX_WRITE_MAX_LINE: ");
+    // Every field at its widest: southern and western hemispheres, a negative
+    // elevation with a decimal, a full timestamp and a three-digit rate. If
+    // this ever stops fitting, RideLog silently writes nothing for the point.
+    check(GpxWrite_Point(line, sizeof(line), -33.8567891, -151.2152812, -1234.5,
+                         true, 2026, 12, 31, 23, 59, 59, GPX_WRITE_MAX_BPM) > 0,
+          "writes into a GPX_WRITE_MAX_LINE buffer");
+    check(strstr(line, "</gpxtpx:TrackPointExtension></extensions></trkpt>") != NULL,
+          "complete, with nothing truncated off the end");
     printf("done\n");
 
     printf("- what this writes, GpxParse reads back: ");
@@ -103,7 +159,8 @@ int main(void) {
         used += GpxWrite_Header(buf + used, sizeof(buf) - used, "Round trip");
         for (size_t i = 0; i < count; i++) {
             used += GpxWrite_Point(buf + used, sizeof(buf) - used, lats[i], lons[i],
-                                   (float)(10 + i), true, 2026, 9, 10, 14, 30, (uint8_t)i);
+                                   (float)(10 + i), true, 2026, 9, 10, 14, 30, (uint8_t)i,
+                                   (uint8_t)(140 + i));
         }
         used += GpxWrite_Footer(buf + used, sizeof(buf) - used);
         check(used > 0 && used < sizeof(buf), "document built");
@@ -136,7 +193,7 @@ int main(void) {
 
     printf("- null and zero-size arguments are refused: ");
     check(GpxWrite_Header(NULL, 10, "x") == 0, "null header out");
-    check(GpxWrite_Point(NULL, 10, 1, 2, 3, false, 0, 0, 0, 0, 0, 0) == 0, "null point out");
+    check(GpxWrite_Point(NULL, 10, 1, 2, 3, false, 0, 0, 0, 0, 0, 0, 0) == 0, "null point out");
     check(GpxWrite_Footer(NULL, 10) == 0, "null footer out");
     check(GpxWrite_FileName(NULL, 10, false, 0, 0, 0, 0, 0, 0, 1) == 0, "null name out");
     check(GpxWrite_Header(buf, 0, "x") == 0, "zero size");

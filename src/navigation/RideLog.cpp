@@ -43,6 +43,7 @@ typedef struct {
     uint8_t hour;
     uint8_t minute;
     uint8_t second;
+    uint8_t bpm; // 0 when no recent reading
 } RideLogPoint_t;
 
 QueueHandle_t s_queue = nullptr;
@@ -165,7 +166,7 @@ bool AppendPoint(const RideLogPoint_t &point) {
     char line[GPX_WRITE_MAX_LINE];
     const size_t len = GpxWrite_Point(line, sizeof(line), point.lat, point.lon, point.alt,
                                       point.has_time, point.year, point.month, point.day,
-                                      point.hour, point.minute, point.second);
+                                      point.hour, point.minute, point.second, point.bpm);
     if (len == 0) {
         return false;
     }
@@ -226,6 +227,35 @@ void WriterTask(void *pv) {
     }
 }
 
+// The last heart rate, and when it arrived.
+//
+// Taken from the bus rather than passed in, because the two publishers are
+// independent: the strap reports on its own schedule and the receiver on its
+// own, and neither waits for the other. The reading is attached to whichever
+// trackpoint is queued next.
+volatile uint8_t s_last_bpm = 0;
+volatile uint32_t s_last_bpm_ms = 0;
+
+// How old a reading may be and still be written against a fix.
+//
+// A strap that has dropped out must not have its last reading stamped on the
+// rest of the ride: that is a fabricated heart rate, and it looks exactly like
+// a real one to anything reading the file afterwards. Ten seconds is several
+// beats of tolerance for a link that stutters, and far short of a dropout.
+constexpr uint32_t BPM_MAX_AGE_MS = 10000;
+
+void OnHeartRatePublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
+    (void)topic;
+    (void)user_arg;
+
+    if (data == nullptr || size != sizeof(HeartRate_t)) {
+        return;
+    }
+    const HeartRate_t *hr = (const HeartRate_t *)data;
+    s_last_bpm = hr->bpm;
+    s_last_bpm_ms = millis();
+}
+
 void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
     (void)topic;
     (void)user_arg;
@@ -259,6 +289,10 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     point.minute = gps->minute;
     point.second = gps->second;
 
+    // A strap that has dropped out must not stamp its last reading onto every
+    // later point: past BPM_MAX_AGE_MS the sample is simply absent.
+    point.bpm = ((now - s_last_bpm_ms) < BPM_MAX_AGE_MS) ? s_last_bpm : 0;
+
     // Never block the GPS task on a full queue: dropping a breadcrumb is a
     // cosmetic loss, stalling the publish path is not.
     if (xQueueSend(s_queue, &point, 0) != pdTRUE) {
@@ -272,6 +306,7 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
 }
 
 Account s_gps_account("RideLog/GPS", OnGpsPublished);
+Account s_hr_account("RideLog/HR", OnHeartRatePublished);
 
 } // namespace
 
@@ -293,6 +328,7 @@ void RideLog_Init() {
     xTaskCreatePinnedToCore(WriterTask, "ridelog", 4096, nullptr, 1, nullptr, 0);
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
+    DataCenter_Subscribe(TOPIC_HEART_RATE, &s_hr_account);
 }
 
 bool RideLog_IsRecording() {

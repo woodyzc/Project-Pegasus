@@ -25,9 +25,17 @@
 // NOTE: no SD card has ever been inserted into this project. GpxWrite.c is
 // covered by test/host, but everything below is unverified against hardware.
 
-// Creates the queue and writer task and subscribes to GPS. Safe to call with
-// no card present: nothing is recorded and nothing fails. Call after the card
-// mount has been attempted.
+// Creates the queue and writer task and subscribes to GPS and heart rate.
+//
+// Position drives the file: a point is written when a fix arrives, and the
+// most recent heart rate is attached to it if one arrived in the last ten
+// seconds. The strap is never waited for, because the two publish on their own
+// unrelated schedules -- so a ride with no strap records a plain track, and a
+// strap that drops out mid-ride leaves the rest of the points without a
+// reading rather than repeating its last one.
+//
+// Safe to call with no card present: nothing is recorded and nothing fails.
+// Call after the card mount has been attempted.
 void RideLog_Init();
 
 // True once a file has been opened and a point written.
