@@ -57,11 +57,35 @@ typedef struct {
     double px_per_deg_lat;
     int16_t center_x;
     int16_t center_y;
+    // Track-up rotation, precomputed. Identity until Map_SetProjectionHeading
+    // says otherwise, so a caller that never asks for it pays two multiplies
+    // and nothing else.
+    double cos_h;
+    double sin_h;
+    bool rotated;
     bool valid;
 } MapProjection_t;
 
 void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double center_lon,
                            double metres_per_pixel, int16_t center_x, int16_t center_y);
+
+// Turns the view so `heading_deg` points up the screen -- track-up.
+//
+// Applied here rather than at the LVGL object level, and that is the whole
+// reason this project draws vector geometry instead of raster tiles: rotating
+// points costs two multiplies each on a transform that was happening anyway,
+// while rotating a bitmap costs a resample and shows its seams.
+//
+// Call after Map_PrepareProjection and before projecting anything. Every layer
+// that shares the projection -- roads, trail, route -- then rotates together
+// by construction rather than by three call sites agreeing.
+void Map_SetProjectionHeading(MapProjection_t *proj, double heading_deg);
+
+// The radius, in pixels, that a w x h screen sweeps when it can be rotated to
+// any angle: half its diagonal. A viewport query built from half-width and
+// half-height alone loses the corners as soon as the view turns, which looks
+// like roads disappearing rather than like a missing margin.
+double Map_RotatedRadiusPx(int16_t width, int16_t height);
 
 // Identical results to Map_Project for the same view -- the host tests pin
 // them together so the fast path cannot drift from the reference.
@@ -73,6 +97,11 @@ void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, in
 // extent (one point, or a rider standing still) still needs a usable scale.
 double Map_FitScale(double min_lat, double max_lat, double min_lon, double max_lon,
                     int16_t width, int16_t height, int16_t margin_px);
+
+// As Map_BuildPolyline, but through a prepared projection, so a caller that
+// has already set a heading gets the same rotation the road layer got.
+size_t Map_BuildPolylinePrepared(const TrackBuffer_t *track, const MapProjection_t *proj,
+                                 MapPoint_t *out, size_t max_points);
 
 // Projects a whole track into a polyline for drawing.
 //

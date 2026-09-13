@@ -23,6 +23,11 @@ void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double cent
     proj->center_lon = center_lon;
     proj->center_x = center_x;
     proj->center_y = center_y;
+    /* North-up unless asked otherwise, so every existing caller is unchanged
+       and Map_ProjectPrepared still matches Map_Project point for point. */
+    proj->cos_h = 1.0;
+    proj->sin_h = 0.0;
+    proj->rotated = false;
     proj->valid = (metres_per_pixel > 0.0);
     if (!proj->valid) {
         proj->px_per_deg_lon = 0.0;
@@ -38,6 +43,24 @@ void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double cent
     proj->px_per_deg_lat = MAP_EARTH_METRES_PER_DEGREE / metres_per_pixel;
 }
 
+void Map_SetProjectionHeading(MapProjection_t *proj, double heading_deg) {
+    if (proj == NULL) {
+        return;
+    }
+    const double radians = heading_deg * M_PI / 180.0;
+    proj->cos_h = cos(radians);
+    proj->sin_h = sin(radians);
+    /* A heading of zero is north-up, which is the untransformed case, so it
+       takes the cheap path rather than multiplying by an identity. */
+    proj->rotated = (proj->sin_h != 0.0 || proj->cos_h != 1.0);
+}
+
+double Map_RotatedRadiusPx(int16_t width, int16_t height) {
+    const double w = (double)width * 0.5;
+    const double h = (double)height * 0.5;
+    return sqrt(w * w + h * h);
+}
+
 void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, int16_t *out_x,
                          int16_t *out_y) {
     if (proj == NULL || out_x == NULL || out_y == NULL) {
@@ -48,9 +71,22 @@ void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, in
         *out_y = proj->center_y;
         return;
     }
-    *out_x = ClampCoord((double)proj->center_x + (lon - proj->center_lon) * proj->px_per_deg_lon);
+    const double dx = (lon - proj->center_lon) * proj->px_per_deg_lon;
     /* Screen y grows downward while latitude grows north, hence the sign. */
-    *out_y = ClampCoord((double)proj->center_y - (lat - proj->center_lat) * proj->px_per_deg_lat);
+    const double dy = -(lat - proj->center_lat) * proj->px_per_deg_lat;
+
+    if (!proj->rotated) {
+        *out_x = ClampCoord((double)proj->center_x + dx);
+        *out_y = ClampCoord((double)proj->center_y + dy);
+        return;
+    }
+
+    /* Rotate the offset by MINUS the heading, which is what puts the heading
+       at the top of the screen rather than at the right of it. Worked through
+       for heading 90: a point due east has (dx, dy) = (r, 0) and comes out at
+       (0, -r), which is straight up. */
+    *out_x = ClampCoord((double)proj->center_x + dx * proj->cos_h + dy * proj->sin_h);
+    *out_y = ClampCoord((double)proj->center_y - dx * proj->sin_h + dy * proj->cos_h);
 }
 
 void Map_Project(double lat, double lon, double center_lat, double center_lon,
@@ -133,6 +169,13 @@ static int Map_PointVisible(int16_t x, int16_t y, int16_t center_x, int16_t cent
 size_t Map_BuildPolyline(const TrackBuffer_t *track, double center_lat, double center_lon,
                          double metres_per_pixel, int16_t center_x, int16_t center_y,
                          MapPoint_t *out, size_t max_points) {
+    MapProjection_t proj;
+    Map_PrepareProjection(&proj, center_lat, center_lon, metres_per_pixel, center_x, center_y);
+    return Map_BuildPolylinePrepared(track, &proj, out, max_points);
+}
+
+size_t Map_BuildPolylinePrepared(const TrackBuffer_t *track, const MapProjection_t *proj,
+                                 MapPoint_t *out, size_t max_points) {
     size_t written = 0;
     size_t i;
     size_t first = 0;
@@ -143,9 +186,15 @@ size_t Map_BuildPolyline(const TrackBuffer_t *track, double center_lat, double c
     int16_t last_x = 0;
     int16_t last_y = 0;
 
-    if (track == NULL || out == NULL || max_points == 0 || track->count == 0) {
+    if (track == NULL || proj == NULL || out == NULL || max_points == 0 || track->count == 0) {
         return 0;
     }
+
+    /* Culling compares against the rotated screen position, so a track that
+       leaves the top of a turned view is culled at the top -- which it would
+       not be if visibility were tested before the rotation. */
+    const int16_t center_x = proj->center_x;
+    const int16_t center_y = proj->center_y;
 
     /* First pass: the range of the track that is anywhere near the viewport.
        Only this stretch is drawn.
@@ -165,7 +214,7 @@ size_t Map_BuildPolyline(const TrackBuffer_t *track, double center_lat, double c
         if (!TrackBuffer_Get(track, i, &lat, &lon)) {
             continue;
         }
-        Map_Project(lat, lon, center_lat, center_lon, metres_per_pixel, center_x, center_y, &x, &y);
+        Map_ProjectPrepared(proj, lat, lon, &x, &y);
         if (!Map_PointVisible(x, y, center_x, center_y)) {
             continue;
         }
@@ -207,7 +256,7 @@ size_t Map_BuildPolyline(const TrackBuffer_t *track, double center_lat, double c
         if (!TrackBuffer_Get(track, i, &lat, &lon)) {
             continue;
         }
-        Map_Project(lat, lon, center_lat, center_lon, metres_per_pixel, center_x, center_y, &x, &y);
+        Map_ProjectPrepared(proj, lat, lon, &x, &y);
 
         /* Collapse runs that land on one pixel. A receiver logging at 1Hz
            while the rider waits at a light emits hundreds of points that draw

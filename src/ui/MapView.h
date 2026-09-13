@@ -2,6 +2,7 @@
 
 #include <lvgl.h>
 
+#include "../navigation/MapHeading.h"
 #include "../navigation/MapProject.h"
 #include "../system/DataCenter.h"
 
@@ -52,6 +53,10 @@ typedef struct {
     double fix_lat;
     double fix_lon;
     bool have_fix;
+
+    // Track-up. The smoother decides what "up" is and when it has moved
+    // enough to be worth a redraw; this view only asks it.
+    MapHeading_t heading;
 } MapView_t;
 
 // Builds the view inside `parent`. `points` and `projected` must each hold
@@ -68,8 +73,14 @@ void MapView_FitTrack(MapView_t *view);
 // position update; a fix that is not valid hides the marker instead.
 void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps);
 
-// Reprojects and redraws at the current centre and scale.
+// Reprojects and redraws at the current centre, scale and heading.
 void MapView_Redraw(MapView_t *view);
+
+// The angle the view is currently drawn at, and whether it is turned at all.
+// Zero and false mean north-up, which is what a device that has never moved
+// honestly knows.
+bool MapView_IsTrackUp(const MapView_t *view);
+double MapView_HeadingDeg(const MapView_t *view);
 
 // Metres covered by the view's full width, for a scale readout.
 double MapView_MetresAcross(const MapView_t *view);

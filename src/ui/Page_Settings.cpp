@@ -201,6 +201,13 @@ void RefreshNavSelection() {
 
 // Nothing else moves when this changes. It used to coerce the heart-rate
 // source, because turn-by-turn needed the NimBLE host that ANT+ took away.
+void OnTrackUpToggled(lv_event_t *e) {
+    lv_obj_t *sw = lv_event_get_target(e);
+    // Applies on the map page's next redraw. Nothing to restart: the
+    // orientation is read per frame, not at boot like the radio settings.
+    Settings_SetMapTrackUp(lv_obj_has_state(sw, LV_STATE_CHECKED));
+}
+
 void OnNavModeClicked(lv_event_t *e) {
     const int index = (int)(intptr_t)lv_event_get_user_data(e);
     Settings_SetNavMode((NavMode_t)index);
@@ -673,6 +680,38 @@ void PageSettings::onViewLoad() {
 
         s_nav_btns[i] = btn;
     }
+
+    lv_obj_t *orient_row = lv_obj_create(nav_card);
+    lv_obj_set_size(orient_row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(orient_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(orient_row, 0, 0);
+    lv_obj_set_style_pad_all(orient_row, 0, 0);
+    lv_obj_clear_flag(orient_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(orient_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(orient_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *orient_label = lv_label_create(orient_row);
+    lv_label_set_text(orient_label, "Map turns with you");
+    lv_obj_set_style_text_font(orient_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(orient_label, lv_color_hex(COLOR_VALUE), 0);
+
+    lv_obj_t *orient_sw = lv_switch_create(orient_row);
+    if (Settings_GetMapTrackUp()) {
+        lv_obj_add_state(orient_sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(orient_sw, OnTrackUpToggled, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    lv_obj_t *orient_hint = lv_label_create(nav_card);
+    lv_label_set_text(orient_hint,
+                      "Track-up: the road ahead is at the top, so the screen matches "
+                      "what you see. Off is north-up.\n"
+                      "Falls back to north-up below walking pace, where the heading is "
+                      "the receiver's own noise.");
+    lv_obj_set_style_text_font(orient_hint, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(orient_hint, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_long_mode(orient_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(orient_hint, LV_PCT(100));
 
     lv_obj_t *nav_hint = lv_label_create(nav_card);
     lv_label_set_text(nav_hint,

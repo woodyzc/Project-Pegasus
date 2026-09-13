@@ -73,6 +73,17 @@ bool Settings_DidNavModeFallBack();
 bool Settings_GetSleepEnabled();
 void Settings_SetSleepEnabled(bool enabled);
 
+// ---- Map orientation ----
+// Track-up turns the map so the direction of travel is at the top, which is
+// how a rider matches the screen against the road in front of them. Default
+// on: north-up asks for a mental rotation at every junction.
+//
+// It falls back to north-up on its own whenever there is no usable heading --
+// before the first fix, and whenever the rider is slower than walking pace,
+// where the receiver reports the direction of its own noise.
+bool Settings_GetMapTrackUp();
+void Settings_SetMapTrackUp(bool track_up);
+
 // ---- Heart-rate zone personalisation ----
 // The resting and maximum rate that HrZone.h needs to place a reading in a
 // zone. Defaults are the rider's own measured pair, so the bands agree with

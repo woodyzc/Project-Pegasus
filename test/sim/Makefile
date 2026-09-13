@@ -40,7 +40,7 @@ APP_CXX := $(SRC)/ui/Page_Dashboard.cpp $(SRC)/ui/TbtIcons.cpp \
            $(SRC)/ui/Page_Map.cpp $(SRC)/ui/MapView.cpp \
            $(SRC)/ui/Overlay_RideSummary.cpp
 APP_C   := $(SRC)/ui/NumFont.c $(SRC)/system/HrZone.c $(SRC)/system/TimeZone.c \
-           $(SRC)/system/RideSummary.c \
+           $(SRC)/system/RideSummary.c $(SRC)/navigation/MapHeading.c \
            $(SRC)/system/TimeSource.c $(SRC)/navigation/TbtParse.c \
            $(SRC)/navigation/MapProject.c $(SRC)/navigation/TrackBuffer.c
 
@@ -95,6 +95,10 @@ $(OUT)/dashsim: $(LVGL_OBJ) $(APP_C_OBJ) $(APP_CXX_OBJ) $(SIM_OBJ)
 run: $(OUT)/dashsim
 	@mkdir -p $(OUT)
 	./$(OUT)/dashsim $(OUT)
+	@# The route page replaces the whole screen, so it renders in its own
+	@# invocation. Included here rather than left to be remembered: the
+	@# track-up frame was produced by hand once and would have rotted.
+	./$(OUT)/dashsim $(OUT) --route
 
 # sips ships with macOS, so no extra install for a viewable image.
 #

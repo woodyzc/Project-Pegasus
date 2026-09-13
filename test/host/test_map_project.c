@@ -252,6 +252,79 @@ int main(void) {
     Map_Project(0, 0, 0, 0, 1.0, 0, 0, NULL, &y); /* must not crash */
     printf("done\n");
 
+    printf("- track-up puts the heading at the top of the screen: ");
+    {
+        // 100m north, east, south and west of a centre, at 1 metre per pixel,
+        // so every offset is 100px and the arithmetic is checkable by eye.
+        const double clat = 39.1834, clon = -77.2617;
+        const double mpp = 1.0;
+        const double d_lat = 100.0 / MAP_EARTH_METRES_PER_DEGREE;
+        const double d_lon = d_lat / cos(clat * M_PI / 180.0);
+        const int16_t cx = 120, cy = 160;
+
+        struct { const char *name; double lat; double lon; } around[] = {
+            {"north", clat + d_lat, clon},
+            {"east",  clat,         clon + d_lon},
+            {"south", clat - d_lat, clon},
+            {"west",  clat,         clon - d_lon},
+        };
+
+        MapProjection_t proj;
+        int16_t x, y;
+
+        // Heading 0 is north-up, which must be exactly what it was before.
+        Map_PrepareProjection(&proj, clat, clon, mpp, cx, cy);
+        Map_SetProjectionHeading(&proj, 0.0);
+        Map_ProjectPrepared(&proj, around[0].lat, around[0].lon, &x, &y);
+        check(x == cx && y < cy, "north-up: north is above the centre");
+
+        // Heading 90 is riding east, so east must be at the top.
+        Map_SetProjectionHeading(&proj, 90.0);
+        Map_ProjectPrepared(&proj, around[1].lat, around[1].lon, &x, &y);
+        check(abs(x - cx) <= 1 && y < cy - 90, "heading east: east is at the top");
+        Map_ProjectPrepared(&proj, around[0].lat, around[0].lon, &x, &y);
+        check(abs(y - cy) <= 1 && x < cx - 90, "...and north has swung to the left");
+
+        // Heading 180 is riding south, so north is behind the rider.
+        Map_SetProjectionHeading(&proj, 180.0);
+        Map_ProjectPrepared(&proj, around[0].lat, around[0].lon, &x, &y);
+        check(abs(x - cx) <= 1 && y > cy + 90, "heading south: north is at the bottom");
+
+        // The centre is the one point rotation cannot move.
+        Map_SetProjectionHeading(&proj, 217.0);
+        Map_ProjectPrepared(&proj, clat, clon, &x, &y);
+        check(x == cx && y == cy, "the rider stays in the middle at any angle");
+
+        // Rotation is rigid: every point keeps its distance from the centre,
+        // whatever the angle. A transform that scaled as it turned would show
+        // up as the map breathing through a corner.
+        for (int deg = 0; deg < 360; deg += 17) {
+            Map_SetProjectionHeading(&proj, (double)deg);
+            for (size_t k = 0; k < 4; k++) {
+                Map_ProjectPrepared(&proj, around[k].lat, around[k].lon, &x, &y);
+                const double r = sqrt((double)(x - cx) * (x - cx) + (double)(y - cy) * (y - cy));
+                if (fabs(r - 100.0) > 2.0) {
+                    check(0, "distance from the centre is preserved at every angle");
+                    deg = 360;
+                    break;
+                }
+            }
+        }
+        check(1, "distance from the centre is preserved at every angle");
+    }
+    printf("done\n");
+
+    printf("- a rotated view sweeps its own diagonal: ");
+    {
+        // Half-diagonal of 240x320 is 200. A query box built from half-width
+        // and half-height would be 120 by 160 and would lose the corners the
+        // moment the view turned, which reads as roads vanishing.
+        check(fabs(Map_RotatedRadiusPx(240, 320) - 200.0) < 0.01, "240x320 sweeps 200px");
+        check(fabs(Map_RotatedRadiusPx(240, 180) - 150.0) < 0.01, "240x180 sweeps 150px");
+        check(Map_RotatedRadiusPx(240, 320) > 320 / 2, "which is more than half the height");
+    }
+    printf("done\n");
+
     printf("- the prepared projection matches the reference exactly: ");
     {
         // The fast path exists because Map_Project recomputes a cosine and two

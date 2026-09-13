@@ -20,6 +20,7 @@ struct SimState {
     double moving_seconds = 0.0;
     uint32_t log_points = 0;
     const char *log_file = "";
+    bool track_up = false;
     bool have_imu = false;
     IMU_Data_t imu{};
 

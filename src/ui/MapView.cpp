@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "../navigation/GpxTrack.h"
+#include "../system/Settings.h"
 
 namespace {
 
@@ -26,6 +27,7 @@ constexpr double MARKER_RADIUS = 7.0;
 
 void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
                     lv_coord_t h, lv_point_t *points, MapPoint_t *projected, size_t capacity) {
+    MapHeading_Reset(&view->heading);
     if (view == nullptr) {
         return;
     }
@@ -143,10 +145,20 @@ void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
         view->have_center = true;
     }
 
+    // Offered every fix. The smoother is what decides whether this one is
+    // usable at all -- a stationary receiver reports the direction of its own
+    // noise, and rotating a map on that is worse than not rotating it.
+    MapHeading_Feed(&view->heading, gps->fix_valid, gps->speed, gps->heading);
+
     {
-        // Heading is degrees clockwise from north, so it maps to screen with
-        // sin on x and -cos on y, matching the projection's own convention.
-        const double rad = gps->heading * M_PI / 180.0;
+        // With the map turned, the rider's triangle is fixed pointing up: the
+        // view is doing the turning now, and a marker that also turned would
+        // turn twice. North-up keeps the old behaviour, where the triangle is
+        // the only thing that says which way the rider faces.
+        const bool track_up = Settings_GetMapTrackUp() && MapHeading_Valid(&view->heading);
+        const double drawn_deg =
+            track_up ? (gps->heading - MapHeading_Degrees(&view->heading)) : gps->heading;
+        const double rad = drawn_deg * M_PI / 180.0;
         const double cx = view->width / 2.0;
         const double cy = view->height / 2.0;
         const double back = 2.4; // radians offset to the two trailing corners
@@ -181,10 +193,15 @@ void MapView_Redraw(MapView_t *view) {
 
     // Projection and same-pixel collapsing both live in Map_BuildPolyline,
     // which test/host covers, so the tested code is the code that runs.
-    const size_t written = Map_BuildPolyline(GpxTrack_Buffer(), view->center_lat, view->center_lon,
-                                             view->metres_per_pixel, (int16_t)(view->width / 2),
-                                             (int16_t)(view->height / 2), view->projected,
-                                             view->capacity);
+    // One projection for the frame, shared with the road layer through
+    // MapView_HeadingDeg, so the two cannot disagree about which way is up.
+    MapProjection_t proj;
+    Map_PrepareProjection(&proj, view->center_lat, view->center_lon, view->metres_per_pixel,
+                          (int16_t)(view->width / 2), (int16_t)(view->height / 2));
+    Map_SetProjectionHeading(&proj, MapView_HeadingDeg(view));
+
+    const size_t written =
+        Map_BuildPolylinePrepared(GpxTrack_Buffer(), &proj, view->projected, view->capacity);
 
     for (size_t i = 0; i < written; i++) {
         view->points[i].x = view->projected[i].x;
@@ -202,9 +219,7 @@ void MapView_Redraw(MapView_t *view) {
     if (view->have_fix && written > 0) {
         int16_t fx = 0;
         int16_t fy = 0;
-        Map_Project(view->fix_lat, view->fix_lon, view->center_lat, view->center_lon,
-                    view->metres_per_pixel, (int16_t)(view->width / 2),
-                    (int16_t)(view->height / 2), &fx, &fy);
+        Map_ProjectPrepared(&proj, view->fix_lat, view->fix_lon, &fx, &fy);
         int32_t best = INT32_MAX;
         for (size_t i = 0; i < written; i++) {
             const int32_t dx = (int32_t)view->points[i].x - fx;
@@ -236,6 +251,14 @@ void MapView_Redraw(MapView_t *view) {
     // through this function, so saving here is always current and depends on
     // no ordering at all.
     MapView_SaveCamera(view);
+}
+
+bool MapView_IsTrackUp(const MapView_t *view) {
+    return view != nullptr && Settings_GetMapTrackUp() && MapHeading_Valid(&view->heading);
+}
+
+double MapView_HeadingDeg(const MapView_t *view) {
+    return MapView_IsTrackUp(view) ? MapHeading_Degrees(&view->heading) : 0.0;
 }
 
 double MapView_MetresAcross(const MapView_t *view) {
@@ -311,17 +334,34 @@ void MapView_PanPixels(MapView_t *view, lv_coord_t dx, lv_coord_t dy) {
     }
 
     const double mpp = view->metres_per_pixel;
+
+    // The drag arrives in SCREEN pixels and the centre moves in map space, and
+    // on a turned map those are not the same direction. Undo the view's
+    // rotation first, or dragging north-east on a south-facing map walks the
+    // centre south-west and the map runs away from the finger.
+    //
+    // This is the exact inverse of the rotation Map_ProjectPrepared applies.
+    double mdx = dx;
+    double mdy = dy;
+    if (MapView_IsTrackUp(view)) {
+        const double rad = MapView_HeadingDeg(view) * M_PI / 180.0;
+        const double c = cos(rad);
+        const double sn = sin(rad);
+        mdx = dx * c - dy * sn;
+        mdy = dx * sn + dy * c;
+    }
+
     // y is inverted for the same reason Map_Project inverts it: screen y grows
     // downward while latitude grows north. Dragging down therefore walks the
     // centre north, which is what makes the map feel dragged rather than
     // scrolled.
-    view->center_lat += (dy * mpp) / MAP_EARTH_METRES_PER_DEGREE;
+    view->center_lat += (mdy * mpp) / MAP_EARTH_METRES_PER_DEGREE;
 
     double cos_lat = cos(view->center_lat * M_PI / 180.0);
     if (cos_lat < 0.01) {
         cos_lat = 0.01; // near the poles, where a degree of longitude vanishes
     }
-    view->center_lon -= (dx * mpp) / (MAP_EARTH_METRES_PER_DEGREE * cos_lat);
+    view->center_lon -= (mdx * mpp) / (MAP_EARTH_METRES_PER_DEGREE * cos_lat);
 
     view->pan_locked = true;
     MapView_Redraw(view);

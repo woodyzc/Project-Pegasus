@@ -185,12 +185,23 @@ void RoadDrawCb(lv_event_t *e) {
     }
 
     // What the view covers, in degrees, so a way can be rejected without
-    // projecting any of it. Generous by a tile's worth on each side: a way
-    // whose bounding box is outside still has segments that cross the corner.
-    const double half_h_deg = (h * 0.5 * mpp) / MAP_EARTH_METRES_PER_DEGREE * 1.5;
+    // projecting any of it.
+    //
+    // Built from the view's DIAGONAL, not its width and height. A track-up map
+    // turns under the rider, so the rectangle on screen sweeps a circle as it
+    // rotates, and a box sized to half-width by half-height loses the corners
+    // the moment the view is not square to north -- which on screen reads as
+    // roads blinking out of existence rather than as a margin being too small.
+    // The same box is used north-up: it costs a few percent more ways and
+    // means there is only one of these to be wrong.
+    //
+    // The extra tenth is for ways whose bounding box sits just outside while a
+    // segment still crosses a corner.
+    const double radius_px = Map_RotatedRadiusPx(w, h) * 1.1;
+    const double half_h_deg = (radius_px * mpp) / MAP_EARTH_METRES_PER_DEGREE;
     const double cos_lat = cos(clat * M_PI / 180.0);
     const double half_w_deg =
-        (w * 0.5 * mpp) / (MAP_EARTH_METRES_PER_DEGREE * (cos_lat > 0.01 ? cos_lat : 0.01)) * 1.5;
+        (radius_px * mpp) / (MAP_EARTH_METRES_PER_DEGREE * (cos_lat > 0.01 ? cos_lat : 0.01));
     const int32_t view_min_lat = (int32_t)((clat - half_h_deg) * ROADMAP_COORD_SCALE);
     const int32_t view_max_lat = (int32_t)((clat + half_h_deg) * ROADMAP_COORD_SCALE);
     const int32_t view_min_lon = (int32_t)((clon - half_w_deg) * ROADMAP_COORD_SCALE);
@@ -201,6 +212,10 @@ void RoadDrawCb(lv_event_t *e) {
     // two divisions for every point of every visible way.
     MapProjection_t proj;
     Map_PrepareProjection(&proj, clat, clon, mpp, (int16_t)(w / 2), (int16_t)(h / 2));
+    // Taken from the view rather than recomputed, so the roads and the trail
+    // turn by exactly the same angle. Two layers deriving the same number
+    // independently is how they end up a frame apart.
+    Map_SetProjectionHeading(&proj, MapView_HeadingDeg(g_view));
 
     // Timed in two halves, because three rounds of optimising the drawing have
     // each moved the number less than expected. Guessing which half is

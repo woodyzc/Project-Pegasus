@@ -77,6 +77,7 @@ float Settings_DistanceFromKm(float km) {
     return g_sim.speed_unit == SPEED_UNIT_MPH ? km * 0.621371f : km;
 }
 NavMode_t Settings_GetNavMode() { return g_sim.nav_mode; }
+bool Settings_GetMapTrackUp() { return g_sim.track_up; }
 uint8_t Settings_GetHrMaxBpm() { return 185; }
 uint8_t Settings_GetHrRestBpm() { return 55; }
 

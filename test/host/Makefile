@@ -31,6 +31,8 @@
 #   * test_time_source  - which clock the head unit believes, and when it stops
 #                         believing it (compiles the real
 #                         src/system/TimeSource.c)
+#   * test_map_heading  - which way is up on a track-up map (compiles the real
+#                         src/navigation/MapHeading.c)
 #   * test_ride_summary - what a ride amounted to, and the three shapes its
 #                         duration takes (compiles the real
 #                         src/system/RideSummary.c)
@@ -69,7 +71,7 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) test_clock_frame$(SUFFIX) \
         test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX) \
         test_idle_policy$(SUFFIX) test_ascent$(SUFFIX) \
-        test_ride_summary$(SUFFIX)
+        test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -133,6 +135,11 @@ test_ascent$(SUFFIX): test_ascent.c $(SYSTEM)/Ascent.c
 
 test_ride_summary$(SUFFIX): test_ride_summary.c $(SYSTEM)/RideSummary.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
+
+# The wrap at north is the case: a smoother written the obvious way takes 350
+# towards 10 through 180, spinning the whole map a half-turn.
+test_map_heading$(SUFFIX): test_map_heading.c $(NAV)/MapHeading.c
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
 
 test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm

@@ -214,6 +214,22 @@ int main(int argc, char **argv) {
         snprintf(path, sizeof(path), "%s/r1-route-page.ppm", out_dir);
         Render(&page, path);
 
+        // The same fix, the same trail, with the map turned so the rider's
+        // heading is at the top. Rendered beside the north-up frame because
+        // the only way to see that roads and trail rotate together -- and by
+        // the same angle -- is to look at the two.
+        //
+        // Speed matters here: the smoother refuses a heading below walking
+        // pace, so a scene that forgot to set one would render north-up and
+        // look like the feature was not wired in.
+        g_sim.track_up = true;
+        g_sim.gps.speed = 6.0f; // m/s, well clear of MAP_HEADING_MIN_MPS
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        snprintf(path, sizeof(path), "%s/r4-route-track-up.ppm", out_dir);
+        Render(&page, path);
+        g_sim.track_up = false;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+
         // Open the picker by pressing the button the rider presses, rather
         // than by calling the handler: that exercises the hit target too.
         Page_Map_OpenRoutePickerForTest();

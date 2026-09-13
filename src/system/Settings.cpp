@@ -23,6 +23,7 @@ constexpr char KEY_HR_REST[] = "hrrest";
 constexpr char KEY_HR_MAX[] = "hrmax";
 constexpr char KEY_BOOT_COUNT[] = "boots";
 constexpr char KEY_SLEEP[] = "sleepen";
+constexpr char KEY_TRACKUP[] = "trackup";
 
 constexpr uint8_t DEFAULT_BRIGHTNESS = 100;
 constexpr float KM_TO_MILES = 0.621371f;
@@ -61,6 +62,9 @@ NavMode_t s_nav_mode = DEFAULT_NAV_MODE;
 // Opt-in: see Settings.h. An untested wake source that leaves the device
 // looking dead is a poor default however mild the recovery.
 bool s_sleep_enabled = false;
+// Default on: the rider asked for it, and north-up costs a mental rotation at
+// every junction.
+bool s_track_up = true;
 bool s_nav_fell_back = false;
 uint8_t s_hr_rest = DEFAULT_HR_REST;
 uint8_t s_hr_max = DEFAULT_HR_MAX;
@@ -113,6 +117,7 @@ void Settings_Init() {
         s_speed_unit = (SpeedUnit_t)s_prefs.getUChar(KEY_SPEED_UNIT, SPEED_UNIT_KMH);
         s_nav_mode = (NavMode_t)s_prefs.getUChar(KEY_NAV_MODE, DEFAULT_NAV_MODE);
         s_sleep_enabled = s_prefs.getUChar(KEY_SLEEP, 0) != 0;
+        s_track_up = s_prefs.getUChar(KEY_TRACKUP, 1) != 0;
         s_hr_rest = s_prefs.getUChar(KEY_HR_REST, DEFAULT_HR_REST);
         s_hr_max = s_prefs.getUChar(KEY_HR_MAX, DEFAULT_HR_MAX);
     }
@@ -294,6 +299,20 @@ void Settings_SetHrMaxBpm(uint8_t bpm) {
     s_hr_max = next;
     if (s_ready) {
         s_prefs.putUChar(KEY_HR_MAX, s_hr_max);
+    }
+}
+
+bool Settings_GetMapTrackUp() {
+    return s_track_up;
+}
+
+void Settings_SetMapTrackUp(bool track_up) {
+    if (track_up == s_track_up) {
+        return;
+    }
+    s_track_up = track_up;
+    if (s_ready) {
+        s_prefs.putUChar(KEY_TRACKUP, s_track_up ? 1 : 0);
     }
 }
 
