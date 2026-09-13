@@ -288,15 +288,15 @@ lv_obj_t *MakeLabel(lv_obj_t *parent, const char *text, const lv_font_t *font, u
 // bottom of a 60px cell leaves the two boxes 2px apart.
 constexpr lv_coord_t CELL_PAD = 6;         // left and right inset
 
-// The average-and-peak block beside a live value. 66px holds "MAX" at 10pt and
-// a four-character figure at 18pt with nothing to spare; 21px a row is the
-// 18pt line box plus the gap that keeps two of them from touching.
+// The average-and-peak block beside a live value. 62px is "MAX" at 10pt and a
+// four-character figure at 16pt with a few pixels between them; 20px a row is
+// that line box plus the gap that keeps two of them from touching.
 //
-// SECONDARY_INSET is smaller than CELL_PAD on purpose: the block sits nearer
-// the cell's right edge than the captions above it, which buys the live value
-// the width it needs to be read from a bar.
-constexpr lv_coord_t SECONDARY_W = 66;
-constexpr lv_coord_t SECONDARY_ROW_H = 21;
+// Inset 2 rather than the captions' 6: nearly against the cell edge, because
+// every pixel this block gives up goes to the live figure, which is the one
+// read at speed.
+constexpr lv_coord_t SECONDARY_W = 62;
+constexpr lv_coord_t SECONDARY_ROW_H = 20;
 constexpr lv_coord_t SECONDARY_INSET = 2;
 constexpr lv_coord_t CELL_CAPTION_Y = 2;   // caption and unit baseline row
 constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
@@ -407,7 +407,11 @@ lv_obj_t *MakeSecondaryRow(lv_obj_t *parent, const char *word) {
 
     lv_obj_t *value = lv_label_create(row);
     lv_label_set_text(value, "--");
-    lv_obj_set_style_text_font(value, &lv_font_montserrat_18, 0);
+    // 16pt, down one step from 18. The speed cell is the tightest thing on the
+    // panel -- a 40pt live figure, a caption word and this, inside 150px -- and
+    // at 18 every gap in it came out at a pixel or two. A step here costs less
+    // than a step off the figure read at speed.
+    lv_obj_set_style_text_font(value, &lv_font_montserrat_16, 0);
     lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_align(value, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
     return value;
@@ -1411,18 +1415,18 @@ void PageDashboard::onViewLoad() {
     // which is what pays for the jump from 28 to 34. The widest thing any of
     // them has to hold is a six-character trip ("123.45"), and at 34 that
     // comes to about 104px inside 108px of usable width.
-    // 32pt. It collided with the ride block at this size before, when that
-    // block was content-sized and sat a full cell-pad off the edge. Narrowing
-    // it to what it actually needs and moving it 4px nearer the edge gives the
-    // live value back the width, and it is the figure read at speed.
+    // 40pt, a quarter again on 32 and the largest the cell can hold in either
+    // direction. Vertically the 40pt line box is 44px under a 14px caption row
+    // in a 60px cell; horizontally "18.5" is about 77px and the ride block
+    // starts at 90. 48 would fit neither.
     lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, STATS_W, CELL_H, "SPEED");
-    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
+    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_40);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
     lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
     MakeSecondary(speed_cell, &s_speed_avg_label, &s_speed_max_label);
 
     lv_obj_t *hr_cell = MakeCell(parent, COL1, ROW2, STATS_W, CELL_H, "HEART RATE");
-    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
+    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_40);
     MakeUnit(hr_cell, "bpm");
     MakeSecondary(hr_cell, &s_hr_avg_label, &s_hr_max_label);
 
