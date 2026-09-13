@@ -46,10 +46,12 @@ typedef struct {
     // Set once the rider drags. Stops SetPosition recentring on the fix.
     bool pan_locked;
 
-    // How many of the track's points are behind the rider, from the last fix.
-    // Zero until one arrives, which is why a trail with no GPS draws entirely
-    // in the unridden colour rather than entirely in the ridden one.
-    size_t progress_points;
+    // The last fix, kept so Redraw can work out where on the DRAWN line the
+    // rider is. False until one arrives, which is why a trail with no GPS
+    // draws entirely in the unridden colour rather than the ridden one.
+    double fix_lat;
+    double fix_lon;
+    bool have_fix;
 } MapView_t;
 
 // Builds the view inside `parent`. `points` and `projected` must each hold

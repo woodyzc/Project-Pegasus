@@ -1,6 +1,7 @@
 #include "MapView.h"
 
 #include <math.h>
+#include <stdint.h>
 
 #include "../navigation/GpxTrack.h"
 
@@ -122,38 +123,12 @@ void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
         return;
     }
 
-    // How far along the trail the rider is, for the colour change in Redraw.
-    //
-    // Nearest point rather than distance travelled, because a GPX is a shape
-    // and not a plan: a rider can join it halfway, ride it backwards, or cut a
-    // corner, and the honest answer to "what is behind me" is "whatever is
-    // nearer the start than the closest point to me". Squared degrees, with
-    // longitude scaled by the latitude's cosine so a degree of each is
-    // comparable -- no need for real distances when only the smallest matters.
-    {
-        const TrackBuffer_t *track = GpxTrack_Buffer();
-        const size_t count = GpxTrack_PointCount();
-        if (track != nullptr && count > 0) {
-            const double lon_scale = cos(gps->lat * M_PI / 180.0);
-            double best = 1e30;
-            size_t best_index = 0;
-            for (size_t i = 0; i < count; i++) {
-                double lat;
-                double lon;
-                if (!GpxTrack_Point(i, &lat, &lon)) {
-                    continue;
-                }
-                const double dlat = lat - gps->lat;
-                const double dlon = (lon - gps->lon) * lon_scale;
-                const double d2 = dlat * dlat + dlon * dlon;
-                if (d2 < best) {
-                    best = d2;
-                    best_index = i;
-                }
-            }
-            view->progress_points = best_index;
-        }
-    }
+    // Just recorded. Working out where this falls on the line is Redraw's
+    // job, because only Redraw knows which stretch of the track is actually
+    // being drawn -- and that changes with every pan and zoom.
+    view->fix_lat = gps->lat;
+    view->fix_lon = gps->lon;
+    view->have_fix = true;
 
     // Once there is a fix the view follows the rider: what matters while
     // riding is where you are on the line, not the shape of the whole route.
@@ -216,19 +191,29 @@ void MapView_Redraw(MapView_t *view) {
         view->points[i].y = view->projected[i].y;
     }
 
-    // Where to cut the drawn line.
+    // Where to cut the drawn line: the vertex nearest the rider, measured in
+    // pixels on the line that was actually drawn.
     //
-    // By fraction of the source track rather than by index, because
-    // Map_BuildPolyline collapses points that land on the same pixel and the
-    // two index spaces therefore do not match. The collapsing is roughly even
-    // along the track at any one zoom, so the fraction carries across well
-    // enough for a colour change; it is a mark on a line, not a measurement.
-    const size_t source = GpxTrack_PointCount();
+    // Not a fraction of the source track, which is what this was. Since the
+    // builder now draws only the visible stretch, and thins it when it does
+    // not fit, source indices and drawn indices have no fixed relationship at
+    // all -- the fraction put the colour change wherever it liked.
     size_t split = 0;
-    if (source > 0 && view->progress_points > 0) {
-        split = (written * view->progress_points) / source;
-        if (split > written) {
-            split = written;
+    if (view->have_fix && written > 0) {
+        int16_t fx = 0;
+        int16_t fy = 0;
+        Map_Project(view->fix_lat, view->fix_lon, view->center_lat, view->center_lon,
+                    view->metres_per_pixel, (int16_t)(view->width / 2),
+                    (int16_t)(view->height / 2), &fx, &fy);
+        int32_t best = INT32_MAX;
+        for (size_t i = 0; i < written; i++) {
+            const int32_t dx = (int32_t)view->points[i].x - fx;
+            const int32_t dy = (int32_t)view->points[i].y - fy;
+            const int32_t d2 = dx * dx + dy * dy;
+            if (d2 < best) {
+                best = d2;
+                split = i + 1;
+            }
         }
     }
 

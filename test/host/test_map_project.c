@@ -154,10 +154,14 @@ int main(void) {
         for (i = 0; i < 400; i++) {
             TrackBuffer_Add(&track, 38.80 + (double)i * 0.001, -77.0);
         }
-        /* A scale that puts the track's early points a couple of pixels apart
-           and on screen, so the buffer really does fill. */
-        check(Map_BuildPolyline(&track, 38.85, -77.0, 55.0, 120, 160, poly, 16) == 16,
-              "stops at max_points");
+        /* Never more than the buffer, and never zero when part of the track is
+           on screen. Not exactly max_points: the visible range is thinned to
+           fit rather than truncated, and thinning can land two kept points on
+           one pixel, which the collapsing below then merges. */
+        {
+            const size_t n = Map_BuildPolyline(&track, 38.85, -77.0, 55.0, 120, 160, poly, 16);
+            check(n > 0 && n <= 16, "fills the buffer without exceeding it");
+        }
         check(Map_BuildPolyline(&track, 38.85, -77.0, 55.0, 120, 160, poly, 0) == 0,
               "zero capacity writes nothing");
         check(Map_BuildPolyline(&track, 38.85, -77.0, 1.0, 120, 160, poly, 16) <= 16,
@@ -191,6 +195,54 @@ int main(void) {
         }
         check(written > 0, "something is drawn");
         check(inside > 0, "and some of it is on screen");
+    }
+    printf("done\n");
+
+    printf("- a track that leaves the screen and returns draws no shortcut: ");
+    /* The bug this guards, which was the fix for the previous one gone wrong:
+       collapsing an off-screen excursion into a single point drew a straight
+       chord from where the track left the viewport to where it came back,
+       cutting clean across a map the route never crosses. On the panel it was
+       a green diagonal through the middle of the town.
+
+       The property that rules it out is local: consecutive drawn points come
+       from consecutive track points, so with a dense track none of them should
+       be far apart. A chord shows up as one enormous step. */
+    TrackBuffer_Init(&track, lat_store, lon_store, CAP);
+    {
+        int i;
+        size_t written;
+        size_t j;
+        int32_t worst = 0;
+
+        /* East until it leaves by the RIGHT edge, a long way round to the
+           north, and back in through the LEFT edge. The two edges are what
+           make this the case that matters: merging the excursion leaves one
+           step from the right edge to the left, straight across everything in
+           between. An out-and-back that leaves and returns by the same edge
+           produces a short step and proves nothing. */
+        for (i = 0; i < 60; i++) { /* out through the right edge */
+            TrackBuffer_Add(&track, 38.9050, -77.0020 + (double)i * 0.00020);
+        }
+        for (i = 0; i < 80; i++) { /* north and west, far outside */
+            TrackBuffer_Add(&track, 38.9050 + (double)i * 0.00025,
+                            -76.9900 - (double)i * 0.00025);
+        }
+        for (i = 0; i < 60; i++) { /* back down and in through the left edge */
+            TrackBuffer_Add(&track, 38.9250 - (double)i * 0.00033, -77.0100 + (double)i * 0.00007);
+        }
+
+        written = Map_BuildPolyline(&track, 38.9050, -77.0020, 3.0, 120, 160, poly, CAP);
+        check(written > 4, "the excursion is drawn, not merged away");
+        for (j = 1; j < written; j++) {
+            const int32_t dx = (int32_t)poly[j].x - poly[j - 1].x;
+            const int32_t dy = (int32_t)poly[j].y - poly[j - 1].y;
+            const int32_t step = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+            if (step > worst) {
+                worst = step;
+            }
+        }
+        check(worst < 200, "no single step jumps across the viewport");
     }
     printf("done\n");
 

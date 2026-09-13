@@ -119,15 +119,15 @@ double Map_FitScale(double min_lat, double max_lat, double min_lon, double max_l
     return (scale < MIN_SCALE) ? MIN_SCALE : scale;
 }
 
-/* Whether a projected point lies outside the viewport, with a margin so a line
+/* Whether a projected point lies inside the viewport, with a margin so a line
    entering from just off the edge still has a point to come from.
 
    The viewport is 2*center_x by 2*center_y: both callers pass half the widget's
    size, which is what puts the map's centre in the middle of it. */
-static int Map_PointOffscreen(int16_t x, int16_t y, int16_t center_x, int16_t center_y) {
+static int Map_PointVisible(int16_t x, int16_t y, int16_t center_x, int16_t center_y) {
     const int32_t margin = 8;
-    return x < -margin || y < -margin || x > (int32_t)center_x * 2 + margin ||
-           y > (int32_t)center_y * 2 + margin;
+    return x >= -margin && y >= -margin && x <= (int32_t)center_x * 2 + margin &&
+           y <= (int32_t)center_y * 2 + margin;
 }
 
 size_t Map_BuildPolyline(const TrackBuffer_t *track, double center_lat, double center_lon,
@@ -135,25 +135,78 @@ size_t Map_BuildPolyline(const TrackBuffer_t *track, double center_lat, double c
                          MapPoint_t *out, size_t max_points) {
     size_t written = 0;
     size_t i;
+    size_t first = 0;
+    size_t last = 0;
+    size_t span;
+    size_t stride;
+    int found = 0;
     int16_t last_x = 0;
     int16_t last_y = 0;
-    int last_offscreen = 0;
 
-    if (track == NULL || out == NULL || max_points == 0) {
+    if (track == NULL || out == NULL || max_points == 0 || track->count == 0) {
         return 0;
     }
 
+    /* First pass: the range of the track that is anywhere near the viewport.
+       Only this stretch is drawn.
+
+       The walk used to start at the track's beginning and stop when the buffer
+       filled, which at any zoom needing more points than the buffer holds drew
+       the START of the track and nothing where the rider was -- an empty map.
+       Collapsing off-screen runs instead was worse: merging an excursion into
+       one point draws a straight chord from where the track left the screen to
+       where it came back, cutting across a map it never crosses. */
     for (i = 0; i < track->count; i++) {
         double lat;
         double lon;
         int16_t x;
         int16_t y;
-        int offscreen;
 
         if (!TrackBuffer_Get(track, i, &lat, &lon)) {
             continue;
         }
+        Map_Project(lat, lon, center_lat, center_lon, metres_per_pixel, center_x, center_y, &x, &y);
+        if (!Map_PointVisible(x, y, center_x, center_y)) {
+            continue;
+        }
+        if (!found) {
+            first = i;
+            found = 1;
+        }
+        last = i;
+    }
 
+    if (!found) {
+        return 0; /* The track is somewhere else entirely. */
+    }
+
+    /* One point either side, so the line enters and leaves the viewport from
+       the direction it really comes from rather than starting at the edge. */
+    if (first > 0) {
+        first--;
+    }
+    if (last + 1 < track->count) {
+        last++;
+    }
+
+    /* Second pass over that range. If it holds more points than the buffer,
+       take every Nth: a thinned line keeps the shape, where stopping partway
+       through would draw half a route and call it the whole one. */
+    span = last - first + 1;
+    stride = (span + max_points - 1) / max_points;
+    if (stride == 0) {
+        stride = 1;
+    }
+
+    for (i = first; i <= last; i += stride) {
+        double lat;
+        double lon;
+        int16_t x;
+        int16_t y;
+
+        if (!TrackBuffer_Get(track, i, &lat, &lon)) {
+            continue;
+        }
         Map_Project(lat, lon, center_lat, center_lon, metres_per_pixel, center_x, center_y, &x, &y);
 
         /* Collapse runs that land on one pixel. A receiver logging at 1Hz
@@ -163,31 +216,10 @@ size_t Map_BuildPolyline(const TrackBuffer_t *track, double center_lat, double c
             continue;
         }
 
-        /* Collapse runs that are off the viewport entirely, by moving the last
-           written point rather than appending another.
-
-           Without this the buffer fills with the START of the track and the
-           walk stops there: zoom in far enough that the visible stretch needs
-           more points than the buffer holds, and the map draws a piece of the
-           track's beginning and nothing where the rider is. That is a bug you
-           see as an empty map, which looks like the trail failing to load.
-
-           One point is kept from each off-screen run, so a line still enters
-           and leaves the viewport from the right direction. */
-        if (offscreen = Map_PointOffscreen(x, y, center_x, center_y), offscreen && last_offscreen &&
-            written > 0) {
-            out[written - 1].x = x;
-            out[written - 1].y = y;
-            last_x = x;
-            last_y = y;
-            continue;
-        }
-
         out[written].x = x;
         out[written].y = y;
         last_x = x;
         last_y = y;
-        last_offscreen = offscreen;
         written++;
 
         if (written >= max_points) {
