@@ -186,10 +186,17 @@ bool GpxTrack_Load(const char *path) {
     // essentially all of its time in that overhead.
     uint8_t chunk[512];
     int read_bytes;
+    size_t chunks = 0;
     while ((read_bytes = file.read(chunk, sizeof(chunk))) > 0) {
         // A large .gpx is read from the route picker's event callback, on the
         // same task that draws. Chunked already; it just never yielded.
-        delay(1);
+        //
+        // Every 64th, not every one: these chunks are 512 bytes, so a tick
+        // apiece would add four seconds to a 2MB file -- trading a watchdog
+        // reset for a load slow enough to look like one.
+        if ((++chunks & 0x3F) == 0) {
+            delay(1);
+        }
         for (int i = 0; i < read_bytes; i++) {
             double lat;
             double lon;
