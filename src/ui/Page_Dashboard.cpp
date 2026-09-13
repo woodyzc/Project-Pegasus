@@ -114,6 +114,7 @@ lv_obj_t *s_speed_label = nullptr;
 lv_obj_t *s_speed_unit_label = nullptr;
 lv_obj_t *s_trip_label = nullptr;
 lv_obj_t *s_trip_unit_label = nullptr;
+lv_obj_t *s_incline_unit_label = nullptr;
 lv_obj_t *s_clock_label = nullptr;
 lv_obj_t *s_clock_caption = nullptr;
 
@@ -128,6 +129,15 @@ lv_obj_t *s_speed_max_label = nullptr;
 lv_obj_t *s_hr_avg_label = nullptr;
 lv_obj_t *s_hr_max_label = nullptr;
 lv_obj_t *s_incline_cell = nullptr;
+// The caption of the cell above, because it names two different things.
+//
+// This board has no IMU (CLAUDE.md section 2), so INCLINE has shown "--" for
+// the life of the project and always will. Rather than keep a dead cell and
+// find nowhere for total ascent, the cell reports ascent until an IMU
+// actually publishes, and grade afterwards. The caption says which, so it is
+// never ambiguous, and on any given board it settles one way and stays there.
+lv_obj_t *s_incline_caption = nullptr;
+bool s_have_imu = false;
 lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
 // A triangle riding above the bar, pointing down at the rider's position. The
@@ -317,7 +327,7 @@ constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
 // exactly how the clock ended up on top of the incline figure when these were
 // free-floating labels.
 lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
-                   const char *caption) {
+                   const char *caption, lv_obj_t **out_caption = nullptr) {
     lv_obj_t *cell = lv_obj_create(parent);
     lv_obj_set_size(cell, w, h);
     lv_obj_set_pos(cell, x, y);
@@ -337,6 +347,9 @@ lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, l
     lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, CELL_PAD, CELL_CAPTION_Y);
+    if (out_caption != nullptr) {
+        *out_caption = label;
+    }
     return cell;
 }
 
@@ -1049,12 +1062,26 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_imu_dirty = false;
         IMU_Data_t imu;
         if (DataCenter_Pull(TOPIC_IMU_DATA, &imu, sizeof(imu))) {
+            // An IMU exists after all, so the cell changes what it reports --
+            // once, permanently, and says so in its own caption.
+            if (!s_have_imu) {
+                s_have_imu = true;
+                lv_label_set_text(s_incline_caption, "INCLINE");
+                lv_label_set_text(s_incline_unit_label, "%");
+            }
             // Grade as a percentage of rise over run, from the IMU's pitch.
             const float grade = tanf(imu.pitch * (float)M_PI / 180.0f) * 100.0f;
             lv_label_set_text_fmt(s_incline_label, "%+.1f", grade);
             lv_obj_set_style_bg_color(
                 s_incline_cell, lv_color_hex(grade >= 3.0f ? COLOR_CLIMB_FILL : COLOR_CELL_BG), 0);
         }
+    }
+
+    // Metres only, and no decimal. Ascent is accurate to a few metres at best,
+    // so a tenth would be false precision, and feet would need a unit switch
+    // this cell has no room for.
+    if (!s_have_imu && s_incline_label != nullptr) {
+        lv_label_set_text_fmt(s_incline_label, "%d", (int)(RideStats_AscentM() + 0.5f));
     }
 }
 
@@ -1504,9 +1531,11 @@ void PageDashboard::onViewLoad() {
     s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_28);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
 
-    s_incline_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "INCLINE");
-    s_incline_label = MakeValueIn(s_incline_cell, "--", COLOR_ACCENT, &lv_font_montserrat_28);
-    MakeUnit(s_incline_cell, "%");
+    // Starts as ASCENT and becomes INCLINE if an IMU ever speaks up.
+    s_incline_cell =
+        MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "ASCENT", &s_incline_caption);
+    s_incline_label = MakeValueIn(s_incline_cell, "0", COLOR_ACCENT, &lv_font_montserrat_28);
+    s_incline_unit_label = MakeUnit(s_incline_cell, "m");
 
     // ---- Dividing lines ----
     // Internal joins only. Nothing is drawn at x=0, x=239, y=0 or y=319, so
@@ -1632,6 +1661,8 @@ void PageDashboard::onViewUnload() {
     s_route_remaining_label = nullptr;
     s_trip_unit_label = nullptr;
     s_incline_cell = nullptr;
+    s_incline_caption = nullptr;
+    s_incline_unit_label = nullptr;
     s_nav_cell = nullptr;
     s_nav_is_map = false;
     for (int i = 0; i < HR_ZONE_COUNT; i++) {

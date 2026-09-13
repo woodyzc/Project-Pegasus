@@ -5,11 +5,16 @@
 #include <freertos/semphr.h>
 
 #include "DataCenter.h"
+#include "Ascent.h"
 #include "RideStatsCore.h"
 
 namespace {
 
 RideStats_t s_stats;
+// Total climbing. Separate from RideStats_t because it is a different kind of
+// rule -- a filter over a noisy signal rather than an average -- and it has
+// its own suite.
+Ascent_t s_ascent;
 SemaphoreHandle_t s_lock = nullptr;
 
 // When the last speed sample arrived, so the interval between samples can be
@@ -59,6 +64,12 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     }
     s_last_speed_ms = now;
     s_have_speed = true;
+
+    // Fed with the local tick rather than the receiver's clock, for the same
+    // reason the speed interval is: the altitude filter needs a time from the
+    // very first fix, and the receiver's own time is not valid until it says
+    // so, which can be minutes later.
+    Ascent_Feed(&s_ascent, gps->alt, now);
 }
 
 void OnHeartRatePublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
@@ -82,6 +93,7 @@ Account s_hr_account("RideStats/HR", OnHeartRatePublished);
 void RideStats_Init() {
     s_lock = xSemaphoreCreateMutex();
     RideStatsCore_Reset(&s_stats);
+    Ascent_Reset(&s_ascent);
     s_have_speed = false;
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
@@ -91,7 +103,18 @@ void RideStats_Init() {
 void RideStats_Reset() {
     Locked guard;
     RideStatsCore_Reset(&s_stats);
+    Ascent_Reset(&s_ascent);
     s_have_speed = false;
+}
+
+float RideStats_AscentM() {
+    Locked guard;
+    return (float)Ascent_Metres(&s_ascent);
+}
+
+float RideStats_DescentM() {
+    Locked guard;
+    return (float)Ascent_DescentMetres(&s_ascent);
 }
 
 float RideStats_MaxSpeedKmh() {

@@ -22,6 +22,12 @@ void RideStats_Init();
 // describe the same ride.
 void RideStats_Reset();
 
+// Total climbing and dropping so far, in metres. The filtering that makes
+// these honest is Ascent.h, which explains why a sum of altitude differences
+// is not an option.
+float RideStats_AscentM();
+float RideStats_DescentM();
+
 // Safe to call from either core.
 float RideStats_MaxSpeedKmh();
 float RideStats_AvgSpeedKmh();

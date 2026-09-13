@@ -87,6 +87,8 @@ float RideStats_AvgSpeedKmh() { return g_sim.avg_kmh; }
 float RideStats_MaxSpeedKmh() { return g_sim.max_kmh; }
 uint8_t RideStats_AvgBpm() { return g_sim.avg_bpm; }
 uint8_t RideStats_MaxBpm() { return g_sim.max_bpm; }
+float RideStats_AscentM() { return g_sim.ascent_m; }
+float RideStats_DescentM() { return 0.0f; }
 void RideStats_Init() {}
 void RideStats_Reset() {}
 

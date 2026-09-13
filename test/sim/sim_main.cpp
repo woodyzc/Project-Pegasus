@@ -121,6 +121,7 @@ static void RenderGallery(PageDashboard *page, const char *out_dir) {
     g_sim.max_kmh = 51.3f;
     g_sim.avg_bpm = 142;
     g_sim.max_bpm = 176;
+    g_sim.ascent_m = 847.0f;
     g_sim.have_hr = true;
     g_sim.hr.bpm = 151;
 
@@ -250,6 +251,7 @@ int main(int argc, char **argv) {
     g_sim.max_kmh = 51.3f;
     g_sim.avg_bpm = 142;
     g_sim.max_bpm = 176;
+    g_sim.ascent_m = 847.0f;
     g_sim.have_hr = true;
     g_sim.hr.bpm = 151;
 
