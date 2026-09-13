@@ -25,4 +25,10 @@ public:
 
 // Zero the trip accumulator. Called from the settings page; safe only from
 // Core 1 (LVGL context), which is where both pages run.
-void Page_Dashboard_ResetTrip();
+// One gesture, three things: the odometer, the averages and maxima, and the
+// file on the card all restart here, because all three describe one ride.
+//
+// Returns false if the ride log could not be told -- the numbers on screen
+// still reset, so the caller has to say that the file did not split rather
+// than report a clean start.
+bool Page_Dashboard_StartNewRide();

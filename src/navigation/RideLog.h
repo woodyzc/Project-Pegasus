@@ -44,6 +44,22 @@ bool RideLog_IsRecording();
 // Name of the file being written, or "" before the first point.
 const char *RideLog_FileName();
 
+// Ends the ride being recorded, so the next fix opens a new file.
+//
+// Recording starts by itself on the first fix and never stops, which means the
+// file is delimited by the power switch: the drive to the trailhead lands in
+// it, two rides on one charge become one file, and a reboot splits one ride
+// into two. This is the rider saying where a ride actually begins.
+//
+// Deliberately not a gate on recording. A press that must be remembered is a
+// press that will be forgotten, and on a touch-only panel the cost of missing
+// it would be the whole ride; the cost of not pressing this is a file with the
+// drive at the start of it, which can be deleted afterwards.
+//
+// Queued to the writer task rather than done here. Returns false only if the
+// queue is full, meaning the request did not get through.
+bool RideLog_StartNewRide();
+
 // Points written so far, for the settings page to show that it is working.
 uint32_t RideLog_PointCount();
 

@@ -10,6 +10,7 @@
 #include "../system/DataCenter.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
+#include "../navigation/RideLog.h"
 #include "../system/RideStats.h"
 #include "../system/Settings.h"
 #include "../system/Trip.h"
@@ -1097,15 +1098,20 @@ void PageDashboard::onViewDidDisappear() {
     }
 }
 
-void Page_Dashboard_ResetTrip() {
+bool Page_Dashboard_StartNewRide() {
     Trip_Reset();
     // The averages and maxima describe the same ride as the distance, so they
     // go with it. Leaving a maximum speed behind after a reset would report
     // last week's descent as part of today's commute.
     RideStats_Reset();
+    // ...and so does the file on the card, for the same reason. Before this,
+    // resetting the odometer left the log running, so the file and the numbers
+    // on screen disagreed about which ride the rider was on.
+    const bool log_split = RideLog_StartNewRide();
     if (s_trip_label != nullptr) {
         RenderSpeedAndTrip();
     }
+    return log_split;
 }
 
 PageDashboard::PageDashboard() {}

@@ -105,11 +105,24 @@ void OnUnitToggled(lv_event_t *e) {
     lv_label_set_text(s_unit_value, Settings_SpeedUnitLabel());
 }
 
-void OnResetTripClicked(lv_event_t *e) {
+void OnStartNewRideClicked(lv_event_t *e) {
     (void)e;
-    Page_Dashboard_ResetTrip();
-    lv_label_set_text(s_trip_status, "Trip reset to 0.00");
-    lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_ACCENT), 0);
+    const bool log_split = Page_Dashboard_StartNewRide();
+
+    // Honest about the half that can fail. The odometer and the averages are
+    // memory and always reset; the log has to reach the writer task, and if it
+    // did not then the ride on the card is still the old one.
+    if (log_split) {
+        lv_label_set_text(s_trip_status,
+                          "New ride. Odometer and averages cleared; the next fix "
+                          "starts a new file.");
+        lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_OK), 0);
+    } else {
+        lv_label_set_text(s_trip_status,
+                          "Odometer and averages cleared, but the ride log did not "
+                          "restart.");
+        lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_DANGER), 0);
+    }
 }
 
 void RefreshHrSelection() {
@@ -743,22 +756,27 @@ void PageSettings::onViewLoad() {
     RefreshNavSelection();
 
     // ---- Reset trip ----
-    lv_obj_t *trip_card = MakeCard(body, "TRIP");
+    lv_obj_t *trip_card = MakeCard(body, "RIDE");
     lv_obj_t *reset_btn = lv_btn_create(trip_card);
     lv_obj_set_width(reset_btn, LV_PCT(100));
-    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(0x2A1F26), 0);
-    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(COLOR_DANGER), LV_STATE_PRESSED);
+    // Green rather than the red it wore as "Reset trip distance". The gesture
+    // is now something the rider does at the start of every ride, and a
+    // warning colour on a routine action is a warning nobody reads.
+    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(0x16281E), 0);
+    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(COLOR_OK), LV_STATE_PRESSED);
     lv_obj_set_style_shadow_width(reset_btn, 0, 0);
-    lv_obj_add_event_cb(reset_btn, OnResetTripClicked, LV_EVENT_CLICKED, nullptr);
+    lv_obj_add_event_cb(reset_btn, OnStartNewRideClicked, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *reset_label = lv_label_create(reset_btn);
-    lv_label_set_text(reset_label, LV_SYMBOL_REFRESH "  Reset trip distance");
+    lv_label_set_text(reset_label, LV_SYMBOL_PLAY "  Start new ride");
     lv_obj_set_style_text_font(reset_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(reset_label, lv_color_hex(COLOR_DANGER), 0);
+    lv_obj_set_style_text_color(reset_label, lv_color_hex(COLOR_OK), 0);
     lv_obj_center(reset_label);
 
     s_trip_status = lv_label_create(trip_card);
-    lv_label_set_text(s_trip_status, "Resets the odometer on the dashboard");
+    lv_label_set_text(s_trip_status,
+                      "Press at the start of a ride. Clears the odometer and the "
+                      "averages, and starts a new file on the card.");
     lv_obj_set_style_text_font(s_trip_status, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_CAPTION), 0);
     lv_label_set_long_mode(s_trip_status, LV_LABEL_LONG_WRAP);

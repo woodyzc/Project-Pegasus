@@ -47,12 +47,21 @@ typedef struct {
     uint8_t second;
     uint8_t bpm; // 0 when no recent reading
 
-    // Not a trackpoint but a request to run the self-test. It travels through
-    // the same queue so that pressing the button wakes the writer task
-    // immediately: the task otherwise sits in a ten-second receive, and a
-    // plain flag would leave the panel looking frozen for that long.
-    bool selftest;
+    // Not a trackpoint at all but a request to the writer task. Commands
+    // travel through the same queue as points so that pressing a button wakes
+    // the task immediately -- it otherwise sits in a ten-second receive, and a
+    // plain flag would leave the panel looking frozen for that long. Sending
+    // them in-band also means a command cannot overtake points already queued
+    // ahead of it, which matters for ending a ride: the last few breadcrumbs
+    // belong in the file being closed, not the one after it.
+    uint8_t command; // RideLogCommand_t
 } RideLogPoint_t;
+
+typedef enum {
+    RIDELOG_CMD_NONE = 0, // an ordinary trackpoint
+    RIDELOG_CMD_SELFTEST,
+    RIDELOG_CMD_NEW_RIDE,
+} RideLogCommand_t;
 
 QueueHandle_t s_queue = nullptr;
 File s_file;
@@ -68,11 +77,21 @@ volatile uint32_t s_points = 0;
 uint32_t s_body_end = 0;
 uint32_t s_last_flush_ms = 0;
 
-// Filter state. Touched only by the GPS publish callback, which is a single
-// task, so it needs no lock.
+// Filter state. Written by the GPS publish callback, which is a single task,
+// so it needs no lock for its own use.
+//
+// The one exception is CloseRide() on the writer task, which clears s_has_last
+// so the first fix after a ride boundary is always recorded rather than being
+// dropped for being close to the last point of the previous ride. That is a
+// genuine cross-task write, and it is safe only because of what it costs when
+// it races: a bool store is atomic on this core, and if the GPS callback sets
+// it back to true immediately afterwards the worst outcome is that the new
+// file's first point waits for the ordinary five metres. Nothing is corrupted
+// and no point is written to the wrong file, because the command and the
+// points share one queue and therefore one order.
 double s_last_lat = 0.0;
 double s_last_lon = 0.0;
-bool s_has_last = false;
+volatile bool s_has_last = false;
 uint32_t s_last_queued_ms = 0;
 
 // Picks a name no existing file has. With a resolved time the timestamp is
@@ -229,12 +248,20 @@ void SelfTestFinish(RideLogSelfTest_t state, const char *fmt, ...) {
     s_selftest = state;
 }
 
-// Returns the recorder to the state it was in before the test, so the first
-// real fix opens its own file rather than appending to this one. s_failed is
-// deliberately not touched: a self-test that could not write is a reason to
-// tell the rider, not a reason to disable logging for the power-on.
-void SelfTestReset() {
+// Closes whatever file is open and returns the recorder to the state it was in
+// before it opened one, so the next fix starts a fresh file.
+//
+// The flush is not redundant with the footer scheme: the footer is already in
+// place, so this commits a document that was complete anyway, but it commits
+// it *now* rather than whenever the driver next fills a sector. A ride the
+// rider has declared over should be on the card by the time they look.
+//
+// s_failed is deliberately untouched here. Whether a card that refused us
+// deserves another attempt depends on why we are closing, so the callers
+// decide.
+void CloseRide() {
     if (s_file) {
+        s_file.flush();
         s_file.close();
     }
     s_recording = false;
@@ -242,6 +269,18 @@ void SelfTestReset() {
     s_points = 0;
     s_body_end = 0;
     s_has_last = false;
+}
+
+// The rider says the ride starts here. The odometer and the averages are reset
+// alongside this by the caller, since the three describe the same ride.
+void StartNewRide() {
+    CloseRide();
+
+    // A deliberate gesture is the one moment a card that refused us earlier is
+    // worth another attempt. Without this, one failed open early in the day
+    // would leave the rider unable to record anything again until they power
+    // cycle, and nothing on the panel would explain why.
+    s_failed = false;
 }
 
 // Reads the file back through GpxParse -- the same parser that loads routes
@@ -324,7 +363,7 @@ void RunSelfTest() {
 
     if (!OpenFile(point, "Pegasus self-test")) {
         SelfTestFinish(RIDELOG_SELFTEST_FAIL, "could not create the file in /rides");
-        SelfTestReset();
+        CloseRide();
         return;
     }
 
@@ -339,7 +378,7 @@ void RunSelfTest() {
         if (!AppendPoint(point)) {
             SelfTestFinish(RIDELOG_SELFTEST_FAIL, "%s: write failed after %d of %d points", name,
                            i, SELFTEST_POINTS);
-            SelfTestReset();
+            CloseRide();
             return;
         }
     }
@@ -353,11 +392,11 @@ void RunSelfTest() {
     bool closed = false;
     if (!SelfTestVerify(name, &points, &rates, &closed)) {
         SelfTestFinish(RIDELOG_SELFTEST_FAIL, "%s: written, but will not reopen for reading", name);
-        SelfTestReset();
+        CloseRide();
         return;
     }
 
-    SelfTestReset();
+    CloseRide();
 
     if (points != SELFTEST_POINTS || rates != 2 || !closed) {
         SelfTestFinish(RIDELOG_SELFTEST_FAIL, "%s: read back %u/%d points, %u/2 rates, %s",
@@ -379,8 +418,12 @@ void WriterTask(void *pv) {
         // Waking on the flush interval rather than blocking forever means a
         // ride that ends mid-interval still gets its last points committed.
         if (xQueueReceive(s_queue, &point, pdMS_TO_TICKS(FLUSH_INTERVAL_MS)) == pdTRUE) {
-            if (point.selftest) {
+            if (point.command == RIDELOG_CMD_SELFTEST) {
                 RunSelfTest();
+                continue;
+            }
+            if (point.command == RIDELOG_CMD_NEW_RIDE) {
+                StartNewRide();
                 continue;
             }
 
@@ -481,7 +524,7 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // A strap that has dropped out must not stamp its last reading onto every
     // later point: past BPM_MAX_AGE_MS the sample is simply absent.
     point.bpm = ((now - s_last_bpm_ms) < BPM_MAX_AGE_MS) ? s_last_bpm : 0;
-    point.selftest = false;
+    point.command = RIDELOG_CMD_NONE;
 
     // Never block the GPS task on a full queue: dropping a breadcrumb is a
     // cosmetic loss, stalling the publish path is not.
@@ -524,6 +567,21 @@ void RideLog_Init() {
     DataCenter_Subscribe(TOPIC_HEART_RATE, &s_hr_account);
 }
 
+bool RideLog_StartNewRide() {
+    if (s_queue == nullptr) {
+        return false;
+    }
+
+    RideLogPoint_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.command = RIDELOG_CMD_NEW_RIDE;
+    // Zero timeout, like every other send: the rule everywhere in this file is
+    // that nothing blocks a caller on the card, and the LVGL thread least of
+    // all. A full queue means the writer is badly behind, which the caller
+    // reports rather than waits out.
+    return xQueueSend(s_queue, &cmd, 0) == pdTRUE;
+}
+
 bool RideLog_SelfTestStart() {
     // No queue means no card was present at boot, and hot-plug is not
     // supported anywhere in this firmware.
@@ -543,7 +601,7 @@ bool RideLog_SelfTestStart() {
 
     RideLogPoint_t cmd;
     memset(&cmd, 0, sizeof(cmd));
-    cmd.selftest = true;
+    cmd.command = RIDELOG_CMD_SELFTEST;
     if (xQueueSend(s_queue, &cmd, 0) != pdTRUE) {
         SelfTestFinish(RIDELOG_SELFTEST_FAIL, "the writer is busy -- try again");
         return false;
