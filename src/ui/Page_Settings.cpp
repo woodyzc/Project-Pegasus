@@ -10,6 +10,7 @@
 #include "../navigation/BLE_TBT_Receiver.h"
 #include "../navigation/GpxTrack.h"
 #include "../navigation/RideLog.h"
+#include "Overlay_FileTransfer.h"
 #include "../sensors/BLE_HR_Client.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
@@ -285,6 +286,13 @@ void RefreshSelfTestStatus() {
                       (msg != nullptr && msg[0] != '\0')
                           ? msg
                           : "Writes three points to /rides and reads them back");
+}
+
+void OnFileTransferClicked(lv_event_t *e) {
+    (void)e;
+    // Everything from here is the overlay's: it takes the radio, the card and
+    // the screen, and the only way out is a restart.
+    Overlay_FileTransfer_Show();
 }
 
 void OnSelfTestClicked(lv_event_t *e) {
@@ -685,6 +693,33 @@ void PageSettings::onViewLoad() {
     lv_label_set_long_mode(s_selftest_status, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_selftest_status, LV_PCT(100));
     RefreshSelfTestStatus();
+
+    // ---- WiFi file transfer ----
+    // In the ride-log neighbourhood because rides are what most people come
+    // to fetch, even though it also carries routes and maps in the other
+    // direction.
+    lv_obj_t *wifi_card = MakeCard(body, "FILE TRANSFER");
+    lv_obj_t *wifi_btn = lv_btn_create(wifi_card);
+    lv_obj_set_width(wifi_btn, LV_PCT(100));
+    lv_obj_set_style_bg_color(wifi_btn, lv_color_hex(0x14242E), 0);
+    lv_obj_set_style_bg_color(wifi_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(wifi_btn, 0, 0);
+    lv_obj_add_event_cb(wifi_btn, OnFileTransferClicked, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *wifi_label = lv_label_create(wifi_btn);
+    lv_label_set_text(wifi_label, LV_SYMBOL_WIFI "  Start WiFi file transfer");
+    lv_obj_set_style_text_font(wifi_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(wifi_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_center(wifi_label);
+
+    lv_obj_t *wifi_hint = lv_label_create(wifi_card);
+    lv_label_set_text(wifi_hint,
+                      "Serves rides, routes and maps to a phone or laptop over WiFi.\n"
+                      "Takes the radio from Bluetooth, so it ends with a restart.");
+    lv_obj_set_style_text_font(wifi_hint, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(wifi_hint, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_long_mode(wifi_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(wifi_hint, LV_PCT(100));
 
     // ---- Device info ----
     // Read-only diagnostics. Worth more than usual on this board: serial is

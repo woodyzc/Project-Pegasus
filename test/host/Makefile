@@ -31,6 +31,9 @@
 #   * test_time_source  - which clock the head unit believes, and when it stops
 #                         believing it (compiles the real
 #                         src/system/TimeSource.c)
+#   * test_file_path    - which paths the WiFi file server may touch (compiles
+#                         the real src/system/FilePath.c). The only host suite
+#                         covering an adversarial input rather than a mistake.
 #   * test_ride_stats   - ride averages and maxima: moving average, the stop
 #                         that must not decay it, and the bad fix that must
 #                         not own the max (compiles the real
@@ -57,7 +60,7 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) test_track_buffer$(SUFFIX) \
         test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) test_trip_accum$(SUFFIX) \
         test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) test_clock_frame$(SUFFIX) \
-        test_time_source$(SUFFIX) test_ride_stats$(SUFFIX)
+        test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -101,6 +104,11 @@ test_time_source$(SUFFIX): test_time_source.c $(SYSTEM)/TimeSource.c
 
 test_ride_stats$(SUFFIX): test_ride_stats.c $(SYSTEM)/RideStatsCore.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC) -lm
+
+# Carries more weight than its size suggests: this is the only input in the
+# firmware that arrives from outside the device and reaches the filesystem.
+test_file_path$(SUFFIX): test_file_path.c $(SYSTEM)/FilePath.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
 
 test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm

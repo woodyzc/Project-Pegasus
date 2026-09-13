@@ -229,7 +229,37 @@ These were each discovered the slow way. They are not optional trivia.
   This gave the exact assert and the full backtrace for the bug above, after
   three rounds of guessing had failed. Reach for it first, not last.
 
-## 9. Companion App (`phone/android/`)
+## 9. WiFi File Transfer
+
+`src/system/FileServer.h` turns the board into a WPA2 access point serving the
+SD card over HTTP, so rides come off and routes and maps go on without pulling
+the card. Reached from the settings page; the modal that appears is
+`src/ui/Overlay_FileTransfer.h`.
+
+Three constraints shape it, and none are negotiable:
+
+- **It takes the radio rather than sharing it.** Starting the server shuts the
+  BLE stack down. WiFi and Bluetooth share one antenna here, and section 8 is
+  already a list of what happens when two things ask the controller for
+  overlapping work. Consequently **the only way out is a restart** —
+  re-initialising NimBLE after a deinit is the same class of teardown that
+  panicked the chip before.
+- **It is the only reader of the card while it runs.** `SD_MMC` is not
+  thread-safe, and the card is otherwise read by the LVGL task and written by
+  the ride-log task. Hence the modal on `lv_layer_top()` rather than a page
+  (nowhere to navigate to), and the refusal to start while recording.
+- **`src/system/FilePath.c` is the security boundary and is host-tested.**
+  Three directories, no nesting, no traversal, no dotfiles, and only `.gpx` at
+  the card root — the root is the owner's own folder, not a share. It is the
+  only input in this firmware that arrives from off-device and reaches the
+  filesystem. Widen it there, with tests, or not at all.
+
+The access-point password is regenerated every session and shown on the panel.
+It is deliberately **not** derived from the MAC: the access point's BSSID *is*
+the MAC, so anything derived from it is printed on the outside of the thing it
+protects.
+
+## 10. Companion App (`phone/android/`)
 
 A Kotlin app that scrapes Google Maps' navigation notification and writes
 turn-by-turn frames to the head unit over BLE — Maps exposes no API, so the
