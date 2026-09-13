@@ -3,6 +3,7 @@
 
     osm2prd.py --bbox S W N E  OUT.prd
     osm2prd.py --postcode 20874 OUT.prd
+    osm2prd.py --postcode 20874 --radius-miles 10 OUT.prd
 
 Data comes from the Overpass API, which is the right tool for this and not the
 same thing as scraping tiles. Overpass exists to answer targeted queries for
@@ -160,11 +161,26 @@ def main():
     ap.add_argument("--bbox", nargs=4, type=float, metavar=("S", "W", "N", "E"))
     ap.add_argument("--postcode")
     ap.add_argument("--country", default="us")
+    ap.add_argument("--radius-miles", type=float, default=None,
+                    help="square of this radius around the postcode's centre, "
+                         "instead of the postcode's own outline")
     args = ap.parse_args()
 
     if args.postcode:
         south, west, north, east, name = geocode_postcode(args.postcode, args.country)
         print(f"{args.postcode}: {name}")
+        if args.radius_miles:
+            # A postcode's own boundary is whatever shape the post office drew,
+            # which is rarely the shape of a ride. A radius around its centre
+            # covers where a rider actually goes from there.
+            clat = (south + north) / 2.0
+            clon = (west + east) / 2.0
+            km = args.radius_miles * 1.609344
+            dlat = km / 111.32
+            dlon = km / (111.32 * math.cos(math.radians(clat)))
+            south, north = clat - dlat, clat + dlat
+            west, east = clon - dlon, clon + dlon
+            print(f"centre {clat:.4f},{clon:.4f} + {args.radius_miles} mi")
     elif args.bbox:
         south, west, north, east = args.bbox
         name = "bbox"
