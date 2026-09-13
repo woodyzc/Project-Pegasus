@@ -78,7 +78,12 @@ inline uint8_t OutCode(const lv_point_t *p, const lv_area_t *a) {
 const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
     {0x333A42, 1}, // minor
     {0x4E5760, 2}, // secondary
-    {0xC8A050, 3}, // artery
+    // Arteries in blue, not the amber they were. Amber is the trail's own
+    // colour family now that the ridden part of it is yellow, and a road
+    // sharing that family is a road a rider mistakes for the route. Brighter
+    // and cooler than water below, which is the only other blue here and is
+    // both darker and drawn thicker.
+    {0x4A90D9, 3}, // artery
     {0x1C3E5C, 4}, // water
 };
 
@@ -86,14 +91,42 @@ const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
 // roads and the recorded track have to be drawn through the SAME centre and
 // scale or they are two maps of the same place that do not agree, and a trail
 // sitting beside the road it was recorded on is worse than no road at all.
-MapView_t *g_view = nullptr;
+// Every attached layer, so a redraw reaches all of them.
+//
+// There used to be one global MapView_t here and the draw callback read it,
+// which was wrong the moment two layers existed at once. The dashboard's map
+// and the ROUTE page's are both attached -- the dashboard is a cached page and
+// its layer outlives a visit to the route page -- so both drew through
+// whichever view had attached last. Going back to the dashboard left its trail
+// drawn at its own scale over roads drawn at the route page's, and the two
+// maps of the same place disagreed by exactly the difference in their heights.
+//
+// Each layer now carries its own view in its user data. The array is only so
+// that Refresh can invalidate them all; nothing here is a global camera.
+constexpr int MAX_LAYERS = 4;
+lv_obj_t *g_layers[MAX_LAYERS] = {nullptr};
+
+// Kept for the statistics below, which describe the last draw whoever made it.
 lv_obj_t *g_layer = nullptr;
 
+void ForgetLayer(lv_event_t *e) {
+    lv_obj_t *obj = lv_event_get_target(e);
+    for (int i = 0; i < MAX_LAYERS; i++) {
+        if (g_layers[i] == obj) {
+            g_layers[i] = nullptr;
+        }
+    }
+    if (g_layer == obj) {
+        g_layer = nullptr;
+    }
+}
+
 void RoadDrawCb(lv_event_t *e) {
+    lv_obj_t *obj = lv_event_get_target(e);
+    MapView_t *g_view = (MapView_t *)lv_obj_get_user_data(obj);
     if (!RoadMap_IsLoaded() || g_view == nullptr) {
         return;
     }
-    lv_obj_t *obj = lv_event_get_target(e);
     lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
 
     lv_area_t area;
@@ -266,9 +299,20 @@ void RoadView_Attach(MapView_t *view) {
     // Nothing here is interactive: it is a backdrop, and touches belong to
     // whatever is underneath it.
     lv_obj_clear_flag(layer, LV_OBJ_FLAG_CLICKABLE);
-    g_view = view;
+    // The view travels with the layer, not in a global, so two layers can be
+    // attached at once and each draws through its own projection.
+    lv_obj_set_user_data(layer, view);
     g_layer = layer;
+    for (int i = 0; i < MAX_LAYERS; i++) {
+        if (g_layers[i] == nullptr) {
+            g_layers[i] = layer;
+            break;
+        }
+    }
     lv_obj_add_event_cb(layer, RoadDrawCb, LV_EVENT_DRAW_MAIN, nullptr);
+    // A page tearing down destroys its layer with its widgets, and a pointer
+    // to it must not outlive that.
+    lv_obj_add_event_cb(layer, ForgetLayer, LV_EVENT_DELETE, nullptr);
 
     // Behind the trail, in front of the container's background. Index 0 is the
     // back of the child list, and MapView creates the trail before this runs.
@@ -276,8 +320,13 @@ void RoadView_Attach(MapView_t *view) {
 }
 
 void RoadView_Refresh() {
-    if (g_layer != nullptr) {
-        lv_obj_invalidate(g_layer);
+    // All of them. A hidden page's layer costs nothing to invalidate and LVGL
+    // will not draw it, and the alternative is tracking which page is visible
+    // in a module that has no business knowing.
+    for (int i = 0; i < MAX_LAYERS; i++) {
+        if (g_layers[i] != nullptr) {
+            lv_obj_invalidate(g_layers[i]);
+        }
     }
 }
 

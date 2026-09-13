@@ -18,6 +18,10 @@
 
 typedef struct {
     lv_obj_t *container;
+    // The trail in two pieces: what has been ridden and what has not. Two
+    // lv_line objects rather than one, because a line has a single colour and
+    // the whole point is that the two halves differ.
+    lv_obj_t *trail_done;
     lv_obj_t *trail;
     lv_obj_t *marker;
 
@@ -41,6 +45,11 @@ typedef struct {
 
     // Set once the rider drags. Stops SetPosition recentring on the fix.
     bool pan_locked;
+
+    // How many of the track's points are behind the rider, from the last fix.
+    // Zero until one arrives, which is why a trail with no GPS draws entirely
+    // in the unridden colour rather than entirely in the ridden one.
+    size_t progress_points;
 } MapView_t;
 
 // Builds the view inside `parent`. `points` and `projected` must each hold

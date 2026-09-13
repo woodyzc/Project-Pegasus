@@ -7,7 +7,14 @@
 namespace {
 
 constexpr uint32_t COLOR_MAP_BG = 0x0B1116;
-constexpr uint32_t COLOR_TRAIL = 0xFFD166;
+// The trail, in two colours: what is behind the rider and what is ahead.
+//
+// Green ahead and amber behind rather than the other way round. The part that
+// matters at a glance is the part still to ride, and green reads as "this way"
+// where amber reads as a mark left behind -- which is what it is.
+constexpr uint32_t COLOR_TRAIL_DONE = 0xFFD166;
+constexpr uint32_t COLOR_TRAIL_AHEAD = 0x7CE38B;
+constexpr uint32_t COLOR_TRAIL = COLOR_TRAIL_AHEAD;
 constexpr uint32_t COLOR_MARKER = 0x61DAFB;
 
 // Half-height of the heading triangle. Big enough to read the direction at a
@@ -50,11 +57,19 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // let a stray touch drag the map into empty space.
     lv_obj_clear_flag(view->container, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Created first, so it sits behind the ridden half: where the two overlap
+    // by the one shared point, the ridden colour wins and the join is clean.
     view->trail = lv_line_create(view->container);
-    lv_obj_set_style_line_color(view->trail, lv_color_hex(COLOR_TRAIL), 0);
+    lv_obj_set_style_line_color(view->trail, lv_color_hex(COLOR_TRAIL_AHEAD), 0);
     lv_obj_set_style_line_width(view->trail, 2, 0);
     lv_obj_set_style_line_rounded(view->trail, true, 0);
     lv_obj_set_pos(view->trail, 0, 0);
+
+    view->trail_done = lv_line_create(view->container);
+    lv_obj_set_style_line_color(view->trail_done, lv_color_hex(COLOR_TRAIL_DONE), 0);
+    lv_obj_set_style_line_width(view->trail_done, 2, 0);
+    lv_obj_set_style_line_rounded(view->trail_done, true, 0);
+    lv_obj_set_pos(view->trail_done, 0, 0);
 
     // A triangle rather than a dot: the rider's heading is already published
     // and carries real information at a junction -- which way am I pointing
@@ -104,6 +119,39 @@ void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
         return;
     }
 
+    // How far along the trail the rider is, for the colour change in Redraw.
+    //
+    // Nearest point rather than distance travelled, because a GPX is a shape
+    // and not a plan: a rider can join it halfway, ride it backwards, or cut a
+    // corner, and the honest answer to "what is behind me" is "whatever is
+    // nearer the start than the closest point to me". Squared degrees, with
+    // longitude scaled by the latitude's cosine so a degree of each is
+    // comparable -- no need for real distances when only the smallest matters.
+    {
+        const TrackBuffer_t *track = GpxTrack_Buffer();
+        const size_t count = GpxTrack_PointCount();
+        if (track != nullptr && count > 0) {
+            const double lon_scale = cos(gps->lat * M_PI / 180.0);
+            double best = 1e30;
+            size_t best_index = 0;
+            for (size_t i = 0; i < count; i++) {
+                double lat;
+                double lon;
+                if (!GpxTrack_Point(i, &lat, &lon)) {
+                    continue;
+                }
+                const double dlat = lat - gps->lat;
+                const double dlon = (lon - gps->lon) * lon_scale;
+                const double d2 = dlat * dlat + dlon * dlon;
+                if (d2 < best) {
+                    best = d2;
+                    best_index = i;
+                }
+            }
+            view->progress_points = best_index;
+        }
+    }
+
     // Once there is a fix the view follows the rider: what matters while
     // riding is where you are on the line, not the shape of the whole route.
     //
@@ -147,6 +195,9 @@ void MapView_Redraw(MapView_t *view) {
 
     if (!view->have_center || GpxTrack_PointCount() == 0) {
         lv_line_set_points(view->trail, view->points, 0);
+        if (view->trail_done != nullptr) {
+            lv_line_set_points(view->trail_done, view->points, 0);
+        }
         return;
     }
 
@@ -161,7 +212,31 @@ void MapView_Redraw(MapView_t *view) {
         view->points[i].x = view->projected[i].x;
         view->points[i].y = view->projected[i].y;
     }
-    lv_line_set_points(view->trail, view->points, (uint16_t)written);
+
+    // Where to cut the drawn line.
+    //
+    // By fraction of the source track rather than by index, because
+    // Map_BuildPolyline collapses points that land on the same pixel and the
+    // two index spaces therefore do not match. The collapsing is roughly even
+    // along the track at any one zoom, so the fraction carries across well
+    // enough for a colour change; it is a mark on a line, not a measurement.
+    const size_t source = GpxTrack_PointCount();
+    size_t split = 0;
+    if (source > 0 && view->progress_points > 0) {
+        split = (written * view->progress_points) / source;
+        if (split > written) {
+            split = written;
+        }
+    }
+
+    if (view->trail_done != nullptr) {
+        // The two share the buffer and overlap by the point they meet at, so
+        // the join has no gap in it.
+        lv_line_set_points(view->trail_done, view->points, (uint16_t)split);
+    }
+    const size_t ahead_from = (split > 0) ? split - 1 : 0;
+    lv_line_set_points(view->trail, view->points + ahead_from,
+                       (uint16_t)(written - ahead_from));
 }
 
 double MapView_MetresAcross(const MapView_t *view) {

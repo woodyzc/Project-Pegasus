@@ -196,6 +196,19 @@ int main(int argc, char **argv) {
         route.onViewLoad();
 
         g_sim.gpx_files = 6;
+
+        // A fix a third of the way along the trail, so the ridden and unridden
+        // halves are both on screen and the split can be seen to follow the
+        // line rather than the screen.
+        g_sim.have_gps = true;
+        g_sim.gps.fix_valid = true;
+        g_sim.gps.time_valid = false;
+        g_sim.gps.lat = 38.9100;
+        g_sim.gps.lon = -77.1360;
+        g_sim.gps.heading = 55.0f;
+        g_sim.gps.num_sv = 9;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+
         snprintf(path, sizeof(path), "%s/r1-route-page.ppm", out_dir);
         Render(&page, path);
 

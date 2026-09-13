@@ -9,6 +9,7 @@
 // The values are settable from sim_main so one build can render several
 // states: a fresh boot, a ride in progress, an imminent turn.
 
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -27,6 +28,34 @@
 #include "sim_tick.h"
 
 SimState g_sim;
+
+// A synthetic trail, so the two-tone route has something to be two-tone on.
+//
+// A shallow S across about 4km of the riding area: straight enough to see the
+// colour change at a glance, bent enough that the split is obviously following
+// the line rather than cutting it at a fixed screen position.
+namespace {
+constexpr size_t kTrackPoints = 240;
+int32_t s_lat_store[kTrackPoints];
+int32_t s_lon_store[kTrackPoints];
+TrackBuffer_t s_track;
+bool s_track_built = false;
+
+void BuildTrack() {
+    if (s_track_built) {
+        return;
+    }
+    TrackBuffer_Init(&s_track, s_lat_store, s_lon_store, kTrackPoints);
+    for (size_t i = 0; i < kTrackPoints; i++) {
+        const double t = (double)i / (double)(kTrackPoints - 1);
+        const double lat = 38.9000 + t * 0.030;
+        const double lon = -77.1500 + t * 0.040 + 0.006 * sin(t * 6.2831853);
+        TrackBuffer_Add(&s_track, lat, lon);
+    }
+    s_track_built = true;
+}
+} // namespace
+
 
 unsigned int sim_millis(void) {
     return g_sim.millis;
@@ -61,7 +90,15 @@ void RideStats_Init() {}
 void RideStats_Reset() {}
 
 // ---- The card, which the simulator never has --------------------------
-size_t GpxTrack_PointCount() { return 0; }
+size_t GpxTrack_PointCount() {
+    BuildTrack();
+    return s_track.count;
+}
+
+bool GpxTrack_Point(size_t index, double *out_lat, double *out_lon) {
+    BuildTrack();
+    return TrackBuffer_Get(&s_track, index, out_lat, out_lon);
+}
 bool GpxTrack_CardMounted() { return false; }
 
 // ---- DataCenter --------------------------------------------------------
@@ -163,6 +200,7 @@ bool PageManager::Pop() { return true; }
 
 #include "../../src/navigation/GpxTrack.h"
 #include "../../src/navigation/RoadMap.h"
+#include "../../src/navigation/TrackBuffer.h"
 
 namespace {
 const char *const kFiles[] = {
@@ -196,14 +234,26 @@ bool GpxTrack_Load(const char *path) {
 
 const char *GpxTrack_LoadedName() { return s_loaded; }
 const char *GpxTrack_MountStatus() { return "No SD card"; }
-bool GpxTrack_Bounds(double *m1, double *m2, double *m3, double *m4) {
-    (void)m1; (void)m2; (void)m3; (void)m4;
-    return false;
+bool GpxTrack_Bounds(double *min_lat, double *max_lat, double *min_lon, double *max_lon) {
+    BuildTrack();
+    if (!s_track.has_bounds) {
+        return false;
+    }
+    *min_lat = s_track.min_lat_e7 / 1e7;
+    *max_lat = s_track.max_lat_e7 / 1e7;
+    *min_lon = s_track.min_lon_e7 / 1e7;
+    *max_lon = s_track.max_lon_e7 / 1e7;
+    return true;
 }
-bool GpxTrack_Center(double *lat, double *lon) { (void)lat; (void)lon; return false; }
+
+bool GpxTrack_Center(double *lat, double *lon) {
+    BuildTrack();
+    return TrackBuffer_Center(&s_track, lat, lon);
+}
+
 const TrackBuffer_t *GpxTrack_Buffer() {
-    static TrackBuffer_t empty;
-    return &empty;
+    BuildTrack();
+    return &s_track;
 }
 
 bool RoadMap_IsLoaded() { return false; }

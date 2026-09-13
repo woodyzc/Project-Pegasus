@@ -17,9 +17,16 @@ REAL_CONF := ../../include/lv_conf.h
 SRC    := ../../src
 OUT    := out
 
-CXXFLAGS := -std=c++17 -O1 -Wall -Wno-unused-parameter \
+# -MMD -MP: every object also writes a .d listing the headers it included, and
+# those are pulled in at the bottom. Without them a header change rebuilds
+# nothing, and the link quietly mixes objects compiled against two different
+# definitions of the same struct -- which is exactly what happened when
+# MapView_t grew a field: MapView.o wrote past the end of a struct that
+# Page_Map.o still thought was smaller, and the symptom was a garbage value
+# rather than any kind of build error.
+CXXFLAGS := -std=c++17 -O1 -Wall -Wno-unused-parameter -MMD -MP \
             -DLV_CONF_INCLUDE_SIMPLE -I. -I$(LVGL) -I$(LVGL)/src
-CFLAGS   := -std=c11 -O1 -Wall -Wno-unused-parameter \
+CFLAGS   := -std=c11 -O1 -Wall -Wno-unused-parameter -MMD -MP \
             -DLV_CONF_INCLUDE_SIMPLE -I. -I$(LVGL) -I$(LVGL)/src
 
 # LVGL is built from source rather than linked: there is no prebuilt host
@@ -116,3 +123,5 @@ gallery: $(OUT)/dashsim
 
 clean:
 	rm -rf $(OUT) lv_conf.h
+
+-include $(shell find $(OUT) -name '*.d' 2>/dev/null)
