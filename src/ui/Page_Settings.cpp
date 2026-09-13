@@ -392,6 +392,7 @@ void PageSettings::onViewLoad() {
     // ---- Header ----
     lv_obj_t *back_btn = lv_btn_create(parent);
     lv_obj_set_size(back_btn, 40, 32);
+    lv_obj_set_ext_click_area(back_btn, 10);
     lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 6, 6);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(COLOR_PANEL), 0);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);

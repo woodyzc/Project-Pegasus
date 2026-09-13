@@ -282,6 +282,7 @@ void OnChooseRouteClicked(lv_event_t *e) {
 
     lv_obj_t *close = lv_btn_create(s_picker);
     lv_obj_set_size(close, 40, 30);
+    lv_obj_set_ext_click_area(close, 10);
     lv_obj_align(close, LV_ALIGN_TOP_LEFT, 6, 4);
     lv_obj_set_style_radius(close, 6, 0);
     lv_obj_set_style_shadow_width(close, 0, 0);
@@ -380,6 +381,7 @@ void PageMap::onViewLoad() {
     // ---- Header ----
     lv_obj_t *back_btn = lv_btn_create(parent);
     lv_obj_set_size(back_btn, 36, 26);
+    lv_obj_set_ext_click_area(back_btn, 10);
     lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 6, 4);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(COLOR_PANEL), 0);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);

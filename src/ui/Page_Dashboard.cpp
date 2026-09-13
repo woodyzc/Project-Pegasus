@@ -405,6 +405,10 @@ lv_obj_t *MakeSecondaryRow(lv_obj_t *parent, const char *word) {
     // measuring pass that runs in the wrong order.
     lv_obj_set_size(row, lv_pct(100), SECONDARY_ROW_H);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    // Not clickable: lv_obj_create sets that flag and this is a container,
+    // not a control. A transparent box that answers touches is how the road
+    // layer once swallowed every tap meant for the map beneath it.
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
 
     // Placed rather than flexed, and for once that is the simpler answer:
     // there are two children, one pinned to each end, and lv_obj_align stores
@@ -437,6 +441,10 @@ void MakeSecondary(lv_obj_t *cell, lv_obj_t **out_avg, lv_obj_t **out_max) {
     // value has the rest of the cell and the two must not meet.
     lv_obj_set_size(block, SECONDARY_W, 2 * SECONDARY_ROW_H);
     lv_obj_clear_flag(block, LV_OBJ_FLAG_SCROLLABLE);
+    // Not clickable: lv_obj_create sets that flag and this is a container,
+    // not a control. A transparent box that answers touches is how the road
+    // layer once swallowed every tap meant for the map beneath it.
+    lv_obj_clear_flag(block, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_flex_flow(block, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(block, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
     lv_obj_align(block, LV_ALIGN_BOTTOM_RIGHT, -SECONDARY_INSET, CELL_VALUE_Y);
@@ -1241,6 +1249,10 @@ void PageDashboard::onViewLoad() {
         lv_obj_set_pos(s_nav_content, NAV_PAD_L, STATUS_H);
         lv_obj_set_size(s_nav_content, FULL_W - NAV_PAD_L - PAD, NAV_H - STATUS_H - PAD);
         lv_obj_clear_flag(s_nav_content, LV_OBJ_FLAG_SCROLLABLE);
+        // Not clickable: lv_obj_create sets that flag and this is a container,
+        // not a control. A transparent box that answers touches is how the road
+        // layer once swallowed every tap meant for the map beneath it.
+        lv_obj_clear_flag(s_nav_content, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_flex_flow(s_nav_content, LV_FLEX_FLOW_COLUMN);
         // CENTER, not SPACE_BETWEEN.
         //
@@ -1264,6 +1276,10 @@ void PageDashboard::onViewLoad() {
         lv_obj_remove_style_all(turn_row);
         lv_obj_set_size(turn_row, lv_pct(100), TBT_ARROW_DRAW_PX);
         lv_obj_clear_flag(turn_row, LV_OBJ_FLAG_SCROLLABLE);
+        // Not clickable: lv_obj_create sets that flag and this is a container,
+        // not a control. A transparent box that answers touches is how the road
+        // layer once swallowed every tap meant for the map beneath it.
+        lv_obj_clear_flag(turn_row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_flex_flow(turn_row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(turn_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
                               LV_FLEX_ALIGN_CENTER);
@@ -1300,6 +1316,10 @@ void PageDashboard::onViewLoad() {
         lv_obj_remove_style_all(s_route_dist_row);
         lv_obj_set_size(s_route_dist_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
         lv_obj_clear_flag(s_route_dist_row, LV_OBJ_FLAG_SCROLLABLE);
+        // Not clickable: lv_obj_create sets that flag and this is a container,
+        // not a control. A transparent box that answers touches is how the road
+        // layer once swallowed every tap meant for the map beneath it.
+        lv_obj_clear_flag(s_route_dist_row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_flex_flow(s_route_dist_row, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_flex_align(s_route_dist_row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END,
                               LV_FLEX_ALIGN_END);
@@ -1337,6 +1357,10 @@ void PageDashboard::onViewLoad() {
         lv_obj_remove_style_all(s_route_secondary_row);
         lv_obj_set_size(s_route_secondary_row, lv_pct(100), LV_SIZE_CONTENT);
         lv_obj_clear_flag(s_route_secondary_row, LV_OBJ_FLAG_SCROLLABLE);
+        // Not clickable: lv_obj_create sets that flag and this is a container,
+        // not a control. A transparent box that answers touches is how the road
+        // layer once swallowed every tap meant for the map beneath it.
+        lv_obj_clear_flag(s_route_secondary_row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_flex_flow(s_route_secondary_row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(s_route_secondary_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
                               LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -1380,7 +1404,15 @@ void PageDashboard::onViewLoad() {
     // it, and the navigation tile is opaque, so building it first would put
     // these behind it.
     lv_obj_t *settings_btn = lv_btn_create(parent);
+    // The touch target is bigger than the button.
+    //
+    // 34x24 is about 6mm by 4mm on this panel, which is smaller than the
+    // fingertip aiming at it, and it sits in the very corner where a finger
+    // cannot be centred on it at all. lv_obj_set_ext_click_area grows the area
+    // that responds without growing the thing that is drawn, so the control
+    // stays the size the layout wants and stops being a game of accuracy.
     lv_obj_set_size(settings_btn, 34, 24);
+    lv_obj_set_ext_click_area(settings_btn, 12);
     lv_obj_align(settings_btn, LV_ALIGN_TOP_LEFT, 3, 2);
     lv_obj_set_style_bg_color(settings_btn, lv_color_hex(0x1D2A36), 0);
     lv_obj_set_style_bg_color(settings_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
@@ -1405,6 +1437,10 @@ void PageDashboard::onViewLoad() {
     lv_obj_remove_style_all(clock_row);
     lv_obj_set_size(clock_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_clear_flag(clock_row, LV_OBJ_FLAG_SCROLLABLE);
+    // Not clickable: lv_obj_create sets that flag and this is a container,
+    // not a control. A transparent box that answers touches is how the road
+    // layer once swallowed every tap meant for the map beneath it.
+    lv_obj_clear_flag(clock_row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
     // Bottom-aligned, so the small caption sits on the time's baseline rather
     // than floating at its cap height.
