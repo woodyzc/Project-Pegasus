@@ -1,6 +1,7 @@
 #include "RideLog.h"
 
 #include <Arduino.h>
+#include <stdarg.h>
 #include <SD_MMC.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -8,6 +9,7 @@
 
 #include "../system/DataCenter.h"
 #include "../system/TripAccum.h"
+#include "GpxParse.h"
 #include "GpxTrack.h"
 #include "GpxWrite.h"
 
@@ -44,6 +46,12 @@ typedef struct {
     uint8_t minute;
     uint8_t second;
     uint8_t bpm; // 0 when no recent reading
+
+    // Not a trackpoint but a request to run the self-test. It travels through
+    // the same queue so that pressing the button wakes the writer task
+    // immediately: the task otherwise sits in a ten-second receive, and a
+    // plain flag would leave the panel looking frozen for that long.
+    bool selftest;
 } RideLogPoint_t;
 
 QueueHandle_t s_queue = nullptr;
@@ -120,7 +128,7 @@ bool WriteFooter() {
     return s_file.seek(s_body_end);
 }
 
-bool OpenFile(const RideLogPoint_t &first) {
+bool OpenFile(const RideLogPoint_t &first, const char *track_name) {
     if (!GpxTrack_CardMounted()) {
         return false;
     }
@@ -141,7 +149,7 @@ bool OpenFile(const RideLogPoint_t &first) {
     }
 
     char header[512];
-    const size_t len = GpxWrite_Header(header, sizeof(header), "Pegasus ride");
+    const size_t len = GpxWrite_Header(header, sizeof(header), track_name);
     if (len == 0 || s_file.write((const uint8_t *)header, len) != len) {
         s_file.close();
         s_name[0] = '\0';
@@ -186,6 +194,182 @@ bool AppendPoint(const RideLogPoint_t &point) {
     return WriteFooter();
 }
 
+// ---------------------------------------------------------------------------
+// Self-test (RideLog.h explains why it exists)
+// ---------------------------------------------------------------------------
+
+volatile RideLogSelfTest_t s_selftest = RIDELOG_SELFTEST_IDLE;
+
+// One byte longer than anything written into it, and that last byte is never
+// touched. The writer task fills this and the LVGL task reads it without a
+// lock, so a long message replacing a short one passes through an instant with
+// the old terminator overwritten and the new one not yet placed. A reader
+// caught there would run off the end of a plain 128-byte array; with the guard
+// byte it stops at the array's own edge, having read a garbled line for one
+// frame. That is the right trade for a diagnostic string.
+constexpr size_t SELFTEST_MSG_MAX = 128;
+char s_selftest_msg[SELFTEST_MSG_MAX + 1] = "";
+
+// Three points: enough to prove that appending seeks back over the previous
+// footer rather than appending after it, which one point would not show.
+constexpr int SELFTEST_POINTS = 3;
+
+// Two of the three carry a reading, so the file exercises both branches of the
+// trkpt writer -- and reading back exactly two proves the third was omitted
+// rather than written as zero.
+constexpr uint8_t SELFTEST_BPM[SELFTEST_POINTS] = {0, 142, 151};
+
+void SelfTestFinish(RideLogSelfTest_t state, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(s_selftest_msg, SELFTEST_MSG_MAX, fmt, args);
+    va_end(args);
+    // The message is published before the state, so a reader that sees PASS
+    // never reads the previous run's text alongside it.
+    s_selftest = state;
+}
+
+// Returns the recorder to the state it was in before the test, so the first
+// real fix opens its own file rather than appending to this one. s_failed is
+// deliberately not touched: a self-test that could not write is a reason to
+// tell the rider, not a reason to disable logging for the power-on.
+void SelfTestReset() {
+    if (s_file) {
+        s_file.close();
+    }
+    s_recording = false;
+    s_name[0] = '\0';
+    s_points = 0;
+    s_body_end = 0;
+    s_has_last = false;
+}
+
+// Reads the file back through GpxParse -- the same parser that loads routes
+// off this card. Counting points here rather than trusting the byte count is
+// the whole value of the exercise: it is what catches a card that accepts
+// every write and returns something else.
+bool SelfTestVerify(const char *name, size_t *out_points, size_t *out_rates, bool *out_closed) {
+    File f = SD_MMC.open(name, FILE_READ);
+    if (!f) {
+        return false;
+    }
+
+    GpxParser_t parser;
+    Gpx_Init(&parser);
+
+    static const char NEEDLE[] = "<gpxtpx:hr>";
+    size_t matched = 0;
+
+    *out_points = 0;
+    *out_rates = 0;
+
+    // 128 bytes at a time. The writer task's stack is the constraint, and the
+    // file is about a kilobyte, so nothing here is worth a bigger buffer.
+    char chunk[128];
+    int read_len;
+    while ((read_len = f.read((uint8_t *)chunk, sizeof(chunk))) > 0) {
+        for (int i = 0; i < read_len; i++) {
+            double lat;
+            double lon;
+            if (Gpx_Feed(&parser, chunk[i], &lat, &lon)) {
+                (*out_points)++;
+            }
+
+            // Substring search carried across chunk boundaries.
+            if (chunk[i] == NEEDLE[matched]) {
+                matched++;
+                if (NEEDLE[matched] == '\0') {
+                    (*out_rates)++;
+                    matched = 0;
+                }
+            } else {
+                matched = (chunk[i] == NEEDLE[0]) ? 1 : 0;
+            }
+        }
+    }
+
+    // The footer has to be the last thing in the file, not merely present:
+    // the seek-back scheme is precisely what could leave a stale copy of it
+    // buried in the middle.
+    const char CLOSING[] = "</gpx>\n";
+    const size_t tail_len = sizeof(CLOSING) - 1;
+    char tail[sizeof(CLOSING)] = {0};
+    const size_t size = f.size();
+    *out_closed = false;
+    if (size >= tail_len && f.seek(size - tail_len)) {
+        if (f.read((uint8_t *)tail, tail_len) == (int)tail_len) {
+            *out_closed = (memcmp(tail, CLOSING, tail_len) == 0);
+        }
+    }
+
+    f.close();
+    return true;
+}
+
+void RunSelfTest() {
+    RideLogPoint_t point;
+    memset(&point, 0, sizeof(point));
+    // Germantown, to match the road extract already on this card, so the file
+    // draws over something if it is ever loaded as a route.
+    point.lat = 39.1834;
+    point.lon = -77.2617;
+    point.alt = 120.0f;
+    // A fixed date rather than the current clock: the name is then stable, so
+    // running the test twice overwrites one file instead of filling /rides,
+    // and 2000 is obviously not a ride anyone took.
+    point.has_time = true;
+    point.year = 2000;
+    point.month = 1;
+    point.day = 1;
+
+    if (!OpenFile(point, "Pegasus self-test")) {
+        SelfTestFinish(RIDELOG_SELFTEST_FAIL, "could not create the file in /rides");
+        SelfTestReset();
+        return;
+    }
+
+    // Copied because SelfTestReset clears s_name before the message is built.
+    char name[sizeof(s_name)];
+    snprintf(name, sizeof(name), "%s", s_name);
+
+    for (int i = 0; i < SELFTEST_POINTS; i++) {
+        point.second = (uint8_t)i;
+        point.lat += 0.0002;
+        point.bpm = SELFTEST_BPM[i];
+        if (!AppendPoint(point)) {
+            SelfTestFinish(RIDELOG_SELFTEST_FAIL, "%s: write failed after %d of %d points", name,
+                           i, SELFTEST_POINTS);
+            SelfTestReset();
+            return;
+        }
+    }
+
+    s_file.flush();
+    const uint32_t bytes = (uint32_t)s_file.size();
+    s_file.close();
+
+    size_t points = 0;
+    size_t rates = 0;
+    bool closed = false;
+    if (!SelfTestVerify(name, &points, &rates, &closed)) {
+        SelfTestFinish(RIDELOG_SELFTEST_FAIL, "%s: written, but will not reopen for reading", name);
+        SelfTestReset();
+        return;
+    }
+
+    SelfTestReset();
+
+    if (points != SELFTEST_POINTS || rates != 2 || !closed) {
+        SelfTestFinish(RIDELOG_SELFTEST_FAIL, "%s: read back %u/%d points, %u/2 rates, %s",
+                       name, (unsigned)points, SELFTEST_POINTS, (unsigned)rates,
+                       closed ? "closed" : "no closing tag");
+        return;
+    }
+
+    SelfTestFinish(RIDELOG_SELFTEST_PASS, "%s: %d points, 2 heart rates, %u bytes, read back OK",
+                   name, SELFTEST_POINTS, (unsigned)bytes);
+}
+
 void WriterTask(void *pv) {
     (void)pv;
 
@@ -195,8 +379,13 @@ void WriterTask(void *pv) {
         // Waking on the flush interval rather than blocking forever means a
         // ride that ends mid-interval still gets its last points committed.
         if (xQueueReceive(s_queue, &point, pdMS_TO_TICKS(FLUSH_INTERVAL_MS)) == pdTRUE) {
+            if (point.selftest) {
+                RunSelfTest();
+                continue;
+            }
+
             if (!s_failed && !s_recording) {
-                if (!OpenFile(point)) {
+                if (!OpenFile(point, "Pegasus ride")) {
                     // Giving up for this power-on rather than retrying. A card
                     // that would not take the file is a steady state, not a
                     // transient, and retrying per point would spend the ride
@@ -292,6 +481,7 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // A strap that has dropped out must not stamp its last reading onto every
     // later point: past BPM_MAX_AGE_MS the sample is simply absent.
     point.bpm = ((now - s_last_bpm_ms) < BPM_MAX_AGE_MS) ? s_last_bpm : 0;
+    point.selftest = false;
 
     // Never block the GPS task on a full queue: dropping a breadcrumb is a
     // cosmetic loss, stalling the publish path is not.
@@ -325,10 +515,52 @@ void RideLog_Init() {
 
     // Core 0 with the other background work, at a priority below the GPS
     // reader: a slow card must never delay parsing the fixes themselves.
-    xTaskCreatePinnedToCore(WriterTask, "ridelog", 4096, nullptr, 1, nullptr, 0);
+    // 6KB, not 4KB: the self-test nests a 512-byte header buffer, a 320-byte
+    // line buffer, a GPX parser and a read buffer inside the same task, under
+    // whatever the SD driver uses.
+    xTaskCreatePinnedToCore(WriterTask, "ridelog", 6144, nullptr, 1, nullptr, 0);
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
     DataCenter_Subscribe(TOPIC_HEART_RATE, &s_hr_account);
+}
+
+bool RideLog_SelfTestStart() {
+    // No queue means no card was present at boot, and hot-plug is not
+    // supported anywhere in this firmware.
+    if (s_queue == nullptr) {
+        SelfTestFinish(RIDELOG_SELFTEST_FAIL, "no SD card was mounted at boot");
+        return false;
+    }
+    // The test drives the recorder's own file handle and counters, so running
+    // it over a live ride would close that ride's file and lose the rest of it.
+    if (s_recording) {
+        SelfTestFinish(RIDELOG_SELFTEST_FAIL, "a ride is being recorded -- not while it is");
+        return false;
+    }
+    if (s_selftest == RIDELOG_SELFTEST_RUNNING) {
+        return false;
+    }
+
+    RideLogPoint_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.selftest = true;
+    if (xQueueSend(s_queue, &cmd, 0) != pdTRUE) {
+        SelfTestFinish(RIDELOG_SELFTEST_FAIL, "the writer is busy -- try again");
+        return false;
+    }
+
+    // Set here rather than in the writer task so the panel says something the
+    // moment the button is released, even if the card takes a second.
+    SelfTestFinish(RIDELOG_SELFTEST_RUNNING, "writing to the card...");
+    return true;
+}
+
+RideLogSelfTest_t RideLog_SelfTestState() {
+    return s_selftest;
+}
+
+const char *RideLog_SelfTestMessage() {
+    return s_selftest_msg;
 }
 
 bool RideLog_IsRecording() {

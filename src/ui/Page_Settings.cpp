@@ -27,12 +27,14 @@ constexpr uint32_t COLOR_VALUE = 0xFFFFFF;
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;
 constexpr uint32_t COLOR_PANEL = 0x18232E;
 constexpr uint32_t COLOR_DANGER = 0xFF6B6B;
+constexpr uint32_t COLOR_OK = 0x7CE38B;
 
 lv_obj_t *s_brightness_value = nullptr;
 lv_obj_t *s_unit_value = nullptr;
 lv_obj_t *s_trip_status = nullptr;
 lv_obj_t *s_uptime_value = nullptr;
 lv_obj_t *s_ridelog_value = nullptr;
+lv_obj_t *s_selftest_status = nullptr;
 lv_obj_t *s_hrlink_value = nullptr;
 lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
@@ -313,6 +315,38 @@ void OnRestartClicked(lv_event_t *e) {
     ESP.restart();
 }
 
+// Both the button and the one-second timer paint this, because the writer
+// task may answer within a millisecond or after the card has thought about it
+// for a while, and neither caller knows which.
+void RefreshSelfTestStatus() {
+    if (s_selftest_status == nullptr) {
+        return;
+    }
+
+    uint32_t color = COLOR_CAPTION;
+    switch (RideLog_SelfTestState()) {
+        case RIDELOG_SELFTEST_PASS:    color = COLOR_OK;      break;
+        case RIDELOG_SELFTEST_FAIL:    color = COLOR_DANGER;  break;
+        case RIDELOG_SELFTEST_RUNNING: color = COLOR_ACCENT;  break;
+        default: break;
+    }
+    lv_obj_set_style_text_color(s_selftest_status, lv_color_hex(color), 0);
+
+    const char *msg = RideLog_SelfTestMessage();
+    lv_label_set_text(s_selftest_status,
+                      (msg != nullptr && msg[0] != '\0')
+                          ? msg
+                          : "Writes three points to /rides and reads them back");
+}
+
+void OnSelfTestClicked(lv_event_t *e) {
+    (void)e;
+    // The result is reported through the status label either way, so the
+    // return value adds nothing here.
+    RideLog_SelfTestStart();
+    RefreshSelfTestStatus();
+}
+
 void InfoTimerCallback(lv_timer_t *timer) {
     (void)timer;
 
@@ -360,6 +394,8 @@ void InfoTimerCallback(lv_timer_t *timer) {
                                   BLE_TBT_RestartCount() > 0 ? " (restarted)" : "");
         }
     }
+
+    RefreshSelfTestStatus();
 
     if (s_ridelog_value != nullptr) {
         if (RideLog_IsRecording()) {
@@ -728,6 +764,31 @@ void PageSettings::onViewLoad() {
     lv_label_set_long_mode(s_trip_status, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_trip_status, LV_PCT(100));
 
+    // ---- Ride log self-test ----
+    // Recording only starts on a GPS fix, and no GNSS module has ever been
+    // attached, so without this the first time anything writes to the card
+    // would be the first real ride -- which is the worst moment to find out
+    // the card is read-only, full, or not writable at this bus width.
+    lv_obj_t *selftest_card = MakeCard(body, "RIDE LOG");
+    lv_obj_t *selftest_btn = lv_btn_create(selftest_card);
+    lv_obj_set_width(selftest_btn, LV_PCT(100));
+    lv_obj_set_style_bg_color(selftest_btn, lv_color_hex(0x14242E), 0);
+    lv_obj_set_style_bg_color(selftest_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(selftest_btn, 0, 0);
+    lv_obj_add_event_cb(selftest_btn, OnSelfTestClicked, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *selftest_label = lv_label_create(selftest_btn);
+    lv_label_set_text(selftest_label, LV_SYMBOL_SD_CARD "  Test SD write");
+    lv_obj_set_style_text_font(selftest_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(selftest_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_center(selftest_label);
+
+    s_selftest_status = lv_label_create(selftest_card);
+    lv_obj_set_style_text_font(s_selftest_status, &lv_font_montserrat_10, 0);
+    lv_label_set_long_mode(s_selftest_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_selftest_status, LV_PCT(100));
+    RefreshSelfTestStatus();
+
     // ---- Device info ----
     // Read-only diagnostics. Worth more than usual on this board: serial is
     // unusable over USB-Serial-JTAG here, so the panel is the only place these
@@ -837,6 +898,7 @@ void PageSettings::onViewUnload() {
     s_trip_status = nullptr;
     s_uptime_value = nullptr;
     s_ridelog_value = nullptr;
+    s_selftest_status = nullptr;
     s_hrlink_value = nullptr;
     s_tbtlink_value = nullptr;
     s_heap_value = nullptr;
