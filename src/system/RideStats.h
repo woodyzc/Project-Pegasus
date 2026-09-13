@@ -28,6 +28,12 @@ void RideStats_Reset();
 float RideStats_AscentM();
 float RideStats_DescentM();
 
+// Height above sea level, smoothed by the same filter that decides what counts
+// as climbing. False before any usable fix, so the panel can say "--" rather
+// than claim the rider is at sea level.
+bool RideStats_HaveAltitude();
+float RideStats_AltitudeM();
+
 // Seconds the rider was actually moving, which is what the average speed is
 // divided by. Not elapsed time: a ride that stopped for lunch reports the
 // riding, and the two differ by however long lunch was.

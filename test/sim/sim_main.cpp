@@ -318,7 +318,33 @@ int main(int argc, char **argv) {
     snprintf(path, sizeof(path), "%s/05-worst-case-strings.ppm", out_dir);
     Render(&page, path);
 
-    // ---- Scene 6: the report a ride ends with ----
+    // ---- Scene 6: the second data page ----
+    // Restored to a plausible mid-ride first, because scene 5 leaves the speed
+    // cell at its worst case and this page is about what a rider reads at
+    // rest. Every figure at its widest all the same: a duration past six
+    // hours, four-digit altitude and descent.
+    {
+        g_sim.trip_km = 148.72;
+        g_sim.avg_kmh = 23.1f;
+        g_sim.max_kmh = 62.8f;
+        g_sim.avg_bpm = 131;
+        g_sim.moving_seconds = 6 * 3600 + 26 * 60 + 14;
+        g_sim.gps.speed = 21.4f / 3.6f;
+        g_sim.gps.num_sv = 11;
+        g_sim.battery.percent = 41;
+        g_sim.have_altitude = true;
+        g_sim.altitude_m = 1247.0f;
+        g_sim.ascent_m = 2140.0f;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        Sim_Publish(TOPIC_BATTERY, nullptr, 0);
+
+        Page_Dashboard_ShowSecondPageForTest(true);
+        snprintf(path, sizeof(path), "%s/07-second-page.ppm", out_dir);
+        Render(&page, path);
+        Page_Dashboard_ShowSecondPageForTest(false);
+    }
+
+    // ---- Scene 7: the report a ride ends with ----
     // Every figure at its widest: a three-digit distance, a duration past an
     // hour, a four-digit climb and a filename that fills the line. The whole
     // panel has to hold this without the Done button falling off the bottom.
@@ -336,7 +362,7 @@ int main(int argc, char **argv) {
         RideSummary_t summary;
         RideSummary_Capture(&summary);
         Overlay_RideSummary_Show(&summary, true);
-        snprintf(path, sizeof(path), "%s/06-ride-summary.ppm", out_dir);
+        snprintf(path, sizeof(path), "%s/08-ride-summary.ppm", out_dir);
         Render(&page, path);
     }
 

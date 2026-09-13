@@ -12,6 +12,7 @@
 #include "../system/PageManager/PageManager.h"
 #include "../navigation/RideLog.h"
 #include "../system/RideStats.h"
+#include "../system/RideSummary.h"
 #include "../system/Settings.h"
 #include "../system/Trip.h"
 #include "../navigation/GpxTrack.h"
@@ -136,6 +137,33 @@ lv_obj_t *s_incline_cell = nullptr;
 // an IMU. Two equal rows say that honestly; a big figure over a small one
 // would claim a ranking that changes with the hardware.
 lv_obj_t *s_ascent_label = nullptr;
+
+// ---- The second data page ----
+// One opaque container that covers the navigation region and the four metric
+// cells when shown, leaving the status line above it and the zone bar below.
+//
+// Covering rather than hiding-and-showing, because the alternative is holding
+// a handle to every object on the first page and getting one of them wrong.
+// The first page's labels keep updating underneath; that costs a few string
+// formats a second and guarantees the two can never disagree about a figure
+// they both show.
+lv_obj_t *s_page2 = nullptr;
+bool s_on_page2 = false;
+
+lv_obj_t *s_p2_ridetime = nullptr;
+lv_obj_t *s_p2_clock = nullptr;
+lv_obj_t *s_p2_altitude = nullptr;
+lv_obj_t *s_p2_descent = nullptr;
+lv_obj_t *s_p2_avgspeed = nullptr;
+lv_obj_t *s_p2_avgspeed_unit = nullptr;
+lv_obj_t *s_p2_avghr = nullptr;
+lv_obj_t *s_p2_battery = nullptr;
+lv_obj_t *s_p2_sats = nullptr;
+lv_obj_t *s_page_dots[2] = {nullptr, nullptr};
+
+// Defined further down, beside the rest of the second page. Declared here
+// because the once-a-second refresh sits above it and calls it.
+void RenderPage2();
 lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
 // A triangle riding above the bar, pointing down at the rider's position. The
@@ -1082,6 +1110,11 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_tbt_last_ms = 0;
     }
 
+    // Refreshed whether or not it is showing. A hidden label costs one string
+    // format a second and removes any chance of the page being a tick stale
+    // the moment it appears.
+    RenderPage2();
+
     if (s_imu_dirty) {
         s_imu_dirty = false;
         IMU_Data_t imu;
@@ -1125,6 +1158,158 @@ Account s_imu_account("Page_Dashboard/IMU", OnImuPublished);
 Account s_battery_account("Page_Dashboard/Battery", OnBatteryPublished);
 Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 
+// One cell of the second page: caption, optional unit, and a figure.
+//
+// Deliberately the same anatomy as MakeCell on the first page -- caption top
+// left, unit top right, figure bottom left -- so the two pages read as one
+// instrument rather than two designs. Only the sizes differ, because these
+// cells are 120px wide rather than 150 and the figures here are read at rest
+// rather than at speed.
+lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
+                     const char *caption, const char *unit, lv_obj_t **out_unit) {
+    lv_obj_t *cell = lv_obj_create(parent);
+    lv_obj_set_size(cell, w, h);
+    lv_obj_set_pos(cell, x, y);
+    lv_obj_set_style_bg_color(cell, lv_color_hex(COLOR_CELL_BG), 0);
+    lv_obj_set_style_border_width(cell, 0, 0);
+    lv_obj_set_style_radius(cell, 0, 0);
+    lv_obj_set_style_pad_all(cell, 0, 0);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *label = lv_label_create(cell);
+    lv_label_set_text(label, caption);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, CELL_PAD, CELL_CAPTION_Y);
+
+    if (unit != nullptr) {
+        lv_obj_t *u = lv_label_create(cell);
+        lv_label_set_text(u, unit);
+        lv_obj_set_style_text_font(u, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_color(u, lv_color_hex(COLOR_CAPTION), 0);
+        lv_obj_align(u, LV_ALIGN_TOP_RIGHT, -CELL_PAD, CELL_CAPTION_Y);
+        if (out_unit != nullptr) {
+            *out_unit = u;
+        }
+    }
+
+    lv_obj_t *value = lv_label_create(cell);
+    lv_label_set_text(value, "--");
+    // 24pt, not the first page's 28. "6:26:14" is seven glyphs and the widest
+    // thing either page has to hold; at 28 it runs out of a 120px cell.
+    lv_obj_set_style_text_font(value, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
+    lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
+    return value;
+}
+
+void RenderPageDots() {
+    for (int i = 0; i < 2; i++) {
+        if (s_page_dots[i] == nullptr) {
+            continue;
+        }
+        const bool here = (i == (s_on_page2 ? 1 : 0));
+        lv_obj_set_style_bg_color(s_page_dots[i],
+                                  lv_color_hex(here ? COLOR_ACCENT : COLOR_CELL_BORDER), 0);
+    }
+}
+
+void ShowPage2(bool on) {
+    if (s_page2 == nullptr || on == s_on_page2) {
+        return;
+    }
+    s_on_page2 = on;
+    if (on) {
+        lv_obj_clear_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
+    }
+    RenderPageDots();
+}
+
+// A horizontal swipe anywhere flips between the pages.
+//
+// Ignored when it came from the inline map, which does its own dragging: a
+// rider panning the map sideways means the map, not the page, and LVGL sends
+// both the drag and a gesture for the same finger.
+void OnDashboardGesture(lv_event_t *e) {
+    const lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+    if (dir != LV_DIR_LEFT && dir != LV_DIR_RIGHT) {
+        return;
+    }
+    if (s_nav_cell != nullptr && !s_on_page2) {
+        for (lv_obj_t *o = lv_event_get_target(e); o != nullptr; o = lv_obj_get_parent(o)) {
+            if (o == s_nav_cell) {
+                return;
+            }
+        }
+    }
+    ShowPage2(dir == LV_DIR_LEFT);
+}
+
+void RenderPage2() {
+    if (s_page2 == nullptr) {
+        return;
+    }
+
+    char buf[RIDE_SUMMARY_TIME_MAX];
+    if (RideSummary_FormatDuration((uint32_t)RideStats_MovingSeconds(), buf, sizeof(buf))) {
+        lv_label_set_text(s_p2_ridetime, buf);
+    }
+
+    // The same string the header shows, taken from the same label rather than
+    // formatted again: two clocks a second apart on one screen is the kind of
+    // thing a rider notices and cannot unsee.
+    if (s_clock_label != nullptr) {
+        lv_label_set_text(s_p2_clock, lv_label_get_text(s_clock_label));
+    }
+
+    if (RideStats_HaveAltitude()) {
+        lv_label_set_text_fmt(s_p2_altitude, "%d", (int)(RideStats_AltitudeM() + 0.5f));
+    } else {
+        lv_label_set_text(s_p2_altitude, "--");
+    }
+    lv_label_set_text_fmt(s_p2_descent, "%d", (int)(RideStats_DescentM() + 0.5f));
+
+    lv_label_set_text_fmt(s_p2_avgspeed, "%.1f",
+                          (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
+    lv_label_set_text(s_p2_avgspeed_unit, Settings_SpeedUnitLabel());
+
+    const uint8_t avg_bpm = RideStats_AvgBpm();
+    if (avg_bpm > 0) {
+        lv_label_set_text_fmt(s_p2_avghr, "%u", (unsigned)avg_bpm);
+        lv_obj_set_style_text_color(
+            s_p2_avghr,
+            lv_color_hex(ZONE_COLORS[HrZone_Index(avg_bpm, Settings_GetHrRestBpm(),
+                                                  Settings_GetHrMaxBpm())]),
+            0);
+    } else {
+        lv_label_set_text(s_p2_avghr, "--");
+        lv_obj_set_style_text_color(s_p2_avghr, lv_color_hex(COLOR_VALUE), 0);
+    }
+
+    Battery_t battery;
+    if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
+        lv_label_set_text_fmt(s_p2_battery, "%u", (unsigned)battery.percent);
+        lv_obj_set_style_text_color(
+            s_p2_battery,
+            lv_color_hex((!battery.on_usb && battery.percent <= 10) ? COLOR_NAV_OFF_ROUTE
+                                                                    : COLOR_VALUE),
+            0);
+    }
+
+    GPS_Info_t gps;
+    if (DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps))) {
+        // Satellites used in the solution, not seen. A rider waiting for a fix
+        // wants the number that has to reach four, and "seen" reaches four
+        // long before the receiver can solve anything.
+        lv_label_set_text_fmt(s_p2_sats, "%u", (unsigned)gps.num_sv);
+        lv_obj_set_style_text_color(
+            s_p2_sats, lv_color_hex(gps.fix_valid ? COLOR_VALUE : COLOR_CAPTION), 0);
+    }
+}
+
 } // namespace
 
 void PageDashboard::onViewWillAppear() {
@@ -1140,6 +1325,10 @@ void PageDashboard::onViewDidDisappear() {
     if (s_nav_is_map) {
         MapView_SaveCamera(&s_map_view);
     }
+}
+
+void Page_Dashboard_ShowSecondPageForTest(bool on) {
+    ShowPage2(on);
 }
 
 bool Page_Dashboard_StartNewRide() {
@@ -1557,6 +1746,88 @@ void PageDashboard::onViewLoad() {
     lv_obj_set_style_text_color(s_ascent_label, lv_color_hex(COLOR_ACCENT), 0);
     lv_label_set_text(s_ascent_label, "0m");
 
+    // ---- The second data page ----
+    // Covers the navigation region and the four cells, leaving the status line
+    // and the zone bar. Eight cells of 120x69: four rows between the status
+    // line at 28 and the zone marker at 304.
+    {
+        const lv_coord_t P2_Y = STATUS_H;
+        const lv_coord_t P2_H = ZONE_MARK_Y - P2_Y;    // 276
+        const lv_coord_t P2_COL_W = SCREEN_W / 2;      // 120
+        const lv_coord_t P2_ROW_H = P2_H / 4;          // 69
+
+        s_page2 = lv_obj_create(parent);
+        lv_obj_set_pos(s_page2, 0, P2_Y);
+        lv_obj_set_size(s_page2, SCREEN_W, P2_H);
+        lv_obj_set_style_bg_color(s_page2, lv_color_hex(COLOR_BG), 0);
+        lv_obj_set_style_bg_opa(s_page2, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_page2, 0, 0);
+        lv_obj_set_style_radius(s_page2, 0, 0);
+        lv_obj_set_style_pad_all(s_page2, 0, 0);
+        lv_obj_clear_flag(s_page2, LV_OBJ_FLAG_SCROLLABLE);
+        // Clickable, and deliberately so: it swallows touches meant for the
+        // page underneath. Without it a tap here would reach the map tile it
+        // is covering and open the full-screen route page.
+        lv_obj_add_flag(s_page2, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
+
+        // What is here is what the first page has no room for, rather than the
+        // same figures again. The one repeat is the clock, because a page
+        // covering the header's neighbourhood that did not show the time would
+        // send the rider back for it.
+        s_p2_ridetime = MakeP2Cell(s_page2, 0, 0, P2_COL_W, P2_ROW_H, "RIDE TIME", nullptr,
+                                   nullptr);
+        s_p2_clock = MakeP2Cell(s_page2, P2_COL_W, 0, P2_COL_W, P2_ROW_H, "CLOCK", nullptr,
+                                nullptr);
+
+        s_p2_altitude = MakeP2Cell(s_page2, 0, P2_ROW_H, P2_COL_W, P2_ROW_H, "ALTITUDE", "m",
+                                   nullptr);
+        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, P2_ROW_H, P2_COL_W, P2_ROW_H, "DESCENT", "m",
+                                  nullptr);
+
+        s_p2_avgspeed = MakeP2Cell(s_page2, 0, 2 * P2_ROW_H, P2_COL_W, P2_ROW_H, "AVG SPEED",
+                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit);
+        s_p2_avghr = MakeP2Cell(s_page2, P2_COL_W, 2 * P2_ROW_H, P2_COL_W, P2_ROW_H, "AVG HR",
+                                "bpm", nullptr);
+
+        s_p2_battery = MakeP2Cell(s_page2, 0, 3 * P2_ROW_H, P2_COL_W, P2_ROW_H, "BATTERY", "%",
+                                  nullptr);
+        s_p2_sats = MakeP2Cell(s_page2, P2_COL_W, 3 * P2_ROW_H, P2_COL_W, P2_ROW_H, "SATELLITES",
+                               nullptr, nullptr);
+
+        // The same hairlines the first page draws, so the grids line up.
+        for (int r = 1; r < 4; r++) {
+            lv_obj_t *line = lv_obj_create(s_page2);
+            lv_obj_remove_style_all(line);
+            lv_obj_set_pos(line, 0, r * P2_ROW_H - 1);
+            lv_obj_set_size(line, SCREEN_W, 1);
+            lv_obj_set_style_bg_color(line, lv_color_hex(COLOR_CELL_BORDER), 0);
+            lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
+        }
+        lv_obj_t *vline = lv_obj_create(s_page2);
+        lv_obj_remove_style_all(vline);
+        lv_obj_set_pos(vline, P2_COL_W - 1, 0);
+        lv_obj_set_size(vline, 1, P2_H);
+        lv_obj_set_style_bg_color(vline, lv_color_hex(COLOR_CELL_BORDER), 0);
+        lv_obj_set_style_bg_opa(vline, LV_OPA_COVER, 0);
+    }
+
+    // Which page is showing. Two dots beside the gear, where there is room and
+    // where the eye already goes for the settings button.
+    for (int i = 0; i < 2; i++) {
+        s_page_dots[i] = lv_obj_create(parent);
+        lv_obj_remove_style_all(s_page_dots[i]);
+        lv_obj_set_size(s_page_dots[i], 5, 5);
+        lv_obj_set_pos(s_page_dots[i], 30 + i * 9, 12);
+        lv_obj_set_style_radius(s_page_dots[i], 3, 0);
+        lv_obj_set_style_bg_opa(s_page_dots[i], LV_OPA_COVER, 0);
+    }
+    RenderPageDots();
+
+    // Swipe left for the second page, right for the first.
+    lv_obj_add_event_cb(parent, OnDashboardGesture, LV_EVENT_GESTURE, this);
+
+
     // ---- Dividing lines ----
     // Internal joins only. Nothing is drawn at x=0, x=239, y=0 or y=319, so
     // each widget runs into the screen edge with no frame around it.
@@ -1639,6 +1910,15 @@ void PageDashboard::onViewLoad() {
     DataCenter_Subscribe(TOPIC_BATTERY, &s_battery_account);
     DataCenter_Subscribe(TOPIC_NAV_TBT, &s_tbt_account);
 
+    // Last thing built, so it is the last sibling and covers everything on the
+    // first page. The hairlines and the zone block are created after the
+    // container itself, and without this they draw straight across the second
+    // page -- stray rules cutting through cells that have their own.
+    //
+    // The status line and the zone bar are outside its rectangle, so raising
+    // it does not hide either.
+    lv_obj_move_foreground(s_page2);
+
     s_refresh_timer = lv_timer_create(RefreshTimerCallback, 100, nullptr);
 }
 
@@ -1682,6 +1962,19 @@ void PageDashboard::onViewUnload() {
     s_trip_unit_label = nullptr;
     s_incline_cell = nullptr;
     s_ascent_label = nullptr;
+    s_page2 = nullptr;
+    s_on_page2 = false;
+    s_p2_ridetime = nullptr;
+    s_p2_clock = nullptr;
+    s_p2_altitude = nullptr;
+    s_p2_descent = nullptr;
+    s_p2_avgspeed = nullptr;
+    s_p2_avgspeed_unit = nullptr;
+    s_p2_avghr = nullptr;
+    s_p2_battery = nullptr;
+    s_p2_sats = nullptr;
+    s_page_dots[0] = nullptr;
+    s_page_dots[1] = nullptr;
     s_nav_cell = nullptr;
     s_nav_is_map = false;
     for (int i = 0; i < HR_ZONE_COUNT; i++) {

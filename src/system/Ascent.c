@@ -87,3 +87,11 @@ double Ascent_Metres(const Ascent_t *a) {
 double Ascent_DescentMetres(const Ascent_t *a) {
     return (a != NULL) ? a->descent_m : 0.0;
 }
+
+bool Ascent_HasAltitude(const Ascent_t *a) {
+    return (a != NULL) && a->has_smooth;
+}
+
+double Ascent_AltitudeMetres(const Ascent_t *a) {
+    return (a != NULL && a->has_smooth) ? (double)a->smooth_m : 0.0;
+}

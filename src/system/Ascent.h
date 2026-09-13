@@ -93,6 +93,13 @@ bool Ascent_Feed(Ascent_t *a, float alt_m, uint32_t time_ms);
 double Ascent_Metres(const Ascent_t *a);
 double Ascent_DescentMetres(const Ascent_t *a);
 
+// The current altitude, smoothed and filtered by the rules above -- which is
+// the only altitude worth showing a rider. The receiver's raw figure wanders
+// several metres between consecutive good fixes, so a display fed from it
+// flickers through a range the rider never climbed.
+bool Ascent_HasAltitude(const Ascent_t *a);
+double Ascent_AltitudeMetres(const Ascent_t *a);
+
 #ifdef __cplusplus
 }
 #endif

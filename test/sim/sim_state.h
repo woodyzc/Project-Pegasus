@@ -18,6 +18,8 @@ struct SimState {
     uint8_t max_bpm = 0;
     float ascent_m = 0.0f;
     double moving_seconds = 0.0;
+    float altitude_m = 0.0f;
+    bool have_altitude = false;
     uint32_t log_points = 0;
     const char *log_file = "";
     bool track_up = false;

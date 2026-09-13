@@ -32,3 +32,8 @@ public:
 // still reset, so the caller has to say that the file did not split rather
 // than report a clean start.
 bool Page_Dashboard_StartNewRide();
+
+// Shows or hides the second data page. Exists for the simulator, which cannot
+// swipe: the renderer drives the same function the gesture does, so the frame
+// it produces is the frame a rider gets.
+void Page_Dashboard_ShowSecondPageForTest(bool on);
