@@ -7,6 +7,9 @@
 
 namespace {
 
+// How much of the file to read before letting other tasks run.
+constexpr uint32_t ROADMAP_READ_CHUNK = 64u * 1024u;
+
 // The whole file, held in PSRAM. Roads are read once and drawn many times, so
 // the alternative -- seeking the card on every frame -- would trade the one
 // advantage this approach has over tiles.
@@ -107,6 +110,12 @@ bool BuildGrid() {
     }
 
     for (uint32_t i = 0; i < s_ways; i++) {
+        // Yield periodically: this is called from the route picker's event
+        // callback, and starving Core 1 for a second reads as a hang to the
+        // task watchdog.
+        if ((i & 0x0FFF) == 0x0FFF) {
+            delay(1);
+        }
         const int c0 = GridCol(s_way_bounds[i * 4 + 1]);
         const int c1 = GridCol(s_way_bounds[i * 4 + 3]);
         const int r0 = GridRow(s_way_bounds[i * 4 + 0]);
@@ -136,6 +145,12 @@ bool BuildGrid() {
     memcpy(cursor, s_cell_start, cells * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < s_ways; i++) {
+        // Yield periodically: this is called from the route picker's event
+        // callback, and starving Core 1 for a second reads as a hang to the
+        // task watchdog.
+        if ((i & 0x0FFF) == 0x0FFF) {
+            delay(1);
+        }
         const int c0 = GridCol(s_way_bounds[i * 4 + 1]);
         const int c1 = GridCol(s_way_bounds[i * 4 + 3]);
         const int r0 = GridRow(s_way_bounds[i * 4 + 0]);
@@ -283,7 +298,30 @@ bool RoadMap_Load(const char *path) {
         file.close();
         return false;
     }
-    const uint32_t got = file.read(s_blob, size);
+    // Read in chunks, yielding between them.
+    //
+    // One file.read() of the whole thing is simpler and trips the task
+    // watchdog: this is 1.8MB for Arlington over a card that trained at 1 bit,
+    // which is seconds, and RoadMap_LoadCovering is called from the route
+    // picker's event callback -- so those seconds are spent inside
+    // lv_timer_handler with nothing else on Core 1 able to run. The reset
+    // reason on the panel was "Task watchdog", which is exactly that and not a
+    // crash in any of this code.
+    //
+    // 64KB a chunk and a tick between: a 1.8MB file pays about 28ms in yields,
+    // and the UI is frozen for the read either way. What it must not do is
+    // starve the idle task for long enough to look like a hang to the system.
+    uint32_t got = 0;
+    while (got < size) {
+        const uint32_t want = (size - got > ROADMAP_READ_CHUNK) ? ROADMAP_READ_CHUNK
+                                                                : (size - got);
+        const uint32_t n = file.read(s_blob + got, want);
+        if (n == 0) {
+            break;
+        }
+        got += n;
+        delay(1);
+    }
     file.close();
     if (got != size) {
         Release();
@@ -311,6 +349,11 @@ bool RoadMap_Load(const char *path) {
     // rather than run off the end of the blob on the first draw.
     uint32_t at = 24;
     for (uint32_t i = 0; i < s_ways; i++) {
+        // Same reason as the read above. 25,000 ways of scattered PSRAM is
+        // not instant, and this runs in the same event callback.
+        if ((i & 0x0FFF) == 0x0FFF) {
+            delay(1);
+        }
         if (at + 4 > s_bytes) {
             Release();
             return false;

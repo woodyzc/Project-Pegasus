@@ -187,6 +187,9 @@ bool GpxTrack_Load(const char *path) {
     uint8_t chunk[512];
     int read_bytes;
     while ((read_bytes = file.read(chunk, sizeof(chunk))) > 0) {
+        // A large .gpx is read from the route picker's event callback, on the
+        // same task that draws. Chunked already; it just never yielded.
+        delay(1);
         for (int i = 0; i < read_bytes; i++) {
             double lat;
             double lon;
