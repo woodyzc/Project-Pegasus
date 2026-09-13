@@ -176,7 +176,6 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         // The trail stays drawn, framed on itself -- only the rider marker is
         // meaningless without a fix, and MapView hides it.
         MapView_SetPosition(&s_view, &gps);
-    RoadView_Refresh();
         RoadView_Refresh();
         lv_label_set_text(s_status_label, "Waiting for fix");
         lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
