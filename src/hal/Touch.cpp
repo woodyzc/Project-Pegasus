@@ -32,9 +32,11 @@ static constexpr bool TOUCH_INVERT_Y = false;
 // glass, the corners never reach 0 or the last column, and a control in the
 // corner becomes unreachable no matter how large its touch area is made.
 //
-// To correct it, press each corner with the touch test on the settings page,
-// read the extremes it reports, and put them here. Everything between is
-// linear, so four numbers are the whole calibration.
+// To correct it, find the extremes the panel actually reports at each corner
+// and put them here; everything between is linear, so four numbers are the
+// whole calibration. There was a touch test on the settings page for reading
+// them off, removed once the panel was confirmed fine -- a diagnostic nobody
+// needs is clutter on a screen this size.
 //
 // Note there is no pixel 240 or 320. A 240-wide display ends at 239, and a
 // mapping that produced 240 would be pointing one column past the screen.
