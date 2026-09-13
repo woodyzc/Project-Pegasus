@@ -383,6 +383,41 @@ lv_obj_t *MakeInfoRow(lv_obj_t *card, const char *label, const char *value) {
 
 } // namespace
 
+namespace {
+
+lv_obj_t *s_touch_value = nullptr;
+lv_obj_t *s_touch_pad = nullptr;
+lv_obj_t *s_touch_dot = nullptr;
+
+void OnTouchPadPressed(lv_event_t *e) {
+    (void)e;
+    if (s_touch_pad == nullptr || s_touch_value == nullptr) {
+        return;
+    }
+    lv_indev_t *indev = lv_indev_get_act();
+    if (indev == nullptr) {
+        return;
+    }
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    // Screen coordinates, which is what the calibration in Touch.cpp produces
+    // and therefore what has to be checked. The pad's own corners are the
+    // reference: reaching 0 and 239 is the whole question.
+    lv_area_t area;
+    lv_obj_get_coords(s_touch_pad, &area);
+    lv_label_set_text_fmt(s_touch_value, "x %d  y %d", (int)p.x, (int)p.y);
+
+    if (s_touch_dot != nullptr) {
+        lv_obj_clear_flag(s_touch_dot, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(s_touch_dot, (lv_coord_t)(p.x - area.x1 - 4),
+                       (lv_coord_t)(p.y - area.y1 - 4));
+    }
+}
+
+} // namespace
+
 void PageSettings::onViewLoad() {
     lv_obj_t *parent = _root;
     lv_obj_set_style_bg_color(parent, lv_color_hex(COLOR_BG), 0);
@@ -820,6 +855,45 @@ void PageSettings::onViewLoad() {
 
     s_uptime_value = MakeInfoRow(info_card, "Uptime", "--");
     s_heap_value = MakeInfoRow(info_card, "Memory", "--");
+
+    // ---- Touch test ----
+    // Press it and it reports where the panel thinks the press landed, and how
+    // far that is from the pad's own corners.
+    //
+    // The four calibration numbers in Touch.cpp have to come from somewhere,
+    // and the alternative to measuring them is guessing -- which on a board
+    // that does not match its own documentation is how a working mapping gets
+    // replaced by a broken one. Pressing the four corners of this pad gives
+    // the extremes the digitizer can actually reach.
+    {
+        lv_obj_t *card = MakeCard(parent, "TOUCH TEST");
+
+        s_touch_value = lv_label_create(card);
+        lv_obj_set_style_text_font(s_touch_value, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_touch_value, lv_color_hex(COLOR_VALUE), 0);
+        lv_label_set_text(s_touch_value, "press the pad below");
+
+        s_touch_pad = lv_obj_create(card);
+        lv_obj_set_size(s_touch_pad, lv_pct(100), 120);
+        lv_obj_set_style_bg_color(s_touch_pad, lv_color_hex(0x0D141A), 0);
+        lv_obj_set_style_border_color(s_touch_pad, lv_color_hex(COLOR_ACCENT), 0);
+        lv_obj_set_style_border_width(s_touch_pad, 1, 0);
+        lv_obj_set_style_radius(s_touch_pad, 6, 0);
+        lv_obj_clear_flag(s_touch_pad, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_touch_pad, LV_OBJ_FLAG_CLICKABLE);
+        // PRESSING, not CLICKED: dragging a finger into a corner is how the
+        // extremes get found, and a click only fires where the finger lifts.
+        lv_obj_add_event_cb(s_touch_pad, OnTouchPadPressed, LV_EVENT_PRESSING, nullptr);
+        lv_obj_add_event_cb(s_touch_pad, OnTouchPadPressed, LV_EVENT_PRESSED, nullptr);
+
+        s_touch_dot = lv_obj_create(s_touch_pad);
+        lv_obj_set_size(s_touch_dot, 9, 9);
+        lv_obj_set_style_radius(s_touch_dot, 5, 0);
+        lv_obj_set_style_bg_color(s_touch_dot, lv_color_hex(COLOR_ACCENT), 0);
+        lv_obj_set_style_border_width(s_touch_dot, 0, 0);
+        lv_obj_clear_flag(s_touch_dot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_touch_dot, LV_OBJ_FLAG_HIDDEN);
+    }
 
     s_info_timer = lv_timer_create(InfoTimerCallback, 1000, nullptr);
     InfoTimerCallback(nullptr); // populate immediately rather than after 1s

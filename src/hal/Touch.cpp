@@ -23,6 +23,46 @@ static constexpr bool TOUCH_SWAP_XY = false;
 static constexpr bool TOUCH_INVERT_X = false;
 static constexpr bool TOUCH_INVERT_Y = false;
 
+// The raw range the panel actually produces, stretched onto the screen's.
+//
+// Identity by default -- 0..239 and 0..319 are the first and last pixels of a
+// 240x320 display, and the corner readings above say the controller already
+// reports very nearly that. The constants exist because "very nearly" is not
+// the same as "exactly": if the digitizer's active area is inset from the
+// glass, the corners never reach 0 or the last column, and a control in the
+// corner becomes unreachable no matter how large its touch area is made.
+//
+// To correct it, press each corner with the touch test on the settings page,
+// read the extremes it reports, and put them here. Everything between is
+// linear, so four numbers are the whole calibration.
+//
+// Note there is no pixel 240 or 320. A 240-wide display ends at 239, and a
+// mapping that produced 240 would be pointing one column past the screen.
+static constexpr uint16_t TOUCH_RAW_MIN_X = 0;
+static constexpr uint16_t TOUCH_RAW_MAX_X = TFT_WIDTH - 1;
+static constexpr uint16_t TOUCH_RAW_MIN_Y = 0;
+static constexpr uint16_t TOUCH_RAW_MAX_Y = TFT_HEIGHT - 1;
+
+// Maps one axis from the panel's range onto the screen's, and clamps.
+//
+// Clamping is not defensive decoration: a reading a few counts outside the
+// calibrated range lands off-screen, and LVGL will happily deliver a press at
+// a coordinate no widget occupies -- which is a tap that does nothing, the
+// hardest kind of fault to see.
+static uint16_t MapAxis(uint16_t raw, uint16_t raw_min, uint16_t raw_max, uint16_t span) {
+    if (raw_max <= raw_min) {
+        return 0;
+    }
+    if (raw <= raw_min) {
+        return 0;
+    }
+    if (raw >= raw_max) {
+        return (uint16_t)(span - 1);
+    }
+    const uint32_t scaled = (uint32_t)(raw - raw_min) * (uint32_t)(span - 1);
+    return (uint16_t)(scaled / (uint32_t)(raw_max - raw_min));
+}
+
 static bool ReadReg(uint8_t reg, uint8_t *buf, uint8_t len) {
     Wire.beginTransmission(FT6336_I2C_ADDR);
     Wire.write(reg);
@@ -89,7 +129,7 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
         y = TFT_HEIGHT - 1 - y;
     }
 
-    data->point.x = x;
-    data->point.y = y;
+    data->point.x = MapAxis(x, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, TFT_WIDTH);
+    data->point.y = MapAxis(y, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, TFT_HEIGHT);
     data->state = LV_INDEV_STATE_PR;
 }
