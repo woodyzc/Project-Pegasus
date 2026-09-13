@@ -98,6 +98,19 @@ class BleLink(context: Context) {
     var isConnected = false
         private set
 
+    // Whether the link is meant to be running at all.
+    //
+    // Every retry in this class is a postDelayed, and a delayed post outlives
+    // the thing that scheduled it. Without this, stopping while a scan was in
+    // flight left a pending runnable that called start() a few seconds later
+    // and brought the whole link back -- which is why the app could be stopped
+    // in TBT mode and not in GPX mode. In TBT the head unit advertises, the
+    // scan succeeds, and no retry is ever pending; in GPX it advertises
+    // nothing, so the app is permanently mid-retry and stopping never caught
+    // it at a moment when there was nothing queued.
+    @Volatile
+    private var running = false
+
     /** Called on state changes so the UI can show something honest. */
     var onStatus: ((String) -> Unit)? = null
 
@@ -114,10 +127,18 @@ class BleLink(context: Context) {
             return
         }
         if (isConnected || scanning.get()) return
+        running = true
         scanForDevice()
     }
 
     fun stop() {
+        // First, so anything that slips through below finds the door shut.
+        running = false
+        // Everything this class schedules goes through this handler, so one
+        // call cancels the lot: the scan timeout, the reconnect, the clock.
+        // Naming each runnable and removing them one by one is the version
+        // that quietly misses the next one somebody adds.
+        handler.removeCallbacksAndMessages(null)
         stopScan()
         gatt?.close()
         gatt = null
@@ -127,7 +148,6 @@ class BleLink(context: Context) {
         clockCharacteristic = null
         transfer = null
         isConnected = false
-        handler.removeCallbacks(clockTick)
     }
 
     /**
@@ -246,10 +266,10 @@ class BleLink(context: Context) {
 
         scanner.startScan(listOf(filter), settings, scanCallback)
         handler.postDelayed({
-            if (scanning.get() && !isConnected) {
+            if (running && scanning.get() && !isConnected) {
                 stopScan()
                 report("Not found; retrying")
-                handler.postDelayed({ start() }, RECONNECT_DELAY_MS)
+                handler.postDelayed({ if (running) start() }, RECONNECT_DELAY_MS)
             }
         }, SCAN_TIMEOUT_MS)
     }
@@ -269,7 +289,7 @@ class BleLink(context: Context) {
         override fun onScanFailed(errorCode: Int) {
             scanning.set(false)
             report("Scan failed ($errorCode)")
-            handler.postDelayed({ start() }, RECONNECT_DELAY_MS)
+            handler.postDelayed({ if (running) start() }, RECONNECT_DELAY_MS)
         }
     }
 
@@ -297,7 +317,7 @@ class BleLink(context: Context) {
                 g.close()
                 gatt = null
                 report("Disconnected; retrying")
-                handler.postDelayed({ start() }, RECONNECT_DELAY_MS)
+                handler.postDelayed({ if (running) start() }, RECONNECT_DELAY_MS)
             }
         }
 
