@@ -121,7 +121,7 @@ static void RenderGallery(PageDashboard *page, const char *out_dir) {
     g_sim.max_kmh = 51.3f;
     g_sim.avg_bpm = 142;
     g_sim.max_bpm = 176;
-    g_sim.ascent_m = 847.0f;
+    g_sim.ascent_m = 4988.0f; // four digits: the widest this cell must take
     g_sim.have_hr = true;
     g_sim.hr.bpm = 151;
 
@@ -270,6 +270,11 @@ int main(int argc, char **argv) {
             12400);
     Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
     Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
+    // A steep climb, so the ELEVATION cell is rendered with its widest
+    // plausible grade rather than the "--" this board will always show.
+    g_sim.have_imu = true;
+    g_sim.imu.pitch = 7.13f; // about +12.5%
+    Sim_Publish(TOPIC_IMU_DATA, nullptr, 0);
     snprintf(path, sizeof(path), "%s/03-mid-ride.ppm", out_dir);
     Render(&page, path);
 

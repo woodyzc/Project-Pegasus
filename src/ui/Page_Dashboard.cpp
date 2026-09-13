@@ -114,7 +114,6 @@ lv_obj_t *s_speed_label = nullptr;
 lv_obj_t *s_speed_unit_label = nullptr;
 lv_obj_t *s_trip_label = nullptr;
 lv_obj_t *s_trip_unit_label = nullptr;
-lv_obj_t *s_incline_unit_label = nullptr;
 lv_obj_t *s_clock_label = nullptr;
 lv_obj_t *s_clock_caption = nullptr;
 
@@ -129,15 +128,15 @@ lv_obj_t *s_speed_max_label = nullptr;
 lv_obj_t *s_hr_avg_label = nullptr;
 lv_obj_t *s_hr_max_label = nullptr;
 lv_obj_t *s_incline_cell = nullptr;
-// The caption of the cell above, because it names two different things.
+// Total ascent, on the second line of the same cell.
 //
-// This board has no IMU (CLAUDE.md section 2), so INCLINE has shown "--" for
-// the life of the project and always will. Rather than keep a dead cell and
-// find nowhere for total ascent, the cell reports ascent until an IMU
-// actually publishes, and grade afterwards. The caption says which, so it is
-// never ambiguous, and on any given board it settles one way and stays there.
-lv_obj_t *s_incline_caption = nullptr;
-bool s_have_imu = false;
+// Both readings share one cell because they are the same subject and the grid
+// has only four. They are not the same kind of number, though, so neither gets
+// the cell's big-figure treatment: grade is instantaneous and ascent
+// accumulates, and one of them is always going to be "--" on a board without
+// an IMU. Two equal rows say that honestly; a big figure over a small one
+// would claim a ranking that changes with the hardware.
+lv_obj_t *s_ascent_label = nullptr;
 lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
 // A triangle riding above the bar, pointing down at the rider's position. The
@@ -409,7 +408,8 @@ lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
 // cannot give one label two sizes -- so a single "AVG 142" forces the word to
 // be as large as the figure, which is backwards. The row is flex, so the word
 // stays put as the figure changes width.
-lv_obj_t *MakeSecondaryRow(lv_obj_t *parent, const char *word) {
+lv_obj_t *MakeSecondaryRow(lv_obj_t *parent, const char *word,
+                           const lv_font_t *font = &lv_font_montserrat_16) {
     lv_obj_t *row = lv_obj_create(parent);
     lv_obj_remove_style_all(row);
     // Explicit width, not LV_SIZE_CONTENT. Nested content-sized flex
@@ -435,11 +435,15 @@ lv_obj_t *MakeSecondaryRow(lv_obj_t *parent, const char *word) {
 
     lv_obj_t *value = lv_label_create(row);
     lv_label_set_text(value, "--");
-    // 16pt, down one step from 18. The speed cell is the tightest thing on the
-    // panel -- a 40pt live figure, a caption word and this, inside 150px -- and
-    // at 18 every gap in it came out at a pixel or two. A step here costs less
-    // than a step off the figure read at speed.
-    lv_obj_set_style_text_font(value, &lv_font_montserrat_16, 0);
+    // 16pt by default, down one step from 18. The speed cell is the tightest
+    // thing on the panel -- a 40pt live figure, a caption word and this, inside
+    // 150px -- and at 18 every gap in it came out at a pixel or two. A step
+    // here costs less than a step off the figure read at speed.
+    //
+    // The elevation block overrides it, because its figures carry their own
+    // unit letter: "GAIN" against "4988m" at 16pt leaves no gap at all in a
+    // 92px cell, which the simulator showed before any of this was flashed.
+    lv_obj_set_style_text_font(value, font, 0);
     lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_align(value, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
     return value;
@@ -465,6 +469,31 @@ void MakeSecondary(lv_obj_t *cell, lv_obj_t **out_avg, lv_obj_t **out_max) {
 
     *out_avg = MakeSecondaryRow(block, "AVG");
     *out_max = MakeSecondaryRow(block, "MAX");
+}
+
+// Two labelled rows filling a narrow cell, for the pair that shares one.
+//
+// The same word-then-figure language as the ride block above, but spanning the
+// whole cell instead of tucking beside a large figure -- there is no large
+// figure here. "NOW" and "GAIN" rather than "INCLINE" and "ASCENT" because at
+// 10pt the longer words leave the figures nowhere to go: "+12.5%" at 16pt is
+// most of what a 92px cell has after an inset.
+void MakeElevationBlock(lv_obj_t *cell, lv_coord_t width, lv_obj_t **out_now,
+                        lv_obj_t **out_gain) {
+    lv_obj_t *block = lv_obj_create(cell);
+    lv_obj_remove_style_all(block);
+    lv_obj_set_size(block, width - (2 * SECONDARY_INSET), 2 * SECONDARY_ROW_H);
+    lv_obj_clear_flag(block, LV_OBJ_FLAG_SCROLLABLE);
+    // Not clickable, for the reason MakeSecondary gives: lv_obj_create sets
+    // that flag and a transparent box that answers touches eats the taps meant
+    // for what is under it.
+    lv_obj_clear_flag(block, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_flow(block, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(block, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_align(block, LV_ALIGN_BOTTOM_RIGHT, -SECONDARY_INSET, CELL_VALUE_Y);
+
+    *out_now = MakeSecondaryRow(block, "NOW", &lv_font_montserrat_14);
+    *out_gain = MakeSecondaryRow(block, "GAIN", &lv_font_montserrat_14);
 }
 
 // The unit sits on the caption row, at the opposite end of the cell: "SPEED"
@@ -1062,16 +1091,9 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_imu_dirty = false;
         IMU_Data_t imu;
         if (DataCenter_Pull(TOPIC_IMU_DATA, &imu, sizeof(imu))) {
-            // An IMU exists after all, so the cell changes what it reports --
-            // once, permanently, and says so in its own caption.
-            if (!s_have_imu) {
-                s_have_imu = true;
-                lv_label_set_text(s_incline_caption, "INCLINE");
-                lv_label_set_text(s_incline_unit_label, "%");
-            }
             // Grade as a percentage of rise over run, from the IMU's pitch.
             const float grade = tanf(imu.pitch * (float)M_PI / 180.0f) * 100.0f;
-            lv_label_set_text_fmt(s_incline_label, "%+.1f", grade);
+            lv_label_set_text_fmt(s_incline_label, "%+.1f%%", grade);
             lv_obj_set_style_bg_color(
                 s_incline_cell, lv_color_hex(grade >= 3.0f ? COLOR_CLIMB_FILL : COLOR_CELL_BG), 0);
         }
@@ -1080,8 +1102,8 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     // Metres only, and no decimal. Ascent is accurate to a few metres at best,
     // so a tenth would be false precision, and feet would need a unit switch
     // this cell has no room for.
-    if (!s_have_imu && s_incline_label != nullptr) {
-        lv_label_set_text_fmt(s_incline_label, "%d", (int)(RideStats_AscentM() + 0.5f));
+    if (s_ascent_label != nullptr) {
+        lv_label_set_text_fmt(s_ascent_label, "%dm", (int)(RideStats_AscentM() + 0.5f));
     }
 }
 
@@ -1531,11 +1553,14 @@ void PageDashboard::onViewLoad() {
     s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_28);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
 
-    // Starts as ASCENT and becomes INCLINE if an IMU ever speaks up.
-    s_incline_cell =
-        MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "ASCENT", &s_incline_caption);
-    s_incline_label = MakeValueIn(s_incline_cell, "0", COLOR_ACCENT, &lv_font_montserrat_28);
-    s_incline_unit_label = MakeUnit(s_incline_cell, "m");
+    // Both elevation readings, in the cell that used to hold only the grade.
+    // No unit on the caption row: the two rows carry different units, so each
+    // figure spells out its own.
+    s_incline_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "ELEVATION");
+    MakeElevationBlock(s_incline_cell, SEC_W, &s_incline_label, &s_ascent_label);
+    lv_obj_set_style_text_color(s_incline_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_set_style_text_color(s_ascent_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_label_set_text(s_ascent_label, "0m");
 
     // ---- Dividing lines ----
     // Internal joins only. Nothing is drawn at x=0, x=239, y=0 or y=319, so
@@ -1661,8 +1686,7 @@ void PageDashboard::onViewUnload() {
     s_route_remaining_label = nullptr;
     s_trip_unit_label = nullptr;
     s_incline_cell = nullptr;
-    s_incline_caption = nullptr;
-    s_incline_unit_label = nullptr;
+    s_ascent_label = nullptr;
     s_nav_cell = nullptr;
     s_nav_is_map = false;
     for (int i = 0; i < HR_ZONE_COUNT; i++) {

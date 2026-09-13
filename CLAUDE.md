@@ -36,11 +36,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - *Power*: Retain micro-power RTC backup (~15μA) for <1s hot starts.
 - **IMU Sensor** *(target board only)*: Onboard QMI8658 6-axis IMU (I2C).
   - *Uses*: Motion detection, inclination/slope calculation, anti-theft alarm, fall detection, and Any-Motion wake-up triggers.
-  - `Page_Dashboard` renders grade from `IMU_Data_t.pitch`, but that cell shows
-    **total ascent** until an IMU actually publishes, and changes its own
-    caption when one does. A cell that reads "--" for the life of a board is
-    worse than one that reports something true, and ascent had nowhere else to
-    go on a four-cell grid.
+  - `Page_Dashboard`'s ELEVATION cell carries both readings: `NOW` is grade
+    from `IMU_Data_t.pitch` and reads "--" until an IMU publishes, `GAIN` is
+    total ascent from `Ascent.h`. Two equal rows rather than one large figure
+    over a small one, because which of the pair matters depends on the board,
+    and a ranking baked into the layout would be wrong on one of them.
 - **Power & Control**:
   - Onboard `BAT` Button (GPIO Interrupt) *(target board only)*: Soft-switch for manual Deep Sleep entry and wake-up.
   - Power Subsystem: Target ~200μA standby current in Deep Sleep (5–6 months standby on 1000mAh battery).

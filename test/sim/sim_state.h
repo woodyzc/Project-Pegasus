@@ -17,6 +17,8 @@ struct SimState {
     uint8_t avg_bpm = 0;
     uint8_t max_bpm = 0;
     float ascent_m = 0.0f;
+    bool have_imu = false;
+    IMU_Data_t imu{};
 
     bool have_tbt = false;
     TBT_Directive_t tbt{};

@@ -170,6 +170,10 @@ bool DataCenter_Pull(const char *topic, void *out, uint32_t size) {
         memcpy(out, &g_sim.battery, sizeof(Battery_t));
         return true;
     }
+    if (strcmp(topic, TOPIC_IMU_DATA) == 0 && size == sizeof(IMU_Data_t)) {
+        memcpy(out, &g_sim.imu, sizeof(IMU_Data_t));
+        return g_sim.have_imu;
+    }
     if (strcmp(topic, TOPIC_HEART_RATE) == 0 && size == sizeof(HeartRate_t)) {
         memcpy(out, &g_sim.hr, sizeof(HeartRate_t));
         return g_sim.have_hr;
