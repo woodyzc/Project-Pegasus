@@ -255,7 +255,27 @@ void BLE_TBT_Start() {
         Serial.println("[BLE_TBT] createServer failed");
         return;
     }
-    s_server->setCallbacks(&s_server_callbacks);
+    // false: do NOT let the server delete these callbacks.
+    //
+    // NimBLEServer::setCallbacks defaults that flag to TRUE, and ~NimBLEServer
+    // then runs `delete m_pServerCallbacks` on whatever it was given. Every
+    // callback object in this file is a file-scope static, so that delete
+    // reaches free() with a pointer that is not in any heap, and the panic is
+    // an assert deep inside heap_caps_free rather than anything naming BLE:
+    //
+    //   assert failed: heap_caps_free heap_caps.c:381
+    //   (heap != NULL && "free() target pointer is outside heap areas")
+    //
+    // It only fires on the path that destroys the server, which is Restart on
+    // the settings page by way of BLE_HR_Shutdown() and NimBLEDevice::deinit().
+    // Nothing in normal running goes near it, which is why the board ran for
+    // days before anyone saw it.
+    //
+    // The characteristics below need no such flag: NimBLECharacteristic takes
+    // no ownership and its destructor frees only its descriptors. The two APIs
+    // look alike and differ, which is the whole trap -- BLE_HR_Client.cpp got
+    // this right for its client callbacks and this line did not.
+    s_server->setCallbacks(&s_server_callbacks, false);
 
     NimBLEService *service = s_server->createService(TBT_SERVICE_UUID);
     if (service == nullptr) {

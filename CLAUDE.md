@@ -206,6 +206,18 @@ These were each discovered the slow way. They are not optional trivia.
   the connect that must be alone. Registration has the *opposite* constraint
   (see `BLE_TBT_Receiver.h`), which is why `BLE_TBT_Start()` and
   `BLE_TBT_StartAdvertising()` are separate calls straddling `BLE_HR_Start()`.
+- **Never hand a static object to NimBLE's `setCallbacks`.** `NimBLEServer::
+  setCallbacks(cb)` defaults its second argument, `deleteCallbacks`, to **true**,
+  and `~NimBLEServer` then runs `delete` on whatever it was given. Every
+  callback object in `BLE_TBT_Receiver.cpp` is a file-scope static, so that
+  delete reaches `free()` with a pointer in no heap and the chip asserts inside
+  `heap_caps_free` — a panic that names the heap and never mentions BLE. Pass
+  `false`. It only fires on the path that destroys the server (Restart on the
+  settings page, via `BLE_HR_Shutdown()` and `NimBLEDevice::deinit()`), so the
+  board runs for days before anyone trips it. `NimBLECharacteristic::
+  setCallbacks` takes no ownership and needs no flag, and
+  `NimBLEClient::setClientCallbacks` has the same defaulted trap as the server.
+  Two near-identical APIs where one owns its argument and one does not.
 - **The board records its own crashes, and you can read them.** Serial is
   unusable (above), but `esp_reset_reason()` now surfaces on the Settings page,
   and the `coredump` partition at `0xFF0000` holds a full ELF core dump written
