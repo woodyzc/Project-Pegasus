@@ -20,6 +20,7 @@
 #include "../../src/navigation/TbtParse.h"
 #include "../../src/system/TimeSource.h"
 #include "../../src/ui/Page_Dashboard.h"
+#include "../../src/ui/Overlay_RideSummary.h"
 #include "../../src/ui/Page_Map.h"
 #include "sim_state.h"
 
@@ -300,6 +301,28 @@ int main(int argc, char **argv) {
     Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
     snprintf(path, sizeof(path), "%s/05-worst-case-strings.ppm", out_dir);
     Render(&page, path);
+
+    // ---- Scene 6: the report a ride ends with ----
+    // Every figure at its widest: a three-digit distance, a duration past an
+    // hour, a four-digit climb and a filename that fills the line. The whole
+    // panel has to hold this without the Done button falling off the bottom.
+    {
+        g_sim.trip_km = 148.72;
+        g_sim.avg_kmh = 23.1f;
+        g_sim.max_kmh = 62.8f;
+        g_sim.avg_bpm = 131;
+        g_sim.max_bpm = 181;
+        g_sim.ascent_m = 2140.0f;
+        g_sim.moving_seconds = 6 * 3600 + 26 * 60 + 14;
+        g_sim.log_points = 18422;
+        g_sim.log_file = "/rides/2026-09-13_071204.gpx";
+
+        RideSummary_t summary;
+        RideSummary_Capture(&summary);
+        Overlay_RideSummary_Show(&summary, true);
+        snprintf(path, sizeof(path), "%s/06-ride-summary.ppm", out_dir);
+        Render(&page, path);
+    }
 
     return 0;
 }

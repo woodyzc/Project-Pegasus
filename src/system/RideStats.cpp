@@ -107,6 +107,11 @@ void RideStats_Reset() {
     s_have_speed = false;
 }
 
+double RideStats_MovingSeconds() {
+    Locked guard;
+    return s_stats.moving_seconds;
+}
+
 float RideStats_AscentM() {
     Locked guard;
     return (float)Ascent_Metres(&s_ascent);

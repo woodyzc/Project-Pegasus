@@ -31,6 +31,9 @@
 #   * test_time_source  - which clock the head unit believes, and when it stops
 #                         believing it (compiles the real
 #                         src/system/TimeSource.c)
+#   * test_ride_summary - what a ride amounted to, and the three shapes its
+#                         duration takes (compiles the real
+#                         src/system/RideSummary.c)
 #   * test_ascent       - total climbing from noisy GNSS altitude (compiles the
 #                         real src/system/Ascent.c)
 #   * test_idle_policy  - when the screen dims, blanks and sleeps (compiles the
@@ -65,7 +68,8 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) test_trip_accum$(SUFFIX) \
         test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) test_clock_frame$(SUFFIX) \
         test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX) \
-        test_idle_policy$(SUFFIX) test_ascent$(SUFFIX)
+        test_idle_policy$(SUFFIX) test_ascent$(SUFFIX) \
+        test_ride_summary$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -126,6 +130,9 @@ test_idle_policy$(SUFFIX): test_idle_policy.c $(SYSTEM)/IdlePolicy.c
 # would look plausible.
 test_ascent$(SUFFIX): test_ascent.c $(SYSTEM)/Ascent.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC) -lm
+
+test_ride_summary$(SUFFIX): test_ride_summary.c $(SYSTEM)/RideSummary.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
 
 test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm

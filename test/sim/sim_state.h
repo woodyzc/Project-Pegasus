@@ -17,6 +17,9 @@ struct SimState {
     uint8_t avg_bpm = 0;
     uint8_t max_bpm = 0;
     float ascent_m = 0.0f;
+    double moving_seconds = 0.0;
+    uint32_t log_points = 0;
+    const char *log_file = "";
     bool have_imu = false;
     IMU_Data_t imu{};
 

@@ -11,6 +11,7 @@
 #include "../navigation/GpxTrack.h"
 #include "../navigation/RideLog.h"
 #include "Overlay_FileTransfer.h"
+#include "Overlay_RideSummary.h"
 #include "../sensors/BLE_HR_Client.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
@@ -102,8 +103,21 @@ void OnUnitToggled(lv_event_t *e) {
     lv_label_set_text(s_unit_value, Settings_SpeedUnitLabel());
 }
 
+void OnRideSummaryClicked(lv_event_t *e) {
+    (void)e;
+    RideSummary_t summary;
+    RideSummary_Capture(&summary);
+    Overlay_RideSummary_Show(&summary, false);
+}
+
 void OnStartNewRideClicked(lv_event_t *e) {
     (void)e;
+    // Captured before anything is reset, which is the whole reason the summary
+    // is a snapshot rather than a live view: one press zeroes every figure in
+    // it, and this is the last instant they exist.
+    RideSummary_t ending;
+    RideSummary_Capture(&ending);
+
     const bool log_split = Page_Dashboard_StartNewRide();
 
     // Honest about the half that can fail. The odometer and the averages are
@@ -119,6 +133,13 @@ void OnStartNewRideClicked(lv_event_t *e) {
                           "Odometer and averages cleared, but the ride log did not "
                           "restart.");
         lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_DANGER), 0);
+    }
+
+    // Last, so the report sits over whatever the status line just said.
+    // Skipped for a ride with nothing in it -- pressing this twice in a row
+    // should not hand the rider an empty page the second time.
+    if (!RideSummary_IsEmpty(&ending)) {
+        Overlay_RideSummary_Show(&ending, true);
     }
 }
 
@@ -687,10 +708,24 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_text_color(reset_label, lv_color_hex(COLOR_OK), 0);
     lv_obj_center(reset_label);
 
+    lv_obj_t *summary_btn = lv_btn_create(trip_card);
+    lv_obj_set_width(summary_btn, LV_PCT(100));
+    lv_obj_set_style_bg_color(summary_btn, lv_color_hex(0x14242E), 0);
+    lv_obj_set_style_bg_color(summary_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(summary_btn, 0, 0);
+    lv_obj_add_event_cb(summary_btn, OnRideSummaryClicked, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *summary_label = lv_label_create(summary_btn);
+    lv_label_set_text(summary_label, LV_SYMBOL_LIST "  Ride summary");
+    lv_obj_set_style_text_font(summary_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(summary_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_center(summary_label);
+
     s_trip_status = lv_label_create(trip_card);
     lv_label_set_text(s_trip_status,
                       "Press at the start of a ride. Clears the odometer and the "
-                      "averages, and starts a new file on the card.");
+                      "averages, starts a new file on the card, and reports what "
+                      "the last ride came to.");
     lv_obj_set_style_text_font(s_trip_status, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_CAPTION), 0);
     lv_label_set_long_mode(s_trip_status, LV_LABEL_LONG_WRAP);

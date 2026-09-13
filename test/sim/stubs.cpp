@@ -88,6 +88,9 @@ float RideStats_MaxSpeedKmh() { return g_sim.max_kmh; }
 uint8_t RideStats_AvgBpm() { return g_sim.avg_bpm; }
 uint8_t RideStats_MaxBpm() { return g_sim.max_bpm; }
 float RideStats_AscentM() { return g_sim.ascent_m; }
+double RideStats_MovingSeconds() { return g_sim.moving_seconds; }
+uint32_t RideLog_PointCount() { return g_sim.log_points; }
+const char *RideLog_FileName() { return g_sim.log_file; }
 float RideStats_DescentM() { return 0.0f; }
 void RideStats_Init() {}
 void RideStats_Reset() {}

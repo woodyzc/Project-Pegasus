@@ -28,6 +28,11 @@ void RideStats_Reset();
 float RideStats_AscentM();
 float RideStats_DescentM();
 
+// Seconds the rider was actually moving, which is what the average speed is
+// divided by. Not elapsed time: a ride that stopped for lunch reports the
+// riding, and the two differ by however long lunch was.
+double RideStats_MovingSeconds();
+
 // Safe to call from either core.
 float RideStats_MaxSpeedKmh();
 float RideStats_AvgSpeedKmh();
