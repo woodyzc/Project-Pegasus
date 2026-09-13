@@ -131,7 +131,19 @@ bool RoadMap_Way(size_t index, RoadWay_t *out);
 // contiguous, so the scan that remains is sequential, which is the access
 // pattern PSRAM is actually good at. Ways spanning several visible cells are
 // returned once.
+// `class_mask` is a bitmask of (1 << ROAD_CLASS_*): only those are returned.
+// The caller already hides whole classes when zoomed out, and asking for ways
+// it will then throw away is what filled the output with residential streets
+// and left no room for the roads actually being drawn.
+//
+// When more ways match than `max_out` holds, the result is an EVEN SAMPLE of
+// them rather than the first ones found. The grid is walked south to north, so
+// stopping at the limit used to keep a band along the bottom of the view and
+// drop everything above it -- on the panel that reads as the map sliding off
+// the route, and it only looked right zoomed in because zooming in is what
+// brought the count under the limit.
 size_t RoadMap_Query(int32_t min_lat, int32_t min_lon, int32_t max_lat, int32_t max_lon,
+                     uint8_t class_mask,
                      uint32_t *out, size_t max_out);
 
 // Bounding box of everything loaded, in degrees.

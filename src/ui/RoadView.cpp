@@ -46,7 +46,11 @@ constexpr uint32_t ROAD_MAX_SEGMENTS = 4000;
 
 // Ways that can be on screen at once. Static rather than on the stack: this
 // runs on the LVGL task, whose stack is 8KB, and 2048 entries is 4KB of it.
-constexpr uint16_t ROAD_VISIBLE_MAX = 2048;
+// 6144, up from 2048. A dense extract zoomed out has far more arteries in view
+// than 2048 -- Arlington at 5 miles holds 15,947 of them -- and although the
+// query now samples evenly rather than keeping a corner, a sample that throws
+// away three quarters of the main roads is still a thin map. 24KB.
+constexpr uint16_t ROAD_VISIBLE_MAX = 6144;
 
 // Manhattan distance below which a point is folded into the previous one.
 // 3px keeps curves smooth at this screen size while collapsing the runs of
@@ -186,20 +190,28 @@ void RoadDrawCb(lv_event_t *e) {
     // The grid answers "which ways are near here" without touching the rest
     // of the file. Scanning every way cost 9,904us of a 12,272us frame to find
     // 23 of 7,964 -- not arithmetic, but 7,964 scattered PSRAM reads.
+    // Which classes this zoom will actually draw, decided BEFORE the query
+    // rather than after it. Asking for ways that are about to be discarded is
+    // what filled the buffer with residential streets at 9km across and left
+    // no room for the arteries the rider navigates by.
+    uint8_t class_mask = 0;
+    for (int k = 0; k < ROAD_CLASS_COUNT; k++) {
+        if (mpp <= ROAD_MAX_MPP[k]) {
+            class_mask |= (uint8_t)(1u << k);
+        }
+    }
+
     static uint32_t visible[ROAD_VISIBLE_MAX];
     uint16_t visible_count = (uint16_t)RoadMap_Query(view_min_lat, view_min_lon, view_max_lat,
-                                                     view_max_lon, visible, ROAD_VISIBLE_MAX);
+                                                     view_max_lon, class_mask, visible,
+                                                     ROAD_VISIBLE_MAX);
 
-    // The zoom filter still has to run, but now over a handful of candidates
-    // rather than the whole map. Compacting in place keeps the draw passes
-    // walking a short contiguous list.
+    // Ways too short to draw are still dropped here; the class filter has
+    // already been applied by the query.
     uint16_t kept = 0;
     for (uint16_t i = 0; i < visible_count; i++) {
         RoadWay_t way;
         if (!RoadMap_Way(visible[i], &way) || way.count < 2) {
-            continue;
-        }
-        if (mpp > ROAD_MAX_MPP[way.klass]) {
             continue;
         }
         visible[kept++] = visible[i];

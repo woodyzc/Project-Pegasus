@@ -388,43 +388,94 @@ bool RoadMap_Way(size_t index, RoadWay_t *out) {
 }
 
 size_t RoadMap_Query(int32_t min_lat, int32_t min_lon, int32_t max_lat, int32_t max_lon,
-                     uint32_t *out, size_t max_out) {
+                     uint8_t class_mask, uint32_t *out, size_t max_out) {
     if (!RoadMap_IsLoaded() || out == nullptr || max_out == 0 || s_cell_ways == nullptr) {
         return 0;
     }
-
-    memset(s_query_seen, 0, s_query_seen_bytes);
 
     const int c0 = GridCol(min_lon);
     const int c1 = GridCol(max_lon);
     const int r0 = GridRow(min_lat);
     const int r1 = GridRow(max_lat);
 
-    size_t found = 0;
-    for (int r = r0; r <= r1 && found < max_out; r++) {
-        for (int c = c0; c <= c1 && found < max_out; c++) {
-            const uint32_t cell = r * GRID_N + c;
-            const uint32_t end = s_cell_start[cell + 1];
-            for (uint32_t e = s_cell_start[cell]; e < end && found < max_out; e++) {
-                const uint32_t w = s_cell_ways[e];
+    /* Two passes over the same cells: the first counts what matches, the
+       second takes every Nth of them.
 
-                // A way wider than one cell appears in several, and the view
-                // may show more than one of them.
-                if (s_query_seen[w >> 3] & (1u << (w & 7))) {
-                    continue;
-                }
-                s_query_seen[w >> 3] |= (uint8_t)(1u << (w & 7));
+       One pass that stopped at max_out kept whatever the grid handed back
+       first, and the grid is walked south to north -- so an overflowing view
+       drew a band along its bottom edge and nothing above it. An even sample
+       drops roads scattered across the view instead, which reads as a sparser
+       map rather than a map of somewhere else. */
+    size_t matched = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        size_t stride = 1;
+        size_t seen = 0;
+        size_t found = 0;
 
-                // The cell only says "near"; the box still has to be checked.
-                if (s_way_bounds[w * 4 + 2] < min_lat || s_way_bounds[w * 4 + 0] > max_lat ||
-                    s_way_bounds[w * 4 + 3] < min_lon || s_way_bounds[w * 4 + 1] > max_lon) {
-                    continue;
-                }
-                out[found++] = w;
+        if (pass == 1) {
+            if (matched == 0) {
+                return 0;
+            }
+            stride = (matched + max_out - 1) / max_out;
+            if (stride == 0) {
+                stride = 1;
             }
         }
+
+        memset(s_query_seen, 0, s_query_seen_bytes);
+
+        for (int r = r0; r <= r1; r++) {
+            for (int c = c0; c <= c1; c++) {
+                const uint32_t cell = r * GRID_N + c;
+                const uint32_t end = s_cell_start[cell + 1];
+                for (uint32_t e = s_cell_start[cell]; e < end; e++) {
+                    const uint32_t w = s_cell_ways[e];
+
+                    // A way wider than one cell appears in several, and the
+                    // view may show more than one of them.
+                    if (s_query_seen[w >> 3] & (1u << (w & 7))) {
+                        continue;
+                    }
+                    s_query_seen[w >> 3] |= (uint8_t)(1u << (w & 7));
+
+                    // The cell only says "near"; the box still has to be
+                    // checked.
+                    if (s_way_bounds[w * 4 + 2] < min_lat || s_way_bounds[w * 4 + 0] > max_lat ||
+                        s_way_bounds[w * 4 + 3] < min_lon || s_way_bounds[w * 4 + 1] > max_lon) {
+                        continue;
+                    }
+
+                    // The class byte is the first of the way's record.
+                    const uint8_t klass = s_blob[s_offsets[w]];
+                    if (klass >= ROAD_CLASS_COUNT ||
+                        (class_mask & (uint8_t)(1u << klass)) == 0) {
+                        continue;
+                    }
+
+                    if (pass == 0) {
+                        matched++;
+                        continue;
+                    }
+                    if ((seen++ % stride) != 0) {
+                        continue;
+                    }
+                    if (found >= max_out) {
+                        return found;
+                    }
+                    out[found++] = w;
+                }
+            }
+        }
+
+        if (pass == 1) {
+            return found;
+        }
+        /* Everything fits, so the second pass has nothing to decide. */
+        if (matched <= max_out) {
+            stride = 1;
+        }
     }
-    return found;
+    return 0;
 }
 
 bool RoadMap_Bounds(double *min_lat, double *min_lon, double *max_lat, double *max_lon) {
