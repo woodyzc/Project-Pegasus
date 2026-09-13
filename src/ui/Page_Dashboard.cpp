@@ -288,11 +288,16 @@ lv_obj_t *MakeLabel(lv_obj_t *parent, const char *text, const lv_font_t *font, u
 // bottom of a 60px cell leaves the two boxes 2px apart.
 constexpr lv_coord_t CELL_PAD = 6;         // left and right inset
 
-// The average-and-peak block beside a live value. 76px holds "MAX" at 10pt
-// and a three-digit figure at 18pt; 21px a row is the 18pt line box plus the
-// gap that keeps two of them from touching.
-constexpr lv_coord_t SECONDARY_W = 76;
+// The average-and-peak block beside a live value. 66px holds "MAX" at 10pt and
+// a four-character figure at 18pt with nothing to spare; 21px a row is the
+// 18pt line box plus the gap that keeps two of them from touching.
+//
+// SECONDARY_INSET is smaller than CELL_PAD on purpose: the block sits nearer
+// the cell's right edge than the captions above it, which buys the live value
+// the width it needs to be read from a bar.
+constexpr lv_coord_t SECONDARY_W = 66;
 constexpr lv_coord_t SECONDARY_ROW_H = 21;
+constexpr lv_coord_t SECONDARY_INSET = 2;
 constexpr lv_coord_t CELL_CAPTION_Y = 2;   // caption and unit baseline row
 constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
 
@@ -420,7 +425,7 @@ void MakeSecondary(lv_obj_t *cell, lv_obj_t **out_avg, lv_obj_t **out_max) {
     lv_obj_clear_flag(block, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(block, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(block, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_align(block, LV_ALIGN_BOTTOM_RIGHT, -CELL_PAD, CELL_VALUE_Y);
+    lv_obj_align(block, LV_ALIGN_BOTTOM_RIGHT, -SECONDARY_INSET, CELL_VALUE_Y);
 
     *out_avg = MakeSecondaryRow(block, "AVG");
     *out_max = MakeSecondaryRow(block, "MAX");
@@ -1406,18 +1411,18 @@ void PageDashboard::onViewLoad() {
     // which is what pays for the jump from 28 to 34. The widest thing any of
     // them has to hold is a six-character trip ("123.45"), and at 34 that
     // comes to about 104px inside 108px of usable width.
-    // 28pt. The live value shares its cell with a ride average and a peak that
-    // are worth reading at 18, and the three of them fit 150px at this size and
-    // collide at 32: the simulator drew "18.5" hard against "AVG 24.6". Still
-    // the largest thing in the cell, which is the hierarchy that matters.
+    // 32pt. It collided with the ride block at this size before, when that
+    // block was content-sized and sat a full cell-pad off the edge. Narrowing
+    // it to what it actually needs and moving it 4px nearer the edge gives the
+    // live value back the width, and it is the figure read at speed.
     lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, STATS_W, CELL_H, "SPEED");
-    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_28);
+    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
     lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
     MakeSecondary(speed_cell, &s_speed_avg_label, &s_speed_max_label);
 
     lv_obj_t *hr_cell = MakeCell(parent, COL1, ROW2, STATS_W, CELL_H, "HEART RATE");
-    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_28);
+    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
     MakeUnit(hr_cell, "bpm");
     MakeSecondary(hr_cell, &s_hr_avg_label, &s_hr_max_label);
 
