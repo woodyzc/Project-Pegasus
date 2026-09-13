@@ -188,9 +188,9 @@ treats malformed frames — see `src/navigation/TbtParse.c`.
 4. Grant Bluetooth permissions when prompted (Android 12+ asks for
    `BLUETOOTH_SCAN` / `BLUETOOTH_CONNECT`; older releases ask for location,
    which is what gated BLE scanning back then).
-5. Power on the head unit with **Navigation = TBT** and **Heart rate = BLE**
-   in its settings. Those two are mutually exclusive with ANT+ — the firmware
-   enforces it, because ANT+ takes the radio the BLE stack needs.
+5. Power on the head unit with **Navigation = TBT** in its settings. That is
+   now the only setting this depends on; there used to be a heart-rate source
+   that could take the radio away from turn-by-turn, and it has been removed.
 
 ## Checking it works
 

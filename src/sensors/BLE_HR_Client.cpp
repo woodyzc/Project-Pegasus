@@ -119,14 +119,6 @@ void RecordShutdown(int code, uint32_t elapsed_ms) {
     prefs.end();
 }
 
-// Set once BLE_HR_StartCoexistScan() has retuned the scan for ANT+. While it
-// is false nothing else owns the scan windows, so re-running discovery is
-// safe -- which is the difference between "the peer must already be
-// broadcasting when the board boots" and "start it whenever you like".
-bool s_coexist_scan_active = false;
-
-bool (*s_primary_active)() = nullptr;
-
 // Set when the controller reports the link actually down. This, not
 // isConnected(), is the completion signal: NimBLEClient::disconnect() only
 // calls ble_gap_terminate() and sets m_connStatus = DISCONNECTING, while
@@ -147,8 +139,7 @@ class ClientCallbacks : public NimBLEClientCallbacks {
 ClientCallbacks s_client_callbacks;
 
 // Scans for a peer advertising 0x180D and remembers its address. Only needed
-// once: later reconnects dial s_peer_address directly (see the header's note
-// on ANT+ coexistence consuming the scan).
+// once: later reconnects dial s_peer_address directly.
 bool DiscoverPeer() {
     Serial.println("[BLE_HR] scanning for a 0x180D peripheral...");
     NimBLEScan *scan = NimBLEDevice::getScan();
@@ -179,7 +170,7 @@ bool DiscoverPeer() {
 }
 
 // Connects to the remembered peer and subscribes to 0x2A37. No scan involved,
-// so this still works while ANT+ owns the scan windows.
+// which is what keeps a reconnect off the controller's scan path.
 bool ConnectAndSubscribe() {
     if (!s_have_peer) {
         return false;
@@ -257,8 +248,7 @@ void ResetClient() {
 // task, not here.
 //
 // Note this never starts a scan: initial discovery is done synchronously in
-// BLE_HR_Start() before ANT can claim the scan windows, and every reconnect
-// from here dials the stored address instead.
+// BLE_HR_Start(), and every reconnect from here dials the stored address.
 void BleHrTask(void *pvParameters) {
     (void)pvParameters;
 
@@ -288,14 +278,6 @@ void BleHrTask(void *pvParameters) {
         }
 
         if (!s_have_peer) {
-            if (s_coexist_scan_active) {
-                // ANT+ is riding the scan windows; starting an active scan
-                // would pull them out from under it. Idle rather than spin --
-                // a reboot is what recovers this.
-                vTaskDelay(pdMS_TO_TICKS(kBackoffMaxMs));
-                continue;
-            }
-
             // Nothing else owns the scan, so keep looking. The boot-time scan
             // is 15 seconds, and requiring the peer to be broadcasting inside
             // that window meant a watch woken a moment late would never be
@@ -327,7 +309,7 @@ void BleHrTask(void *pvParameters) {
         //
         // Dropping the address sends the loop back through discovery above,
         // which is also what tells us whether the peer is advertising at all.
-        if (s_failed_connects >= kFailuresBeforeRescan && !s_coexist_scan_active) {
+        if (s_failed_connects >= kFailuresBeforeRescan) {
             Serial.println("[BLE_HR] stored address is not answering, rediscovering");
             s_have_peer = false;
             s_failed_connects = 0;
@@ -355,10 +337,8 @@ void OnNotifyCallback(NimBLERemoteCharacteristic *characteristic, uint8_t *data,
         return;
     }
 
-    // Stamped here, on a measurement that actually parsed, and before the
-    // arbitration hook below: the link is demonstrably alive either way, and
-    // letting ANT+ suppress this would have the supervisor tear down a
-    // perfectly good BLE link after 20 seconds of deferring to the primary.
+    // Stamped here, on a measurement that actually parsed: the supervisor
+    // uses it to tell a live link from a silent one.
     {
         const uint32_t now = millis();
         if (s_had_notify) {
@@ -366,12 +346,6 @@ void OnNotifyCallback(NimBLERemoteCharacteristic *characteristic, uint8_t *data,
         }
         s_last_notify_ms = now;
         s_had_notify = true;
-    }
-
-    // ANT+ is the primary source (CLAUDE.md §3). While it is tracking, stay
-    // connected but leave the topic alone -- see BLE_HR_SetPrimaryActiveHook.
-    if (s_primary_active != nullptr && s_primary_active()) {
-        return;
     }
 
     HeartRate_t hr;
@@ -406,11 +380,8 @@ void BLE_HR_Init() {
 }
 
 void BLE_HR_Start() {
-    // Discovery runs synchronously (blocking for up to kDiscoveryScanMs), the
-    // way deps/esp32-ant's verified coexist example sequences it. It has to
-    // finish before BLE_HR_StartCoexistScan()/SoftANT_Start() touch the scan,
-    // otherwise the perpetual passive scan would be reconfigured underneath an
-    // in-flight active scan.
+    // Discovery runs synchronously, blocking for up to kDiscoveryScanMs. See
+    // the header for why the UI task is started before this is called.
     if (DiscoverPeer()) {
         ConnectAndSubscribe();
     }
@@ -469,16 +440,6 @@ void BLE_HR_Shutdown() {
     vTaskDelay(pdMS_TO_TICKS(50));
 }
 
-void BLE_HR_StartCoexistScan() {
-    // Passive, perpetual: deps/esp32-ant's coexist mode retunes these scan
-    // windows to receive ANT frames, so one must be running the whole time ANT
-    // is open.
-    NimBLEScan *scan = NimBLEDevice::getScan();
-    scan->setActiveScan(false);
-    scan->start(0, false, true);
-    s_coexist_scan_active = true;
-}
-
 bool BLE_HR_IsConnected() {
     return s_connected;
 }
@@ -519,9 +480,6 @@ const char *BLE_HR_StatusText() {
         snprintf(text, sizeof(text), "reconnecting (%d fails)", s_failed_connects);
         return text;
     }
-    if (s_coexist_scan_active) {
-        return "no peer (rescan needs restart)";
-    }
     if (s_last_scan_devices < 0) {
         return "searching (first scan)";
     }
@@ -533,6 +491,3 @@ const char *BLE_HR_StatusText() {
     return text;
 }
 
-void BLE_HR_SetPrimaryActiveHook(bool (*is_primary_active)()) {
-    s_primary_active = is_primary_active;
-}

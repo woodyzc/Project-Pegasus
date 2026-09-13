@@ -10,7 +10,9 @@ namespace {
 constexpr char NVS_NAMESPACE[] = "pegasus";
 constexpr char KEY_BRIGHTNESS[] = "bright";
 constexpr char KEY_SPEED_UNIT[] = "unit";
-constexpr char KEY_HR_SOURCE[] = "hrsrc";
+// Retired with ANT+. Kept only so Settings_Init() can erase it, rather than
+// leaving a dead key in the namespace for a future setting to trip over.
+constexpr char KEY_HR_SOURCE_RETIRED[] = "hrsrc";
 constexpr char KEY_RADIO_PENDING[] = "radiopend";
 constexpr char KEY_NAV_MODE[] = "navmode";
 constexpr char KEY_HR_REST[] = "hrrest";
@@ -20,12 +22,6 @@ constexpr char KEY_BOOT_COUNT[] = "boots";
 constexpr uint8_t DEFAULT_BRIGHTNESS = 100;
 constexpr float KM_TO_MILES = 0.621371f;
 
-// Defaults to BLE-only deliberately, not to the CLAUDE.md §3 "ANT+ primary"
-// arrangement. ANT+ has never been exercised on this hardware, and a failure
-// in SoftANT_Start() at boot would strand the user on a dead screen with no
-// way to reach this setting and change it back. Opting in to ANT+ is a
-// deliberate act until it is proven on the bench.
-constexpr HrSource_t DEFAULT_HR_SOURCE = HR_SOURCE_BLE;
 
 // TBT is the only navigation mode that exists today; GPX is a declared
 // destination, not a working feature.
@@ -56,9 +52,8 @@ bool s_ready = false;
 
 uint8_t s_brightness = DEFAULT_BRIGHTNESS;
 SpeedUnit_t s_speed_unit = SPEED_UNIT_KMH;
-HrSource_t s_hr_source = DEFAULT_HR_SOURCE;
 NavMode_t s_nav_mode = DEFAULT_NAV_MODE;
-bool s_hr_fell_back = false;
+bool s_nav_fell_back = false;
 uint8_t s_hr_rest = DEFAULT_HR_REST;
 uint8_t s_hr_max = DEFAULT_HR_MAX;
 const char *s_reset_text = "?";
@@ -108,7 +103,6 @@ void Settings_Init() {
     if (s_ready) {
         s_brightness = s_prefs.getUChar(KEY_BRIGHTNESS, DEFAULT_BRIGHTNESS);
         s_speed_unit = (SpeedUnit_t)s_prefs.getUChar(KEY_SPEED_UNIT, SPEED_UNIT_KMH);
-        s_hr_source = (HrSource_t)s_prefs.getUChar(KEY_HR_SOURCE, DEFAULT_HR_SOURCE);
         s_nav_mode = (NavMode_t)s_prefs.getUChar(KEY_NAV_MODE, DEFAULT_NAV_MODE);
         s_hr_rest = s_prefs.getUChar(KEY_HR_REST, DEFAULT_HR_REST);
         s_hr_max = s_prefs.getUChar(KEY_HR_MAX, DEFAULT_HR_MAX);
@@ -119,11 +113,6 @@ void Settings_Init() {
     }
     if (s_speed_unit != SPEED_UNIT_KMH && s_speed_unit != SPEED_UNIT_MPH) {
         s_speed_unit = SPEED_UNIT_KMH;
-    }
-    // Also catches a stored 2 from the earlier three-way version of this
-    // setting, which now maps back to the default rather than a dead value.
-    if (s_hr_source != HR_SOURCE_BLE && s_hr_source != HR_SOURCE_ANT) {
-        s_hr_source = DEFAULT_HR_SOURCE;
     }
     if (s_nav_mode != NAV_MODE_TBT && s_nav_mode != NAV_MODE_GPX) {
         s_nav_mode = DEFAULT_NAV_MODE;
@@ -141,15 +130,12 @@ void Settings_Init() {
         s_hr_max = DEFAULT_HR_MAX;
     }
 
-    // Repair a stored pair that breaks the exclusivity rule -- possible if the
-    // two keys were written by different firmware versions. The heart-rate
-    // source wins here: silently changing which sensor a rider's data comes
-    // from is a worse surprise than losing turn prompts.
-    if (s_nav_mode == NAV_MODE_TBT && s_hr_source == HR_SOURCE_ANT) {
-        s_nav_mode = NAV_MODE_GPX;
-        if (s_ready) {
-            s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
-        }
+    // The heart-rate source used to live beside this and constrain it. A board
+    // that ran an older build still has that key in NVS, holding a value no
+    // code reads any more; erase it rather than leave it to confuse whoever
+    // dumps the namespace next.
+    if (s_ready) {
+        s_prefs.remove(KEY_HR_SOURCE_RETIRED);
     }
 
     // ---- Reset diagnostics ----
@@ -168,14 +154,19 @@ void Settings_Init() {
     }
 
     // A still-raised flag means the previous boot entered radio bring-up and
-    // never came out. Fall back to BLE and persist it, so the device comes up
+    // never came out. Fall back to GPX and persist it, so the device comes up
     // usable instead of repeating whatever hung -- otherwise the bad choice
     // would outlive even a reflash, since it lives in NVS rather than in the
     // firmware image.
+    //
+    // GPX is the safe end of this setting because it starts no radio at all:
+    // the heart-rate client still comes up either way, but nothing advertises
+    // and no GATT service is registered, which is where the bring-up hazards
+    // in CLAUDE.md section 8 live.
     if (s_ready && s_prefs.getUChar(KEY_RADIO_PENDING, 0) != 0) {
-        s_hr_fell_back = (s_hr_source != HR_SOURCE_BLE);
-        s_hr_source = HR_SOURCE_BLE;
-        s_prefs.putUChar(KEY_HR_SOURCE, (uint8_t)s_hr_source);
+        s_nav_fell_back = (s_nav_mode != NAV_MODE_GPX);
+        s_nav_mode = NAV_MODE_GPX;
+        s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
         s_prefs.putUChar(KEY_RADIO_PENDING, 0);
     }
 
@@ -194,8 +185,8 @@ void Settings_NoteRadioBringUpOk() {
     }
 }
 
-bool Settings_DidHrSourceFallBack() {
-    return s_hr_fell_back;
+bool Settings_DidNavModeFallBack() {
+    return s_nav_fell_back;
 }
 
 const char *Settings_LastResetText() {
@@ -285,29 +276,6 @@ void Settings_SetHrMaxBpm(uint8_t bpm) {
     }
 }
 
-HrSource_t Settings_GetHrSource() {
-    return s_hr_source;
-}
-
-void Settings_SetHrSource(HrSource_t source) {
-    if (source == s_hr_source) {
-        return;
-    }
-
-    s_hr_source = source;
-    if (s_ready) {
-        s_prefs.putUChar(KEY_HR_SOURCE, (uint8_t)s_hr_source);
-    }
-
-    // Exclusivity: ANT+ leaves no NimBLE host for the TBT GATT server.
-    if (s_hr_source == HR_SOURCE_ANT && s_nav_mode == NAV_MODE_TBT) {
-        s_nav_mode = NAV_MODE_GPX;
-        if (s_ready) {
-            s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
-        }
-    }
-}
-
 NavMode_t Settings_GetNavMode() {
     return s_nav_mode;
 }
@@ -320,14 +288,6 @@ void Settings_SetNavMode(NavMode_t mode) {
     s_nav_mode = mode;
     if (s_ready) {
         s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
-    }
-
-    // The same rule from the other side: TBT needs the BLE stack up.
-    if (s_nav_mode == NAV_MODE_TBT && s_hr_source == HR_SOURCE_ANT) {
-        s_hr_source = HR_SOURCE_BLE;
-        if (s_ready) {
-            s_prefs.putUChar(KEY_HR_SOURCE, (uint8_t)s_hr_source);
-        }
     }
 }
 
@@ -353,16 +313,6 @@ bool Settings_NavModeIsImplemented(NavMode_t mode) {
     // make cheaply again.
     (void)mode;
     return true;
-}
-
-const char *Settings_HrSourceLabel(HrSource_t source) {
-    switch (source) {
-        case HR_SOURCE_ANT:
-            return "ANT+";
-        case HR_SOURCE_BLE:
-        default:
-            return "BLE";
-    }
 }
 
 float Settings_SpeedFromKmh(float kmh) {

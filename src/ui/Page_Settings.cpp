@@ -11,7 +11,6 @@
 #include "../navigation/GpxTrack.h"
 #include "../navigation/RideLog.h"
 #include "../sensors/BLE_HR_Client.h"
-#include "../sensors/SoftANT.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
 #include "../system/Settings.h"
@@ -40,11 +39,6 @@ lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
 lv_timer_t *s_info_timer = nullptr;
 
-// Index i corresponds to HrSource_t value i (BLE=0, ANT=1).
-constexpr int HR_SOURCE_COUNT = 2;
-lv_obj_t *s_hr_btns[HR_SOURCE_COUNT] = {nullptr, nullptr};
-lv_obj_t *s_hr_note = nullptr;
-HrSource_t s_hr_source_at_load = HR_SOURCE_BLE;
 
 lv_obj_t *s_hr_rest_value = nullptr;
 lv_obj_t *s_hr_max_value = nullptr;
@@ -125,43 +119,6 @@ void OnStartNewRideClicked(lv_event_t *e) {
     }
 }
 
-void RefreshHrSelection() {
-    const HrSource_t current = Settings_GetHrSource();
-
-    for (int i = 0; i < HR_SOURCE_COUNT; i++) {
-        if (s_hr_btns[i] == nullptr) {
-            continue;
-        }
-        const bool active = ((int)current == i);
-        lv_obj_set_style_bg_color(s_hr_btns[i],
-                                  lv_color_hex(active ? COLOR_ACCENT : 0x24313D), 0);
-        lv_obj_t *label = lv_obj_get_child(s_hr_btns[i], 0);
-        if (label != nullptr) {
-            lv_obj_set_style_text_color(label, lv_color_hex(active ? 0x081015 : COLOR_VALUE), 0);
-        }
-    }
-
-    // Radio bring-up happens once in setup(); switching modes means
-    // re-sequencing the controller, so say plainly that a restart is needed
-    // rather than letting the user think it took effect.
-    if (s_hr_note != nullptr) {
-        if (Settings_DidHrSourceFallBack() && current == s_hr_source_at_load) {
-            // Don't silently swallow the recovery -- otherwise the user just
-            // sees their choice mysteriously back on BLE.
-            lv_label_set_text(s_hr_note,
-                              "Previous boot stalled starting the radio, so this reverted to BLE.");
-            lv_obj_set_style_text_color(s_hr_note, lv_color_hex(COLOR_DANGER), 0);
-        } else if (current == s_hr_source_at_load) {
-            lv_label_set_text(s_hr_note, "Active now.");
-            lv_obj_set_style_text_color(s_hr_note, lv_color_hex(COLOR_CAPTION), 0);
-        } else {
-            lv_label_set_text_fmt(s_hr_note, "Saved. Restart to switch from %s to %s.",
-                                  Settings_HrSourceLabel(s_hr_source_at_load),
-                                  Settings_HrSourceLabel(current));
-            lv_obj_set_style_text_color(s_hr_note, lv_color_hex(COLOR_ACCENT), 0);
-        }
-    }
-}
 
 void RefreshNavSelection() {
     const NavMode_t current = Settings_GetNavMode();
@@ -183,7 +140,15 @@ void RefreshNavSelection() {
         return;
     }
 
-    if (!Settings_NavModeIsImplemented(current)) {
+    // First, because it explains a setting the rider did not choose. The
+    // reporting for this used to live in the heart-rate card, which the ANT+
+    // removal deleted; without it the fallback moves the setting silently and
+    // looks like the device forgetting what it was told.
+    if (Settings_DidNavModeFallBack() && current == s_nav_mode_at_load) {
+        lv_label_set_text(s_nav_note, "Forced to GPX: the previous boot did not finish "
+                                      "bringing up the radios.");
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
+    } else if (!Settings_NavModeIsImplemented(current)) {
         // Say so rather than let the rider discover an empty ROUTE panel on
         // the road.
         lv_label_set_text(s_nav_note, "Not built yet: no navigation will be shown in this mode.");
@@ -210,42 +175,12 @@ void RefreshNavSelection() {
     }
 }
 
-// Both settings share one radio, so changing either can move the other (see
-// the exclusivity rule in Settings.h). Report it plainly instead of letting a
-// button the user didn't touch change under them.
-void NoteCoercion(const char *changed_to) {
-    lv_label_set_text_fmt(s_hr_note, "Heart rate switched to %s: turn-by-turn needs the BLE "
-                                     "stack, which ANT+ takes over.", changed_to);
-    lv_obj_set_style_text_color(s_hr_note, lv_color_hex(COLOR_DANGER), 0);
-}
-
+// Nothing else moves when this changes. It used to coerce the heart-rate
+// source, because turn-by-turn needed the NimBLE host that ANT+ took away.
 void OnNavModeClicked(lv_event_t *e) {
     const int index = (int)(intptr_t)lv_event_get_user_data(e);
-    const HrSource_t hr_before = Settings_GetHrSource();
-
     Settings_SetNavMode((NavMode_t)index);
-
     RefreshNavSelection();
-    RefreshHrSelection();
-    if (Settings_GetHrSource() != hr_before) {
-        NoteCoercion(Settings_HrSourceLabel(Settings_GetHrSource()));
-    }
-}
-
-void OnHrSourceClicked(lv_event_t *e) {
-    const int index = (int)(intptr_t)lv_event_get_user_data(e);
-    const NavMode_t nav_before = Settings_GetNavMode();
-
-    Settings_SetHrSource((HrSource_t)index);
-
-    RefreshHrSelection();
-    RefreshNavSelection();
-    if (Settings_GetNavMode() != nav_before) {
-        lv_label_set_text_fmt(s_nav_note, "Navigation switched to %s: ANT+ takes the radio "
-                                          "turn-by-turn needs.",
-                              Settings_NavModeLabel(Settings_GetNavMode()));
-        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
-    }
 }
 
 // Re-reads both numbers from Settings rather than tracking them locally, so
@@ -373,23 +308,7 @@ void InfoTimerCallback(lv_timer_t *timer) {
     // built, so a value set only at load would read "waiting for fix" for the
     // whole ride and suggest the log was broken when it was working.
     if (s_hrlink_value != nullptr) {
-        if (Settings_GetHrSource() == HR_SOURCE_ANT) {
-            // "ANT+ mode, BLE client off" told the rider nothing they could
-            // act on. ANT+ has never run on this hardware, so the first
-            // question is always whether the radio came up at all, and the
-            // second is whether any strap is being heard.
-            // "rx" rather than "any": the one open channel is device type
-            // 0x78, so this counts heart-rate masters only. Nothing else on
-            // the band can reach it. See SoftANT.h.
-            lv_label_set_text_fmt(s_hrlink_value,
-                                  "ANT+: %s\nticks %lu, rx %lu, hrm %lu, ev %u",
-                                  SoftANT_StatusText(), (unsigned long)SoftANT_Ticks(),
-                                  (unsigned long)SoftANT_RawPages(),
-                                  (unsigned long)SoftANT_PageCount(),
-                                  (unsigned)SoftANT_LastEvent());
-        } else {
-            lv_label_set_text_fmt(s_hrlink_value, "Link: %s", BLE_HR_StatusText());
-        }
+        lv_label_set_text_fmt(s_hrlink_value, "Link: %s", BLE_HR_StatusText());
     }
 
     // The phone can only ever report that it did not find the head unit, which
@@ -541,55 +460,18 @@ void PageSettings::onViewLoad() {
     }
     lv_obj_add_event_cb(unit_sw, OnUnitToggled, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    // ---- Heart-rate source ----
-    // ANT+ and BLE are different radio configurations chosen at init, not a
-    // live switch: SoftANT_Start(false) takes the BLE controller exclusively,
-    // and coexist mode requires NimBLE scanning before ANT opens. So this
-    // persists the choice and main.cpp acts on it at the next boot.
-    s_hr_source_at_load = Settings_GetHrSource();
-
-    lv_obj_t *hr_card = MakeCard(body, "HEART RATE SOURCE");
-
-    lv_obj_t *hr_row = lv_obj_create(hr_card);
-    lv_obj_set_size(hr_row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_bg_opa(hr_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(hr_row, 0, 0);
-    lv_obj_set_style_pad_all(hr_row, 0, 0);
-    lv_obj_set_style_pad_column(hr_row, 6, 0);
-    lv_obj_clear_flag(hr_row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(hr_row, LV_FLEX_FLOW_ROW);
-
-    static const char *const HR_LABELS[HR_SOURCE_COUNT] = {"BLE", "ANT+"};
-    for (int i = 0; i < HR_SOURCE_COUNT; i++) {
-        lv_obj_t *btn = lv_btn_create(hr_row);
-        lv_obj_set_flex_grow(btn, 1);
-        lv_obj_set_height(btn, 34);
-        lv_obj_set_style_radius(btn, 8, 0);
-        lv_obj_set_style_shadow_width(btn, 0, 0);
-        lv_obj_add_event_cb(btn, OnHrSourceClicked, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-
-        lv_obj_t *label = lv_label_create(btn);
-        lv_label_set_text(label, HR_LABELS[i]);
-        lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
-        lv_obj_center(label);
-
-        s_hr_btns[i] = btn;
-    }
+    // ---- Heart rate ----
+    // No source to choose any more: BLE is the only one. The card stays
+    // because it is where the link status and the restart live, and it is
+    // where someone looks when the reading is missing.
+    lv_obj_t *hr_card = MakeCard(body, "HEART RATE");
 
     lv_obj_t *hr_hint = lv_label_create(hr_card);
-    lv_label_set_text(hr_hint,
-                      "BLE: watch or strap broadcasting 0x180D.\n"
-                      "ANT+: strap on the ESP32's own radio.\n"
-                      "One at a time -- they share the same radio.");
+    lv_label_set_text(hr_hint, "A watch or strap broadcasting 0x180D.");
     lv_obj_set_style_text_font(hr_hint, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(hr_hint, lv_color_hex(COLOR_CAPTION), 0);
     lv_label_set_long_mode(hr_hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(hr_hint, LV_PCT(100));
-
-    s_hr_note = lv_label_create(hr_card);
-    lv_obj_set_style_text_font(s_hr_note, &lv_font_montserrat_10, 0);
-    lv_label_set_long_mode(s_hr_note, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_hr_note, LV_PCT(100));
 
     lv_obj_t *restart_btn = lv_btn_create(hr_card);
     lv_obj_set_width(restart_btn, LV_PCT(100));
@@ -629,8 +511,6 @@ void PageSettings::onViewLoad() {
     lv_label_set_long_mode(s_tbtlink_value, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_tbtlink_value, LV_PCT(100));
     lv_label_set_text(s_tbtlink_value, "TBT: --");
-
-    RefreshHrSelection();
 
     // ---- Heart-rate zones ----
     // Unlike the source above, these take effect immediately: they are only
@@ -741,8 +621,7 @@ void PageSettings::onViewLoad() {
     lv_obj_t *nav_hint = lv_label_create(nav_card);
     lv_label_set_text(nav_hint,
                       "TBT: turn prompts pushed from the phone over BLE.\n"
-                      "GPX: offline breadcrumb from a .gpx on the SD card.\n"
-                      "TBT needs BLE, so it cannot run alongside ANT+.");
+                      "GPX: offline breadcrumb from a .gpx on the SD card.");
     lv_obj_set_style_text_font(nav_hint, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(nav_hint, lv_color_hex(COLOR_CAPTION), 0);
     lv_label_set_long_mode(nav_hint, LV_LABEL_LONG_WRAP);
@@ -920,14 +799,10 @@ void PageSettings::onViewUnload() {
     s_hrlink_value = nullptr;
     s_tbtlink_value = nullptr;
     s_heap_value = nullptr;
-    s_hr_note = nullptr;
     s_hr_rest_value = nullptr;
     s_hr_max_value = nullptr;
     s_hr_zone_table = nullptr;
     s_nav_note = nullptr;
-    for (int i = 0; i < HR_SOURCE_COUNT; i++) {
-        s_hr_btns[i] = nullptr;
-    }
     for (int i = 0; i < NAV_MODE_COUNT; i++) {
         s_nav_btns[i] = nullptr;
     }

@@ -19,9 +19,9 @@
 // Everything else BLE in this firmware is a central (BLE_HR_Client dials out
 // to a heart-rate peer). This module runs the other role: it advertises a
 // service the phone connects to and writes into. NimBLE handles both roles at
-// once, but both need the BLE controller, so this cannot run when the
-// heart-rate source is set to ANT+ -- SoftANT_Start(false) takes the
-// controller exclusively and no NimBLE host exists in that mode.
+// once, but both need the BLE controller, so the two must be sequenced rather
+// than started together -- see main.cpp, and the registration and advertising
+// constraints below.
 // ---------------------------------------------------------------------------
 //
 // The frame format and its pure decoder live in TbtParse.h/.c, which carry no

@@ -45,45 +45,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 3. Wireless Connectivity & Sensor Decoding
 
-> The "ANT+ primary, BLE secondary" arrangement below was **replaced by a
-> mutually exclusive choice**, because the two cannot coexist as built:
-> `SoftANT_Start(false)` hands the BLE controller to `esp32-ant` as a raw ANT
-> modem, leaving no NimBLE host. The user picks one in Settings, and since
-> both are init-time radio configurations, a change only applies on restart.
+> **Software ANT+ was removed on 2026-09-13, at the user's request.** They use
+> a BLE heart-rate monitor and do not need it. What it cost while it existed is
+> worth remembering, because it shaped a lot of this file: it could not coexist
+> with NimBLE (`SoftANT_Start(false)` handed the BLE controller to `esp32-ant`
+> as a raw modem, leaving no host), so heart rate and navigation had to be a
+> mutually exclusive pair enforced in `Settings.h`, and turn-by-turn could not
+> run at all in ANT+ mode. All of that is gone. Navigation is now a free
+> choice, and `git log` before that commit is the record if it ever comes back.
 >
-> That choice also gates navigation, enforced as a single rule in
-> `Settings.h`: **never (NAV_MODE_TBT and HR_SOURCE_ANT)**. Turn-by-turn is a
-> NimBLE GATT server, so choosing ANT+ forces navigation to GPX, and choosing
-> TBT forces heart rate to BLE. Both setters repair the conflict and the UI
-> reports which setting moved.
+> It also never worked. See section 8: the radio and its TDMA grid came up, but
+> no ANT+ transmitter was ever in range to prove the decode, because the strap
+> on the bench is a 5.3kHz analog treadmill unit.
 
-- **Pure Software ANT+ (one of two exclusive heart-rate sources)**:
-  - Utilize ESP32-S3 2.4GHz PHY via `esp32-ant` software library.
-  - Soft-decode 2.4GHz ANT+ broadcast packets in a dedicated FreeRTOS task on Core 0 to extract BPM from Device Type `0x78`.
-  - *No external SPI ANT+/NRF24 hardware required*.
-- **BLE Client (the other exclusive source / Galaxy Watch 8)**:
-  - Run `NimBLE-Arduino` on Core 0 for point-to-point connection to standard BLE Heart Rate Service (`0x180D`).
-  - Defaults to this source. ANT+ has never been exercised on hardware, and a
-    hang during its bring-up would strand the user on a dead screen with the
-    setting unreachable — hence also the NVS bring-up watchdog in
-    `Settings_Init()`, which reverts to BLE if a previous boot never completed.
+- **BLE Client (the only heart-rate source)**:
+  - Run `NimBLE-Arduino` on Core 0 for point-to-point connection to a standard
+    BLE Heart Rate Service (`0x180D`) peer — a strap or the Galaxy Watch 8 —
+    and subscribe to Heart Rate Measurement (`0x2A37`).
+  - Discovery is separated from reconnection on purpose: `BLE_HR_Start()`
+    scans once to learn the peer's address, and every later reconnect dials it
+    directly. That split was originally forced by ANT+ coexistence and stays
+    because it is better behaviour on its own — it does not put a scan on the
+    controller beside a connection attempt, which is the load section 8 warns
+    about.
+  - The parsing half is `src/sensors/BleHrParse.c`, host-tested with no NimBLE
+    dependency.
+- **BLE Turn-by-Turn**: a NimBLE GATT server the phone writes into. Chosen in
+  Settings against offline GPX, and since both are init-time radio
+  configurations a change applies on restart. The NVS bring-up watchdog in
+  `Settings_Init()` guards this setting now — it used to guard the heart-rate
+  source — and falls back to GPX, which starts no radio at all.
 
 ## 4. Software Architecture & FreeRTOS Core Rules
 - **Core 0 (Background Data Core)**:
   - Task 1: MAX-M10S UBX parsing with low-speed anti-drift and Kalman filtering.
-  - Task 2: Software ANT+ / NimBLE BLE client reception.
+  - Task 2: NimBLE BLE client reception (heart rate).
   - Task 3: Power & IMU monitoring (detect 5-min inactivity to trigger Deep Sleep).
-  - *Known exception — the `esp32-ant` radio task runs on Core 1.* `ant_node`'s
-    own receive task (priority `configMAX_PRIORITIES-2`, holds the 32768Hz ANT
-    TDMA grid) stays on the library's Core 1 default: Core 0 hosts the BT
-    controller that this task hooks, so pinning it there makes a max-priority
-    task contend with its own controller, and Core 1 is the configuration the
-    library verified live against a real strap. It does not disturb the LVGL
-    loop, because in receive mode it blocks in `ulTaskNotifyTake()` rather than
-    busy-waiting (it only spins for sub-millisecond *transmit* deadlines, and we
-    are a receive-only slave). Our own supervisory task (`SoftANT_Task`) and all
-    DataCenter publishing still run on Core 0, which is what this rule is about.
-    See the rationale block in `src/sensors/SoftANT.cpp`.
 - **Core 1 (UI & Life Cycle Core)**:
   - Task 1: LVGL rendering loop (`lv_timer_handler()`).
   - Task 2: X-TRACK `PageManager` life cycle management.
@@ -114,17 +111,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     exactly when they are looking at it.
 
 ## 6. Open-Source Reference Repositories (`deps/`)
-Vendored as git submodules. Most are reference only, but **`deps/esp32-ant`
-is now a real build dependency**, pulled in via
-`symlink://deps/esp32-ant/components/ant` in `platformio.ini` — so the
-submodule must be initialised (`git submodule update --init`) or the firmware
-will not link. `deps/X-TRACK`'s `PageManager` and `DataCenter` have been
-*ported into* `src/` rather than linked; the submodule remains the reference
-for both. Each submodule's responsibility:
+Vendored as git submodules, reference only — nothing under `deps/` is a build
+dependency any more. `deps/esp32-ant` was the one exception and it was removed
+with ANT+. `deps/X-TRACK`'s `PageManager` and `DataCenter` have been *ported
+into* `src/` rather than linked; the submodule remains the reference for both.
+Each submodule's responsibility:
 
 - **`deps/X-TRACK`** ([FASTSHIFT/X-TRACK](https://github.com/FASTSHIFT/X-TRACK)): Extract `DataCenter` (Pub/Sub message bus), `PageManager` page life-cycle management, and breadcrumb-trail rendering.
-- **`deps/NimBLE-Arduino`** ([h2zero/NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)): Low-power BLE client for connecting to the Galaxy Watch 8 / a standard BLE heart-rate strap (`0x180D`), and for receiving turn-by-turn (TBT) navigation data pushed from the phone app.
-- **`deps/esp32-ant`** ([RaemondBW/esp32-ant](https://github.com/RaemondBW/esp32-ant)): Soft-decode ANT+ heart-rate data (Device Type `0x78`) directly off the ESP32-S3's 2.4GHz PHY — no external hardware required.
+- **`deps/NimBLE-Arduino`** ([h2zero/NimBLE-Arduino](https://github.com/h2zero/NimBLE-Arduino)): Low-power BLE client for connecting to the Galaxy Watch 8 / a standard BLE heart-rate strap (`0x180D`), and for receiving turn-by-turn (TBT) navigation data pushed from the phone app. Pulled from the registry at `^2.2.3`, not from this submodule.
 - **`deps/SparkFun_u-blox_GNSS`** ([sparkfun/SparkFun_u-blox_GNSS_Arduino_Library](https://github.com/sparkfun/SparkFun_u-blox_GNSS_Arduino_Library)): Drive the u-blox MAX-M10S module, configure pure UBX binary protocol output, and parse high-precision fix data.
 - **`deps/Kalman`** ([balzer82/Kalman](https://github.com/balzer82/Kalman)) and **`deps/Arduino-KalmanFilter`** ([nhatuan84/Arduino-KalmanFilter](https://github.com/nhatuan84/Arduino-KalmanFilter)): Reference for the low-speed anti-drift Kalman-filter logic applied to GPS fixes.
 - **`deps/uBloxGPS`** ([SquirrelEng/uBloxGPS](https://github.com/SquirrelEng/uBloxGPS)): Lightweight reference for decoding the UBX binary `NAV-PVT` message directly (no NMEA parsing, smaller footprint than TinyGPS) — the UBX-parsing half of the original `OpenBikeComputer` request.
@@ -182,17 +176,18 @@ These were each discovered the slow way. They are not optional trivia.
   minutes later by the rider — drew the route correctly off the same card.
   Two screens disagreeing about one piece of hardware is the signature of this
   bug, not of flaky hardware.
-- **ANT+ comes up, but has still never received a page.** First live run:
-  `ant_start=1`, `ant_chan=1`, the MAC ticking past 589k, `ev 0` (no search
-  timeout) — the soft-PHY and its TDMA grid are demonstrably running. What is
-  missing is a transmitter. The strap on the bench is a **SOLE** (treadmill
-  brand), which is 5.3kHz analog: a near-field magnetic pulse, not 2.4GHz, and
-  no firmware can bridge that. It works with the user's running machine
-  because the treadmill has an analog receiver coil, and it is invisible to
-  BLE too — a Mac scan found no `0x180D` advertiser. Verifying CLAUDE.md §3
-  needs a real ANT+ strap (Garmin HRM-Dual, Wahoo TICKR). Until one exists,
-  "ANT+ works" is unproven in **both** directions: nothing says it does, and
-  nothing says it doesn't.
+- **ANT+ was removed, and it was never proven either way.** Its last live run
+  showed `ant_start=1`, `ant_chan=1`, the MAC ticking past 589k and `ev 0` — the
+  soft-PHY and its TDMA grid were demonstrably running. What was missing was a
+  transmitter: the strap on the bench is a **SOLE** treadmill unit, which is
+  5.3kHz analog, a near-field magnetic pulse rather than 2.4GHz, and no firmware
+  can bridge that. It is invisible to BLE too. So "ANT+ works" was never
+  established in **either** direction, and the code was deleted on 2026-09-13
+  rather than left as an untested radio mode with a UI switch in front of it.
+  The lesson that outlives it: a feature nothing can test is a feature that will
+  be wrong, and a bench that cannot exercise a radio is worth knowing about
+  before the radio is written.
+
 - **Never advertise while the heart-rate client is connecting.** The two BLE
   modules share one controller, and asking it to advertise while it stops a
   scan and initiates a link makes an HCI command miss its ack deadline. NimBLE

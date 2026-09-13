@@ -47,7 +47,7 @@ typedef struct {
 
 typedef struct {
     uint8_t bpm;
-    uint8_t battery; // percent, 0-100 (0xFF = unknown, e.g. ANT+ straps don't report battery)
+    uint8_t battery; // percent, 0-100 (0xFF = unknown; a 0x180D peer reports battery elsewhere)
 } HeartRate_t;
 
 typedef struct {

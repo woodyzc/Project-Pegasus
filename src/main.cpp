@@ -12,7 +12,6 @@
 #include "navigation/RoadMap.h"
 #include "sensors/BLE_HR_Client.h"
 #include "sensors/GPS_Reader.h"
-#include "sensors/SoftANT.h"
 #include "system/DataCenter.h"
 #include "system/LvglTask.h"
 #include "system/PageManager/PageManager.h"
@@ -155,75 +154,56 @@ void setup() {
     // already drawn and refreshing while the scan runs, instead of the screen
     // sitting blank until a peer is found.
     //
-    // Which radios come up is the user's choice, persisted in Settings. These
-    // are init-time configurations rather than a runtime switch, so the
-    // settings page saves the choice and asks for a restart.
+    // The nav mode is the user's choice, persisted in Settings. It is an
+    // init-time configuration rather than a runtime switch, so the settings
+    // page saves the choice and asks for a restart.
+    //
     // Raised before the radios are touched and cleared once we're through, so
     // a mode that hangs here is caught on the next boot (see Settings.h).
     Settings_NoteRadioBringUpStart();
 
-    switch (Settings_GetHrSource()) {
-        case HR_SOURCE_ANT:
-            // Exclusive use of the BLE controller as an ANT modem; no NimBLE
-            // host is started at all in this mode.
-            SoftANT_Start(false);
-            break;
+    BLE_HR_Init();
 
-        case HR_SOURCE_BLE:
-        default:
-            BLE_HR_Init();
+    // ---- This order is load-bearing. Do not swap these two. ----
+    // Turn-by-turn shares the NimBLE stack the HR client brings up, and
+    // registering its GATT service has to happen while the GATT table is still
+    // mutable. NimBLE's ble_gatts_mutable() refuses once ANY of these is true:
+    // advertising is active, a scan is active, a connection attempt is in
+    // flight, or a connection is established. BLE_HR_Start() ends with all of
+    // the last three possible -- it scans, connects, and leaves a supervisor
+    // task holding the link up.
+    //
+    // Registering anyway does not return an error to us. It reaches
+    // ble_svc_gap_init(), whose SYSINIT_PANIC_ASSERT(rc == 0) turns
+    // BLE_HS_EBUSY into a panic, and the board reboots. That made it look
+    // intermittent and hardware-ish, because it only happened when the
+    // heart-rate peer was actually in range: with no watch nearby the scan
+    // finds nothing, nothing connects, and the same code registers fine.
+    //
+    // BLE_HR_Init() is safe to precede this -- it only configures the scan
+    // parameters, it does not start scanning.
+    if (Settings_GetNavMode() == NAV_MODE_TBT) {
+        BLE_TBT_Start();
+    }
 
-            // ---- This order is load-bearing. Do not swap these two. ----
-            // Turn-by-turn shares the NimBLE stack the HR client brings up,
-            // and registering its GATT service has to happen while the GATT
-            // table is still mutable. NimBLE's ble_gatts_mutable() refuses
-            // once ANY of these is true: advertising is active, a scan is
-            // active, a connection attempt is in flight, or a connection is
-            // established. BLE_HR_Start() ends with all of the last three
-            // possible -- it scans, connects, and leaves a supervisor task
-            // holding the link up.
-            //
-            // Registering anyway does not return an error to us. It reaches
-            // ble_svc_gap_init(), whose SYSINIT_PANIC_ASSERT(rc == 0) turns
-            // BLE_HS_EBUSY into a panic, and the board reboots. That made it
-            // look intermittent and hardware-ish, because it only happened
-            // when the heart-rate peer was actually in range: with no watch
-            // nearby the scan finds nothing, nothing connects, and the same
-            // code registers fine.
-            //
-            // BLE_HR_Init() is safe to precede this -- it only configures the
-            // scan parameters, it does not start scanning.
-            //
-            // Settings guarantees NAV_MODE_TBT implies this branch (the
-            // exclusivity rule in Settings.h), but honour the mode explicitly
-            // rather than assuming: with GPX selected there is no reason to
-            // advertise a service nothing will write to.
-            if (Settings_GetNavMode() == NAV_MODE_TBT) {
-                BLE_TBT_Start();
-            }
+    BLE_HR_Start();
 
-            BLE_HR_Start();
-
-            // Advertising goes last, and the split from BLE_TBT_Start() is the
-            // point. Registration had to come before any connection existed;
-            // advertising has the opposite constraint and must not overlap the
-            // discovery scan above.
-            //
-            // Running them together puts a scan, an advertisement and a
-            // connection attempt on the controller at once. An HCI command that
-            // misses its ack deadline under that load makes NimBLE reset its
-            // host, and its own timer -- which the reset does not cancel --
-            // then fires during the re-sync and hits assert(0) in
-            // ble_hs_timer_exp. That is a library defect we cannot patch, so
-            // the concurrency that provokes it is what has to go.
-            if (Settings_GetNavMode() == NAV_MODE_TBT) {
-                BLE_TBT_StartAdvertising();
-            }
-            break;
+    // Advertising goes last, and the split from BLE_TBT_Start() is the point.
+    // Registration had to come before any connection existed; advertising has
+    // the opposite constraint and must not overlap the discovery scan above.
+    //
+    // Running them together puts a scan, an advertisement and a connection
+    // attempt on the controller at once. An HCI command that misses its ack
+    // deadline under that load makes NimBLE reset its host, and its own timer
+    // -- which the reset does not cancel -- then fires during the re-sync and
+    // hits assert(0) in ble_hs_timer_exp. That is a library defect we cannot
+    // patch, so the concurrency that provokes it is what has to go.
+    if (Settings_GetNavMode() == NAV_MODE_TBT) {
+        BLE_TBT_StartAdvertising();
     }
 
     // Got through radio bring-up: clear the flag so the next boot honours the
-    // user's choice instead of falling back to BLE.
+    // user's choice instead of falling back to GPX.
     Settings_NoteRadioBringUpOk();
 
     // Both read GPS through DataCenter, so they are independent of which page

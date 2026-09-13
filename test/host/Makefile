@@ -2,8 +2,6 @@
 #
 # Almost nothing in this firmware can be tested off-target, so the parts that
 # can are deliberately kept dependency-free and covered here:
-#   * test_parsebpm     - ANT+ HRM page decoding (src/sensors/SoftANT.cpp's
-#                         ParseBPM logic, over deps/esp32-ant's decoder)
 #   * test_ble_hr_parse - BLE 0x2A37 measurement parsing (compiles the real
 #                         src/sensors/BleHrParse.c)
 #   * test_tbt_parse    - turn-by-turn frame decoding (compiles the real
@@ -46,10 +44,8 @@
 #
 #   cd test/host && make          # build + run everything
 #   cd test/host && make asan     # same under ASan/UBSan
-#
-# See also deps/esp32-ant/test/host (the library's own 100-test suite).
 
-ANT     := ../../deps/esp32-ant/components/ant
+
 SYSTEM  := ../../src/system
 SENSORS := ../../src/sensors
 NAV     := ../../src/navigation
@@ -57,12 +53,11 @@ NAV     := ../../src/navigation
 CFLAGS ?= -std=c11 -Wall -Wextra
 SUFFIX ?=
 
-BINS := test_parsebpm$(SUFFIX) test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) \
-        test_ubx_parse$(SUFFIX) test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) \
-        test_track_buffer$(SUFFIX) test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) \
-        test_trip_accum$(SUFFIX) test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) \
-        test_clock_frame$(SUFFIX) test_time_source$(SUFFIX) \
-        test_ride_stats$(SUFFIX)
+BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFIX) \
+        test_timezone$(SUFFIX) test_gpx_parse$(SUFFIX) test_track_buffer$(SUFFIX) \
+        test_map_project$(SUFFIX) test_gpx_write$(SUFFIX) test_trip_accum$(SUFFIX) \
+        test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) test_clock_frame$(SUFFIX) \
+        test_time_source$(SUFFIX) test_ride_stats$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -78,16 +73,13 @@ run: $(BINS)
 # three times over -- a changed constant in a .h, a `make` that reports PASS,
 # and a suite that never recompiled against it.
 HEADERS := $(wildcard $(SYSTEM)/*.h) $(wildcard $(SENSORS)/*.h) \
-           $(wildcard $(NAV)/*.h) $(wildcard $(ANT)/include/*.h)
+           $(wildcard $(NAV)/*.h)
 
 $(BINS): $(HEADERS)
 
 # The headers are prerequisites but not inputs to the compiler, so every recipe
 # passes $(CSRC) rather than $^ -- clang refuses `-o` when handed a header.
 CSRC = $(filter %.c,$^)
-
-test_parsebpm$(SUFFIX): test_parsebpm.c $(ANT)/src/antplus_profiles.c
-	$(CC) $(CFLAGS) -I$(ANT)/include -o $@ $(CSRC)
 
 test_ble_hr_parse$(SUFFIX): test_ble_hr_parse.c $(SENSORS)/BleHrParse.c
 	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC)
@@ -137,7 +129,7 @@ test_hr_zone$(SUFFIX): test_hr_zone.c $(SYSTEM)/HrZone.c
 test_route_parse$(SUFFIX): test_route_parse.c $(NAV)/RouteParse.c $(NAV)/RouteFollow.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
 
-# Both suites under the sanitizers.
+# Every suite under the sanitizers.
 asan:
 	$(MAKE) CC="$(CC) -fsanitize=address,undefined" SUFFIX=_asan
 
