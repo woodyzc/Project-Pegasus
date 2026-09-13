@@ -122,8 +122,10 @@ const char *s_active_tz = nullptr;
 lv_obj_t *s_incline_label = nullptr;
 lv_obj_t *s_hr_label = nullptr;
 // Ride averages and peaks, beside the live value in the two tall cells.
-lv_obj_t *s_speed_stats_label = nullptr;
-lv_obj_t *s_hr_stats_label = nullptr;
+lv_obj_t *s_speed_avg_label = nullptr;
+lv_obj_t *s_speed_max_label = nullptr;
+lv_obj_t *s_hr_avg_label = nullptr;
+lv_obj_t *s_hr_max_label = nullptr;
 lv_obj_t *s_incline_cell = nullptr;
 lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, nullptr};
 
@@ -285,6 +287,12 @@ lv_obj_t *MakeLabel(lv_obj_t *parent, const char *text, const lv_font_t *font, u
 // what they gave up: an 11px caption at y=2 and a 44px value 1px off the
 // bottom of a 60px cell leaves the two boxes 2px apart.
 constexpr lv_coord_t CELL_PAD = 6;         // left and right inset
+
+// The average-and-peak block beside a live value. 76px holds "MAX" at 10pt
+// and a three-digit figure at 18pt; 21px a row is the 18pt line box plus the
+// gap that keeps two of them from touching.
+constexpr lv_coord_t SECONDARY_W = 76;
+constexpr lv_coord_t SECONDARY_ROW_H = 21;
 constexpr lv_coord_t CELL_CAPTION_Y = 2;   // caption and unit baseline row
 constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
 
@@ -365,25 +373,57 @@ lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
     return MakeValueIn(cell, text, color, &lv_font_montserrat_40);
 }
 
-// The "AVG 12.3 / MAX 24.8" block, bottom-right of a cell, beside the value.
+// One line of the ride block: a small word, then the figure it names.
 //
-// Two lines in one label rather than two labels: they are always written
-// together, and a single right-aligned label keeps them aligned with each
-// other without a second alignment to go stale.
-lv_obj_t *MakeSecondary(lv_obj_t *cell) {
-    lv_obj_t *label = lv_label_create(cell);
-    lv_label_set_text(label, "AVG --\nMAX --");
-    // 18pt and white. At caption size and caption colour these read as
-    // labelling for the live value rather than as two numbers of their own,
-    // and on a ride they are the numbers people actually look at. 18 is the
-    // ceiling: "AVG 24.6" is about 73px, and the cell has to hold a 32pt live
-    // value beside it inside 150.
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_VALUE), 0);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_style_text_line_space(label, 2, 0);
-    lv_obj_align(label, LV_ALIGN_BOTTOM_RIGHT, -CELL_PAD, CELL_VALUE_Y);
-    return label;
+// Two labels rather than one string, because they are not the same kind of
+// thing. "AVG" is a caption and the number beside it is a reading, and LVGL
+// cannot give one label two sizes -- so a single "AVG 142" forces the word to
+// be as large as the figure, which is backwards. The row is flex, so the word
+// stays put as the figure changes width.
+lv_obj_t *MakeSecondaryRow(lv_obj_t *parent, const char *word) {
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    // Explicit width, not LV_SIZE_CONTENT. Nested content-sized flex
+    // containers did not resolve here: the row took the width of the figure
+    // alone and the word beside it was clipped to a two-pixel sliver of its
+    // last letter. A width decided in the layout cannot be got wrong by a
+    // measuring pass that runs in the wrong order.
+    lv_obj_set_size(row, lv_pct(100), SECONDARY_ROW_H);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Placed rather than flexed, and for once that is the simpler answer:
+    // there are two children, one pinned to each end, and lv_obj_align stores
+    // the alignment so it survives the labels changing width.
+    lv_obj_t *caption = lv_label_create(row);
+    lv_label_set_text(caption, word);
+    lv_obj_set_style_text_font(caption, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(caption, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_align(caption, LV_ALIGN_BOTTOM_LEFT, 0, -3);
+
+    lv_obj_t *value = lv_label_create(row);
+    lv_label_set_text(value, "--");
+    lv_obj_set_style_text_font(value, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
+    lv_obj_align(value, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    return value;
+}
+
+// The average-and-peak block, bottom-right of a cell beside the live value.
+// Writes the two figure labels back through the pointers; the words are fixed
+// and nothing needs to hold them.
+void MakeSecondary(lv_obj_t *cell, lv_obj_t **out_avg, lv_obj_t **out_max) {
+    lv_obj_t *block = lv_obj_create(cell);
+    lv_obj_remove_style_all(block);
+    // Wide enough for "MAX" and a three-digit figure, and no wider: the live
+    // value has the rest of the cell and the two must not meet.
+    lv_obj_set_size(block, SECONDARY_W, 2 * SECONDARY_ROW_H);
+    lv_obj_clear_flag(block, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(block, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(block, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
+    lv_obj_align(block, LV_ALIGN_BOTTOM_RIGHT, -CELL_PAD, CELL_VALUE_Y);
+
+    *out_avg = MakeSecondaryRow(block, "AVG");
+    *out_max = MakeSecondaryRow(block, "MAX");
 }
 
 // The unit sits on the caption row, at the opposite end of the cell: "SPEED"
@@ -649,43 +689,58 @@ void RenderSpeedAndTrip() {
         lv_label_set_text(s_trip_unit_label, Settings_DistanceUnitLabel());
     }
 
-    if (s_speed_stats_label != nullptr) {
+    if (s_speed_avg_label != nullptr) {
         const float max_kmh = RideStats_MaxSpeedKmh();
         if (max_kmh <= 0.0f) {
-            // Dashes, not zeros, before anything has moved. The heart-rate
-            // block already did this and speed did not, which the simulator
-            // showed side by side on a cold boot: "AVG 0.0 / MAX 0.0" reads as
-            // a ride that went nowhere, where dashes read as a ride that has
-            // not started.
-            lv_label_set_text(s_speed_stats_label, "AVG --\nMAX --");
+            // Dashes, not zeros, before anything has moved. Zero reads as a
+            // ride that went nowhere, where dashes read as one that has not
+            // started.
+            lv_label_set_text(s_speed_avg_label, "--");
+            lv_label_set_text(s_speed_max_label, "--");
         } else {
-            // Converted like the live value, so all three agree with the unit
-            // in the corner. A ride average in km/h beside a speed in mph is
-            // the kind of thing nobody notices until they compare two rides.
             char avg[12];
             char max[12];
             FormatMetric(Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()), avg, sizeof(avg));
             FormatMetric(Settings_SpeedFromKmh(max_kmh), max, sizeof(max));
-            lv_label_set_text_fmt(s_speed_stats_label, "AVG %s\nMAX %s", avg, max);
+            lv_label_set_text(s_speed_avg_label, avg);
+            lv_label_set_text(s_speed_max_label, max);
         }
     }
 }
 
 void RenderHeartRateStats() {
-    if (s_hr_stats_label == nullptr) {
+    if (s_hr_avg_label == nullptr) {
         return;
     }
     const uint8_t avg = RideStats_AvgBpm();
     const uint8_t max = RideStats_MaxBpm();
+
     // Dashes rather than zero before a strap has reported. Zero is a number a
     // rider could believe, and "average heart rate 0" reads as a fault rather
     // than as an absence.
     if (avg == 0) {
-        lv_label_set_text(s_hr_stats_label, "AVG --\nMAX --");
-    } else {
-        lv_label_set_text_fmt(s_hr_stats_label, "AVG %u\nMAX %u", (unsigned)avg,
-                              (unsigned)max);
+        lv_label_set_text(s_hr_avg_label, "--");
+        lv_label_set_text(s_hr_max_label, "--");
+        lv_obj_set_style_text_color(s_hr_avg_label, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_set_style_text_color(s_hr_max_label, lv_color_hex(COLOR_VALUE), 0);
+        return;
     }
+
+    lv_label_set_text_fmt(s_hr_avg_label, "%u", (unsigned)avg);
+    lv_label_set_text_fmt(s_hr_max_label, "%u", (unsigned)max);
+
+    // Each figure takes ITS OWN zone's colour, not the live reading's. A ride
+    // that averages zone 2 and peaks in zone 5 is the ordinary shape of a
+    // ride, and colouring both by the current beat would hide exactly that.
+    // The live value already works this way; this extends the same encoding to
+    // the two figures beside it, so the cell reads as three zones at a glance
+    // with no number parsed.
+    const uint8_t rest = Settings_GetHrRestBpm();
+    const uint8_t ceiling = Settings_GetHrMaxBpm();
+    lv_obj_set_style_text_color(
+        s_hr_avg_label, lv_color_hex(ZONE_COLORS[HrZone_Index(avg, rest, ceiling)]), 0);
+    lv_obj_set_style_text_color(
+        s_hr_max_label, lv_color_hex(ZONE_COLORS[HrZone_Index(max, rest, ceiling)]), 0);
 }
 
 // The only place in this file allowed to touch LVGL objects: an lv_timer
@@ -1359,12 +1414,12 @@ void PageDashboard::onViewLoad() {
     s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_28);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
     lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
-    s_speed_stats_label = MakeSecondary(speed_cell);
+    MakeSecondary(speed_cell, &s_speed_avg_label, &s_speed_max_label);
 
     lv_obj_t *hr_cell = MakeCell(parent, COL1, ROW2, STATS_W, CELL_H, "HEART RATE");
     s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_28);
     MakeUnit(hr_cell, "bpm");
-    s_hr_stats_label = MakeSecondary(hr_cell);
+    MakeSecondary(hr_cell, &s_hr_avg_label, &s_hr_max_label);
 
     // 28pt against the 32 opposite: near enough that the four cells read as one
     // grid, small enough that "188.4" fits a column narrowed to give the ride
@@ -1484,8 +1539,10 @@ void PageDashboard::onViewUnload() {
     s_active_tz = nullptr;
     s_incline_label = nullptr;
     s_hr_label = nullptr;
-    s_speed_stats_label = nullptr;
-    s_hr_stats_label = nullptr;
+    s_speed_avg_label = nullptr;
+    s_speed_max_label = nullptr;
+    s_hr_avg_label = nullptr;
+    s_hr_max_label = nullptr;
     s_route_arrow_label = nullptr;
     s_route_dir_label = nullptr;
     s_nav_content = nullptr;
