@@ -45,10 +45,15 @@ bool Settings_NavModeIsImplemented(NavMode_t mode);
 // ---- Radio bring-up safety net ----
 // The nav mode lives in NVS, so a mode that hangs during bring-up would
 // survive a reflash and leave the device looping with no reachable UI to undo
-// it. main.cpp raises a flag before touching the radios and clears it once
-// setup() completes; if Settings_Init() finds the flag still raised, the
-// previous boot died mid-bring-up and the mode is forced to GPX -- which
-// starts no radio at all and so cannot repeat the hang.
+// it. main.cpp counts up before touching the radios and clears the count once
+// setup() completes; after two consecutive boots that never finished, the mode
+// is forced to GPX -- which starts no radio at all and so cannot repeat the
+// hang.
+//
+// Two rather than one, because the heart-rate scan blocks for up to 15
+// seconds and a rider who unplugs during it would otherwise have their
+// navigation setting moved by an impatient power cycle. A real hang repeats;
+// an unplug does not.
 //
 // This used to guard the heart-rate source, which was the riskier setting
 // while ANT+ existed. Turn-by-turn is now the only init-time radio choice

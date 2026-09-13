@@ -16,6 +16,7 @@
 #include "../../src/system/DataCenter.h"
 #include "../../src/system/Settings.h"
 #include "../../src/navigation/GpxTrack.h"
+#include "../../src/navigation/RideLog.h"
 #include "../../src/system/Trip.h"
 #include "../../src/system/RideStats.h"
 #include "../../src/hal/Battery.h"
@@ -255,6 +256,10 @@ const TrackBuffer_t *GpxTrack_Buffer() {
     BuildTrack();
     return &s_track;
 }
+
+// The ride log has no card to write to here. Page_Dashboard_StartNewRide()
+// calls this, so the simulator needs it even though nothing renders it.
+bool RideLog_StartNewRide() { return true; }
 
 bool RoadMap_IsLoaded() { return false; }
 size_t RoadMap_WayCount() { return 0; }

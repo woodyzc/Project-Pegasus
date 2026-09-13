@@ -278,8 +278,8 @@ void BleHrTask(void *pvParameters) {
         }
 
         if (!s_have_peer) {
-            // Nothing else owns the scan, so keep looking. The boot-time scan
-            // is 15 seconds, and requiring the peer to be broadcasting inside
+            // Keep looking. The boot-time scan is 15 seconds, and requiring
+            // the peer to be broadcasting inside
             // that window meant a watch woken a moment late would never be
             // found however long it broadcast afterwards.
             if (DiscoverPeer() && ConnectAndSubscribe()) {

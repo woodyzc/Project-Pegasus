@@ -13,7 +13,11 @@ constexpr char KEY_SPEED_UNIT[] = "unit";
 // Retired with ANT+. Kept only so Settings_Init() can erase it, rather than
 // leaving a dead key in the namespace for a future setting to trip over.
 constexpr char KEY_HR_SOURCE_RETIRED[] = "hrsrc";
+// Counts consecutive boots that entered radio bring-up and never came out,
+// rather than merely flagging one. Two, not one, is what triggers the
+// fallback -- see Settings_Init().
 constexpr char KEY_RADIO_PENDING[] = "radiopend";
+constexpr uint8_t RADIO_PENDING_LIMIT = 2;
 constexpr char KEY_NAV_MODE[] = "navmode";
 constexpr char KEY_HR_REST[] = "hrrest";
 constexpr char KEY_HR_MAX[] = "hrmax";
@@ -153,17 +157,26 @@ void Settings_Init() {
         s_boot_count = 1;
     }
 
-    // A still-raised flag means the previous boot entered radio bring-up and
-    // never came out. Fall back to GPX and persist it, so the device comes up
-    // usable instead of repeating whatever hung -- otherwise the bad choice
-    // would outlive even a reflash, since it lives in NVS rather than in the
+    // A raised count means a previous boot entered radio bring-up and never
+    // came out. Fall back to GPX and persist it, so the device comes up usable
+    // instead of repeating whatever hung -- otherwise the bad choice would
+    // outlive even a reflash, since it lives in NVS rather than in the
     // firmware image.
     //
     // GPX is the safe end of this setting because it starts no radio at all:
     // the heart-rate client still comes up either way, but nothing advertises
     // and no GATT service is registered, which is where the bring-up hazards
     // in CLAUDE.md section 8 live.
-    if (s_ready && s_prefs.getUChar(KEY_RADIO_PENDING, 0) != 0) {
+    //
+    // Two consecutive, not one, and the reason is specific. BLE_HR_Start()
+    // scans synchronously for up to 15 seconds, so a rider who unplugs the
+    // board during that window leaves the flag raised without anything having
+    // hung. On one strike that unplug silently moves their navigation setting.
+    // A real hang repeats on every boot and still trips this on the next one;
+    // an impatient power cycle does not. It mattered less before ANT+ was
+    // removed, because the fallback then moved the heart-rate source to BLE,
+    // which was almost always already BLE and so invisible.
+    if (s_ready && s_prefs.getUChar(KEY_RADIO_PENDING, 0) >= RADIO_PENDING_LIMIT) {
         s_nav_fell_back = (s_nav_mode != NAV_MODE_GPX);
         s_nav_mode = NAV_MODE_GPX;
         s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
@@ -175,7 +188,10 @@ void Settings_Init() {
 
 void Settings_NoteRadioBringUpStart() {
     if (s_ready) {
-        s_prefs.putUChar(KEY_RADIO_PENDING, 1);
+        // Saturating, so a long run of bad boots cannot wrap the counter back
+        // to zero and quietly disarm the net.
+        const uint8_t seen = s_prefs.getUChar(KEY_RADIO_PENDING, 0);
+        s_prefs.putUChar(KEY_RADIO_PENDING, (seen < 250) ? (uint8_t)(seen + 1) : seen);
     }
 }
 
