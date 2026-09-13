@@ -55,6 +55,35 @@ bool GpxTrack_Load(const char *path);
 // a file on a card without editing any configuration.
 bool GpxTrack_LoadFirstAvailable();
 
+// ---- Choosing between several routes ----
+//
+// Most riders keep more than one file on a card, and until now the head unit
+// took whichever the filesystem happened to hand back first -- which is not
+// even alphabetical, so "the first one" was unpredictable and unchangeable
+// without a computer.
+
+// Longest filename offered, including the leading '/' and the NUL. Names
+// longer than this are skipped rather than truncated: a truncated path cannot
+// be opened, so offering one would be a menu entry that silently fails.
+#define GPX_NAME_MAX 64
+
+// Most files listed. A card with more is not wrong, it is just not all
+// reachable from the panel -- and a list longer than this is not something
+// anyone scrolls on a bike anyway.
+#define GPX_MAX_FILES 24
+
+// Re-reads the card's root directory and returns how many .gpx files are
+// there. Call before reading the list back; it is the only thing that touches
+// the filesystem.
+size_t GpxTrack_ScanFiles();
+
+// How many the last scan found.
+size_t GpxTrack_FileCount();
+
+// Full path of one scanned file ("/ride.gpx"), or "" when out of range.
+// Valid until the next scan.
+const char *GpxTrack_FilePath(size_t index);
+
 // Number of points held after thinning.
 size_t GpxTrack_PointCount();
 

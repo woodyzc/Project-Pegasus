@@ -82,6 +82,7 @@
 #define LV_FONT_MONTSERRAT_10 1 /* captions (TRIP, INCLINE, HEART RATE, ...) */
 #define LV_FONT_MONTSERRAT_12 1 /* route direction text */
 #define LV_FONT_MONTSERRAT_14 1 /* title, zone badge */
+#define LV_FONT_MONTSERRAT_16 1 /* ride averages and peaks */
 #define LV_FONT_MONTSERRAT_18 1 /* clock / incline / bpm readouts */
 /* The turn-by-turn road name. Was 14, which left the navigation tile
  * looking empty; 24 is the largest that still fits a typical street name

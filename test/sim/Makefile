@@ -29,9 +29,11 @@ LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
 
 # The real page, the real icons, the real generated font, and the real modules
 # it draws from. Anything not listed here is stubbed in stubs.cpp.
-APP_CXX := $(SRC)/ui/Page_Dashboard.cpp $(SRC)/ui/TbtIcons.cpp
+APP_CXX := $(SRC)/ui/Page_Dashboard.cpp $(SRC)/ui/TbtIcons.cpp \
+           $(SRC)/ui/Page_Map.cpp $(SRC)/ui/MapView.cpp
 APP_C   := $(SRC)/ui/NumFont.c $(SRC)/system/HrZone.c $(SRC)/system/TimeZone.c \
-           $(SRC)/system/TimeSource.c $(SRC)/navigation/TbtParse.c
+           $(SRC)/system/TimeSource.c $(SRC)/navigation/TbtParse.c \
+           $(SRC)/navigation/MapProject.c $(SRC)/navigation/TrackBuffer.c
 
 SIM_CXX := sim_main.cpp stubs.cpp
 

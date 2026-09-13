@@ -20,6 +20,7 @@
 #include "../../src/navigation/TbtParse.h"
 #include "../../src/system/TimeSource.h"
 #include "../../src/ui/Page_Dashboard.h"
+#include "../../src/ui/Page_Map.h"
 #include "sim_state.h"
 
 #define SCREEN_W 240
@@ -180,6 +181,38 @@ int main(int argc, char **argv) {
 
     if (gallery) {
         RenderGallery(&page, out_dir);
+        return 0;
+    }
+
+    if (argc > 2 && strcmp(argv[2], "--route") == 0) {
+        // The route page and its file picker, which is a separate page object
+        // with its own root. Rendered on its own because it replaces the whole
+        // screen rather than sharing it.
+        page.onViewUnload();
+        lv_obj_clean(lv_scr_act());
+
+        PageMap route;
+        route._root = lv_scr_act();
+        route.onViewLoad();
+
+        g_sim.gpx_files = 6;
+        snprintf(path, sizeof(path), "%s/r1-route-page.ppm", out_dir);
+        Render(&page, path);
+
+        // Open the picker by pressing the button the rider presses, rather
+        // than by calling the handler: that exercises the hit target too.
+        Page_Map_OpenRoutePickerForTest();
+        snprintf(path, sizeof(path), "%s/r2-picker-six-files.ppm", out_dir);
+        Render(&page, path);
+
+        // A card with nothing on it, which is a different message and a
+        // different layout.
+        Page_Map_ClosePickerForTest();
+        g_sim.gpx_files = 0;
+        Page_Map_OpenRoutePickerForTest();
+        snprintf(path, sizeof(path), "%s/r3-picker-empty.ppm", out_dir);
+        Render(&page, path);
+
         return 0;
     }
 

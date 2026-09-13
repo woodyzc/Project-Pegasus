@@ -141,11 +141,10 @@ bool DataCenter_Pull(const char *topic, void *out, uint32_t size) {
     return false;
 }
 
-// ---- The map, which only the GPX navigation mode builds ----------------
-void MapView_Create(MapView_t *, lv_obj_t *, lv_coord_t, lv_coord_t, lv_coord_t, lv_coord_t,
-                    lv_point_t *, MapPoint_t *, size_t) {}
-void MapView_FitTrack(MapView_t *) {}
-void MapView_SetPosition(MapView_t *, const GPS_Info_t *) {}
+// ---- The roads behind the map ------------------------------------------
+// MapView itself is compiled for real -- it is geometry, and the route page
+// is the thing being rendered. The road layer is not: it draws from an extract
+// held in PSRAM that this machine has none of.
 void RoadView_Attach(MapView_t *) {}
 void RoadView_Refresh() {}
 
@@ -153,3 +152,63 @@ void RoadView_Refresh() {}
 // The simulator renders one page and never leaves it, so a tap that would
 // push another is accepted and ignored.
 bool PageManager::Push(const char *, const PageBase::Stash_t *) { return true; }
+bool PageManager::Pop() { return true; }
+
+// ---- The card, and the road map -----------------------------------------
+// Both read hardware the simulator has none of: SD_MMC for the card and a
+// PSRAM-resident extract for the roads. The route picker is the thing being
+// looked at, so the file list is real data with real names -- the longest one
+// off the card in the last photograph, because a name that fits is not the
+// case worth rendering.
+
+#include "../../src/navigation/GpxTrack.h"
+#include "../../src/navigation/RoadMap.h"
+
+namespace {
+const char *const kFiles[] = {
+    "/Custis_WashingtonOld_DominionLand_Mount_Vernon_Trail_Loop.gpx",
+    "/C&O_Canal_Towpath.gpx",
+    "/Mount_Vernon_Trail.gpx",
+    "/W&OD_Trail_Purcellville.gpx",
+    "/commute.gpx",
+    "/sunday_long.GPX",
+};
+char s_loaded[GPX_NAME_MAX] = "/Mount_Vernon_Trail.gpx";
+} // namespace
+
+size_t GpxTrack_ScanFiles() { return g_sim.gpx_files; }
+size_t GpxTrack_FileCount() { return g_sim.gpx_files; }
+
+const char *GpxTrack_FilePath(size_t index) {
+    if (index >= g_sim.gpx_files) {
+        return "";
+    }
+    return kFiles[index % (sizeof(kFiles) / sizeof(kFiles[0]))];
+}
+
+bool GpxTrack_Load(const char *path) {
+    if (path == nullptr) {
+        return false;
+    }
+    snprintf(s_loaded, sizeof(s_loaded), "%s", path);
+    return true;
+}
+
+const char *GpxTrack_LoadedName() { return s_loaded; }
+const char *GpxTrack_MountStatus() { return "No SD card"; }
+bool GpxTrack_Bounds(double *m1, double *m2, double *m3, double *m4) {
+    (void)m1; (void)m2; (void)m3; (void)m4;
+    return false;
+}
+bool GpxTrack_Center(double *lat, double *lon) { (void)lat; (void)lon; return false; }
+const TrackBuffer_t *GpxTrack_Buffer() {
+    static TrackBuffer_t empty;
+    return &empty;
+}
+
+bool RoadMap_IsLoaded() { return false; }
+size_t RoadMap_WayCount() { return 0; }
+uint32_t RoadView_LastCullUs() { return 0; }
+uint32_t RoadView_LastDrawOnlyUs() { return 0; }
+uint32_t RoadView_LastSegments() { return 0; }
+uint32_t RoadView_LastVisibleWays() { return 0; }

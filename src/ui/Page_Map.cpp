@@ -1,6 +1,6 @@
 #include "Page_Map.h"
 
-#include <Arduino.h>
+#include <string.h>
 
 
 #include "../navigation/GpxTrack.h"
@@ -71,6 +71,10 @@ MapView_t s_view;
 lv_obj_t *s_recenter_btn = nullptr;
 lv_obj_t *s_status_label = nullptr;
 lv_obj_t *s_scale_label = nullptr;
+lv_obj_t *s_name_label = nullptr;
+// The route picker, built on demand and destroyed on choosing. Held so a
+// second press of the button cannot stack two of them.
+lv_obj_t *s_picker = nullptr;
 lv_timer_t *s_refresh_timer = nullptr;
 
 volatile bool s_gps_dirty = false;
@@ -188,6 +192,161 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     UpdateScale();
 }
 
+void ClosePicker() {
+    if (s_picker != nullptr) {
+        lv_obj_del(s_picker);
+        s_picker = nullptr;
+    }
+}
+
+void OnPickerDismissed(lv_event_t *e) {
+    (void)e;
+    ClosePicker();
+}
+
+// Loads the route the rider tapped, then reframes the map on it.
+void OnRouteChosen(lv_event_t *e) {
+    const char *path = (const char *)lv_event_get_user_data(e);
+    if (path == nullptr || path[0] == '\0') {
+        return;
+    }
+
+    // Closed first. Loading walks the card and re-thins up to 20,000 points,
+    // which is long enough that leaving the list under the rider's finger
+    // would look like the tap had missed.
+    ClosePicker();
+
+    if (!GpxTrack_Load(path)) {
+        if (s_name_label != nullptr) {
+            lv_label_set_text_fmt(s_name_label, "%s: no track points", path);
+        }
+        return;
+    }
+
+    // A new route is a new place, so the rider's own pan and zoom no longer
+    // mean anything: MapView_Recenter drops the manual flag, and FitTrack then
+    // frames the whole of what was just loaded rather than keeping a scale
+    // chosen for the last one.
+    MapView_Recenter(&s_view);
+    s_view.zoom_locked = false;
+    MapView_FitTrack(&s_view);
+    RoadView_Refresh();
+    UpdateRecenterButton();
+    UpdateScale();
+    if (s_name_label != nullptr) {
+        lv_label_set_text(s_name_label, GpxTrack_LoadedName());
+    }
+}
+
+// The list of .gpx files on the card, over the map.
+void OnChooseRouteClicked(lv_event_t *e) {
+    (void)e;
+    if (s_picker != nullptr) {
+        return;
+    }
+
+    const size_t count = GpxTrack_ScanFiles();
+
+    // Full-screen and opaque, not a panel over the map. The filenames are long
+    // and the panel is 240px wide; anything less than the whole screen would
+    // spend half its width on a map nobody is looking at while choosing.
+    s_picker = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(s_picker, 240, 320);
+    lv_obj_center(s_picker);
+    lv_obj_set_style_bg_color(s_picker, lv_color_hex(0x101820), 0);
+    lv_obj_set_style_bg_opa(s_picker, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_picker, 0, 0);
+    lv_obj_set_style_radius(s_picker, 0, 0);
+    lv_obj_set_style_pad_all(s_picker, 0, 0);
+
+    lv_obj_t *title = lv_label_create(s_picker);
+    lv_label_set_text(title, "CHOOSE ROUTE");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+
+    lv_obj_t *close = lv_btn_create(s_picker);
+    lv_obj_set_size(close, 40, 30);
+    lv_obj_align(close, LV_ALIGN_TOP_LEFT, 6, 4);
+    lv_obj_set_style_radius(close, 6, 0);
+    lv_obj_set_style_shadow_width(close, 0, 0);
+    lv_obj_set_style_bg_color(close, lv_color_hex(0x1D2A36), 0);
+    lv_obj_set_style_bg_color(close, lv_color_hex(0x61DAFB), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(close, OnPickerDismissed, LV_EVENT_CLICKED, nullptr);
+    {
+        lv_obj_t *icon = lv_label_create(close);
+        lv_label_set_text(icon, LV_SYMBOL_CLOSE);
+        lv_obj_set_style_text_color(icon, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_center(icon);
+    }
+
+    if (count == 0) {
+        lv_obj_t *empty = lv_label_create(s_picker);
+        // Which of the two reasons, since they need different things from the
+        // rider: one wants a card, the other wants a file put on it.
+        lv_label_set_text(empty, GpxTrack_CardMounted() ? "No .gpx files on the card"
+                                                        : GpxTrack_MountStatus());
+        lv_obj_set_style_text_font(empty, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(empty, lv_color_hex(COLOR_CAPTION), 0);
+        lv_obj_set_width(empty, 200);
+        lv_label_set_long_mode(empty, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_center(empty);
+        return;
+    }
+
+    lv_obj_t *list = lv_obj_create(s_picker);
+    lv_obj_set_size(list, 228, 268);
+    lv_obj_align(list, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(list, 0, 0);
+    lv_obj_set_style_pad_all(list, 0, 0);
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(list, 6, 0);
+
+    const char *loaded = GpxTrack_LoadedName();
+    for (size_t i = 0; i < count; i++) {
+        const char *path = GpxTrack_FilePath(i);
+
+        lv_obj_t *row = lv_btn_create(list);
+        // Grows to fit the name, with a floor of 46px because this is pressed
+        // with a thumb and a list sized for a fingertip on a desk is not the
+        // same list on a bike.
+        //
+        // Wrapping rather than truncating: these names are long and the part
+        // that tells two routes apart is not reliably at either end. A row
+        // that says "Custis_Washington..." is a row a rider cannot choose
+        // from. Three lines is ugly and legible, which is the right way round.
+        lv_obj_set_width(row, lv_pct(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_style_min_height(row, 46, 0);
+        lv_obj_set_style_pad_ver(row, 8, 0);
+        lv_obj_set_style_pad_hor(row, 10, 0);
+        lv_obj_set_style_radius(row, 8, 0);
+        lv_obj_set_style_shadow_width(row, 0, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(0x1D2A36), 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(0x61DAFB), LV_STATE_PRESSED);
+        // The path is a pointer into GpxTrack's own scan buffer, which stays
+        // valid until the next scan -- and the next scan cannot happen while
+        // this list is open, because the button that triggers one is behind
+        // it.
+        lv_obj_add_event_cb(row, OnRouteChosen, LV_EVENT_CLICKED, (void *)path);
+
+        lv_obj_t *label = lv_label_create(row);
+        // Without the leading slash: every entry has one, so it is 6px of
+        // width spent saying nothing on a panel this narrow.
+        lv_label_set_text(label, path[0] == '/' ? path + 1 : path);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
+        lv_obj_set_width(label, lv_pct(100));
+        lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+        lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
+
+        const bool current = loaded[0] != '\0' && strcmp(loaded, path) == 0;
+        lv_obj_set_style_text_color(
+            label, lv_color_hex(current ? 0x61DAFB : COLOR_VALUE), 0);
+    }
+}
+
 void OnBackClicked(lv_event_t *e) {
     PageMap *self = (PageMap *)lv_event_get_user_data(e);
     if (self != nullptr && self->_Manager != nullptr) {
@@ -290,6 +449,28 @@ void PageMap::onViewLoad() {
         lv_obj_center(icon);
     }
 
+    // ---- Choose a route ----
+    // Below the other two in the same column, same size, same treatment: it is
+    // pressed with the same thumb and belongs to the same set. Always visible,
+    // unlike recenter, because a rider who has not noticed it cannot discover
+    // that the card holds a second route at all.
+    {
+        lv_obj_t *btn = lv_btn_create(parent);
+        lv_obj_set_size(btn, 44, 44);
+        lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, -6, MAP_Y + 172);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_set_style_shadow_width(btn, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x101820), 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_70, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x61DAFB), LV_STATE_PRESSED);
+        lv_obj_add_event_cb(btn, OnChooseRouteClicked, LV_EVENT_CLICKED, nullptr);
+
+        lv_obj_t *icon = lv_label_create(btn);
+        lv_label_set_text(icon, LV_SYMBOL_DIRECTORY);
+        lv_obj_set_style_text_color(icon, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_center(icon);
+    }
+
     // ---- Attribution ----
     // Required, not decorative. The road data is OpenStreetMap under ODbL,
     // which obliges anything built from it to credit the contributors where a
@@ -326,7 +507,8 @@ void PageMap::onViewLoad() {
     s_road_timer = lv_timer_create(RoadStatTimer, 500, nullptr);
     RoadStatTimer(nullptr);
 
-    lv_obj_t *name = lv_label_create(parent);
+    s_name_label = lv_label_create(parent);
+    lv_obj_t *name = s_name_label;
     lv_obj_set_style_text_font(name, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(name, lv_color_hex(COLOR_CAPTION), 0);
     lv_obj_set_width(name, 140);
@@ -351,6 +533,14 @@ void PageMap::onViewLoad() {
     s_refresh_timer = lv_timer_create(RefreshTimerCallback, 500, nullptr);
 }
 
+void Page_Map_OpenRoutePickerForTest() {
+    OnChooseRouteClicked(nullptr);
+}
+
+void Page_Map_ClosePickerForTest() {
+    ClosePicker();
+}
+
 void PageMap::onViewUnload() {
     if (s_refresh_timer != nullptr) {
         lv_timer_del(s_refresh_timer);
@@ -367,6 +557,10 @@ void PageMap::onViewUnload() {
 
     s_status_label = nullptr;
     s_scale_label = nullptr;
+    s_name_label = nullptr;
     s_recenter_btn = nullptr;
     s_road_stat = nullptr;
+    // Not deleted: it is a child of the page's root, which LVGL is tearing
+    // down around us. Only the pointer needs clearing.
+    s_picker = nullptr;
 }

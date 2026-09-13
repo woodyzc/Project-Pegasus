@@ -33,6 +33,19 @@
 namespace {
 
 bool s_mounted = false;
+
+// The last directory scan. Internal RAM rather than PSRAM: 1.5KB is nothing,
+// and it is read on every frame the picker is open.
+char s_files[GPX_MAX_FILES][GPX_NAME_MAX];
+size_t s_file_count = 0;
+
+// True for names the GPX loader will accept. Case-insensitive because cards
+// written on a PC routinely carry .GPX, and refusing those would look like a
+// broken card reader rather than a naming rule.
+bool HasGpxSuffix(const char *name) {
+    const size_t len = strlen(name);
+    return len > 4 && strcasecmp(name + len - 4, ".gpx") == 0;
+}
 const char *s_mount_status = "not tried";
 int s_bus_width = 0;
 
@@ -194,40 +207,82 @@ bool GpxTrack_Load(const char *path) {
     return true;
 }
 
-bool GpxTrack_LoadFirstAvailable() {
+size_t GpxTrack_ScanFiles() {
+    s_file_count = 0;
     if (!s_mounted) {
-        return false;
+        return 0;
     }
 
     File root = SD_MMC.open("/");
     if (!root || !root.isDirectory()) {
-        return false;
+        return 0;
     }
 
-    char found[64] = {0};
     for (File entry = root.openNextFile(); entry; entry = root.openNextFile()) {
+        if (s_file_count >= GPX_MAX_FILES) {
+            break;
+        }
         if (entry.isDirectory()) {
             continue;
         }
         const char *name = entry.name();
-        const size_t len = strlen(name);
-        // Case-insensitive suffix test: cards written on a PC routinely carry
-        // .GPX, and rejecting those would look like a broken card reader.
-        if (len > 4 && strcasecmp(name + len - 4, ".gpx") == 0) {
-            if (name[0] != '/') {
-                snprintf(found, sizeof(found), "/%s", name);
-            } else {
-                strncpy(found, name, sizeof(found) - 1);
-            }
-            break;
+        if (!HasGpxSuffix(name)) {
+            continue;
         }
+
+        // SD_MMC returns names with and without a leading slash depending on
+        // the release, and GpxTrack_Load needs an absolute path.
+        char path[GPX_NAME_MAX];
+        const int written = (name[0] == '/') ? snprintf(path, sizeof(path), "%s", name)
+                                             : snprintf(path, sizeof(path), "/%s", name);
+        // Skipped rather than truncated. A truncated path cannot be opened, so
+        // listing one would be a menu entry that fails when pressed.
+        if (written <= 0 || (size_t)written >= sizeof(path)) {
+            continue;
+        }
+
+        strncpy(s_files[s_file_count], path, GPX_NAME_MAX - 1);
+        s_files[s_file_count][GPX_NAME_MAX - 1] = '\0';
+        s_file_count++;
     }
     root.close();
 
-    if (found[0] == '\0') {
+    // Sorted, because the filesystem's own order is neither alphabetical nor
+    // stable, and a list that reshuffles between visits is one nobody can
+    // learn. Insertion sort: the list is at most 24 long and this runs once
+    // when the picker opens.
+    for (size_t i = 1; i < s_file_count; i++) {
+        char key[GPX_NAME_MAX];
+        strncpy(key, s_files[i], GPX_NAME_MAX);
+        size_t j = i;
+        while (j > 0 && strcasecmp(s_files[j - 1], key) > 0) {
+            strncpy(s_files[j], s_files[j - 1], GPX_NAME_MAX);
+            j--;
+        }
+        strncpy(s_files[j], key, GPX_NAME_MAX);
+    }
+    return s_file_count;
+}
+
+size_t GpxTrack_FileCount() {
+    return s_file_count;
+}
+
+const char *GpxTrack_FilePath(size_t index) {
+    if (index >= s_file_count) {
+        return "";
+    }
+    return s_files[index];
+}
+
+bool GpxTrack_LoadFirstAvailable() {
+    // The scan's order, not the filesystem's. "The first one" is now the first
+    // alphabetically, which is at least something a rider can predict and
+    // rename their way around.
+    if (GpxTrack_ScanFiles() == 0) {
         return false;
     }
-    return GpxTrack_Load(found);
+    return GpxTrack_Load(s_files[0]);
 }
 
 size_t GpxTrack_PointCount() {

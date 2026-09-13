@@ -27,6 +27,9 @@ struct SimState {
     GPS_Info_t gps{};
 
     Battery_t battery{};
+
+    // How many .gpx files the card appears to hold, for the route picker.
+    size_t gpx_files = 0;
 };
 
 extern SimState g_sim;

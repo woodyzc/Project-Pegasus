@@ -17,3 +17,11 @@ public:
     virtual void onViewLoad() override;
     virtual void onViewUnload() override;
 };
+
+// Opens and closes the route picker from outside the page.
+//
+// For the renderer in test/sim, which has no touch input and would otherwise
+// be unable to draw the one part of this page that is not visible at rest.
+// Ordinary use goes through the button.
+void Page_Map_OpenRoutePickerForTest();
+void Page_Map_ClosePickerForTest();
