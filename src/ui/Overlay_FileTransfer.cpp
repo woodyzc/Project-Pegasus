@@ -48,7 +48,10 @@ void Dismiss() {
         s_timer = nullptr;
     }
     if (s_root != nullptr) {
-        lv_obj_del(s_root);
+        // Async: Dismiss() is reached from a button inside this object, and
+        // LVGL uses the event target after the handler returns. Deleting an
+        // ancestor synchronously there frees the ground it is standing on.
+        lv_obj_del_async(s_root);
         s_root = nullptr;
     }
     s_status = nullptr;

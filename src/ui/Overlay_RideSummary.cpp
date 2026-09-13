@@ -27,10 +27,18 @@ lv_obj_t *s_root = nullptr;
 
 void OnCloseClicked(lv_event_t *e) {
     (void)e;
-    if (s_root != nullptr) {
-        lv_obj_del(s_root);
-        s_root = nullptr;
+    if (s_root == nullptr) {
+        return;
     }
+    // Async, because the button that fired this event is a child of the object
+    // being deleted. LVGL keeps using the event target after the handler
+    // returns, so freeing its ancestor here frees the ground it is standing
+    // on; lv_obj_del_async exists for exactly this and defers to the end of
+    // the current lv_timer_handler pass.
+    lv_obj_del_async(s_root);
+    // Cleared now rather than when the delete lands: nothing may touch it in
+    // between, and Show() must see that the overlay is on its way out.
+    s_root = nullptr;
 }
 
 // One line of the report: a small word on the left, the figure on the right.

@@ -16,7 +16,6 @@ constexpr uint32_t COLOR_MAP_BG = 0x0B1116;
 // where amber reads as a mark left behind -- which is what it is.
 constexpr uint32_t COLOR_TRAIL_DONE = 0xFFD166;
 constexpr uint32_t COLOR_TRAIL_AHEAD = 0x7CE38B;
-constexpr uint32_t COLOR_TRAIL = COLOR_TRAIL_AHEAD;
 constexpr uint32_t COLOR_MARKER = 0x61DAFB;
 
 // Half-height of the heading triangle. Big enough to read the direction at a

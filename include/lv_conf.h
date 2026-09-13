@@ -87,9 +87,9 @@
  * looking empty; 24 is the largest that still fits a typical street name
  * across the panel ("Rockingham Rd" is 197px of 228). */
 #define LV_FONT_MONTSERRAT_24 1
-/* 28 was the metric value size until the units moved up onto the caption row
- * and freed the width for 34, then 40. Neither is referenced now. */
-#define LV_FONT_MONTSERRAT_28 0
+/* 34 was a metric value size until the units moved up onto the caption row and
+ * freed the width for 40. Nothing references it now. 28 came back and is
+ * defined below, where the comment describing it lives. */
 #define LV_FONT_MONTSERRAT_34 0
 /* The four metric readouts, and the largest size a 60px cell can hold under a
  * caption. line_height is 44; the 11px caption sits at y=2 and the value 1px

@@ -44,6 +44,12 @@ bool s_running = false;
 char s_ssid[32] = "";
 char s_password[PASSWORD_LEN + 1] = "";
 char s_url[32] = "";
+// The last byte is never written and stays NUL: SetStatus passes
+// sizeof - 1 to vsnprintf, so index 95 is out of its reach. That is load
+// bearing, not tidiness. The writer task fills this while the LVGL task reads
+// it unlocked, and a long message replacing a short one passes through an
+// instant with the old terminator gone and the new one not yet placed. A
+// reader caught there stops at the array's own edge instead of running off it.
 char s_status[96] = "idle";
 volatile uint32_t s_requests = 0;
 

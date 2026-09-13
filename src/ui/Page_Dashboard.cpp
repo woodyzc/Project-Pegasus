@@ -78,7 +78,6 @@ constexpr lv_coord_t TBT_ARROW_DRAW_PX = TBT_ICON_PX;
 // padding on both sides. At file scope because the street name is re-fitted
 // on every directive, long after Create()'s locals have gone.
 constexpr lv_coord_t TBT_TEXT_W = 240 - 2 * 6;
-constexpr uint32_t COLOR_BADGE_TEXT = 0x081015;
 constexpr uint32_t COLOR_CELL_BG = 0x141E27;
 constexpr uint32_t COLOR_CELL_BORDER = 0x24313D;
 // Filled behind the incline value on a real climb: the grade matters most
@@ -395,10 +394,6 @@ lv_obj_t *MakeValueIn(lv_obj_t *cell, const char *text, uint32_t color,
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
     lv_obj_align(label, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
     return label;
-}
-
-lv_obj_t *MakeValue(lv_obj_t *cell, const char *text, uint32_t color) {
-    return MakeValueIn(cell, text, color, &lv_font_montserrat_40);
 }
 
 // One line of the ride block: a small word, then the figure it names.
