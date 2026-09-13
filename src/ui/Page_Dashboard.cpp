@@ -298,6 +298,16 @@ constexpr lv_coord_t CELL_PAD = 6;         // left and right inset
 constexpr lv_coord_t SECONDARY_W = 62;
 constexpr lv_coord_t SECONDARY_ROW_H = 20;
 constexpr lv_coord_t SECONDARY_INSET = 2;
+
+// How far the word sits in from the block's left edge. The figures are pinned
+// to the right, so this is really the gap between "AVG" and the number it
+// names: the wider it is, the more the pair reads as two separate things
+// rather than one label.
+//
+// 4 is the ceiling, set by the widest figure the block ever holds. At 6 the
+// speed cell's "AVG" ran into "24.6" and the two read as one token; a
+// three-digit heart rate leaves more room and would take 8.
+constexpr lv_coord_t SECONDARY_WORD_X = 4;
 constexpr lv_coord_t CELL_CAPTION_Y = 2;   // caption and unit baseline row
 constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
 
@@ -403,7 +413,7 @@ lv_obj_t *MakeSecondaryRow(lv_obj_t *parent, const char *word) {
     lv_label_set_text(caption, word);
     lv_obj_set_style_text_font(caption, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(caption, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_align(caption, LV_ALIGN_BOTTOM_LEFT, 0, -3);
+    lv_obj_align(caption, LV_ALIGN_BOTTOM_LEFT, SECONDARY_WORD_X, -3);
 
     lv_obj_t *value = lv_label_create(row);
     lv_label_set_text(value, "--");
