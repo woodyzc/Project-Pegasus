@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+#include "../navigation/RoadMap.h"
+#include "RoadView.h"
 #include "../system/TimeSource.h" // WiFi.macAddress() -- reads the eFused MAC, no radio started
 
 #include "../navigation/BLE_TBT_Receiver.h"
@@ -751,6 +753,21 @@ void PageSettings::onViewLoad() {
              (unsigned)Settings_BootCount());
     MakeInfoRow(info_card, "Last reset", buf);
     MakeInfoRow(info_card, "Build", __DATE__ " " __TIME__);
+
+    // What the road layer cost on its last draw.
+    //
+    // This used to live on the map page and was taken off it, rightly: a rider
+    // does not need a segment count. It belongs here, where the other numbers
+    // that only matter when something is wrong already are -- and "the board
+    // is slow with this map" cannot be answered without it, because serial
+    // cannot be opened on this board.
+    if (RoadMap_IsLoaded()) {
+        snprintf(buf, sizeof(buf), "%u/%u ways, %u seg, %ums",
+                 (unsigned)RoadView_LastVisibleWays(), (unsigned)RoadMap_WayCount(),
+                 (unsigned)RoadView_LastSegments(),
+                 (unsigned)(RoadView_LastDrawOnlyUs() / 1000));
+        MakeInfoRow(info_card, "Roads", buf);
+    }
 
     // The clock, and where it came from. "Blank clock" has three causes that
     // look identical on the dashboard and need opposite fixes: the phone never

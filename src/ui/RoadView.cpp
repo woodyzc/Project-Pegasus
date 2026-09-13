@@ -38,19 +38,42 @@ const double ROAD_MAX_MPP[ROAD_CLASS_COUNT] = {
     1e9,    // water      -- always; the strongest landmark on a small screen
 };
 
-// A ceiling on one frame regardless of what the card holds. The zoom filter
-// bounds things for sane data, this bounds them for data nobody anticipated --
-// a dense city centre, or someone's continent-wide export. 4000 segments is
-// ~160ms, visibly a redraw but not a hang.
-constexpr uint32_t ROAD_MAX_SEGMENTS = 4000;
+// A ceiling on one frame regardless of what the card holds.
+//
+// 1400, not the 4000 this was. A segment measured ~51us on the panel -- 886 of
+// them in a 45ms draw -- so 4000 is over 200ms, which is not "visibly a
+// redraw", it is the board feeling broken. A dense extract reaches that
+// ceiling on every frame, which is what made the Arlington map unusable while
+// Germantown was fine: same way count, three times the arteries.
+constexpr uint32_t ROAD_MAX_SEGMENTS = 1400;
+
+// And a share per class, because the ceiling alone starves the wrong ones.
+// The passes run in painter's order -- water under roads -- so a global budget
+// spent by the time the artery pass runs leaves the map without the roads a
+// rider actually navigates by. Indexed by ROAD_CLASS_*.
+const uint32_t ROAD_CLASS_SEGMENTS[ROAD_CLASS_COUNT] = {
+    400,  // minor
+    400,  // secondary
+    900,  // artery  -- the most, and drawn last, so it needs protecting
+    400,  // water
+};
 
 // Ways that can be on screen at once. Static rather than on the stack: this
 // runs on the LVGL task, whose stack is 8KB, and 2048 entries is 4KB of it.
-// 6144, up from 2048. A dense extract zoomed out has far more arteries in view
-// than 2048 -- Arlington at 5 miles holds 15,947 of them -- and although the
-// query now samples evenly rather than keeping a corner, a sample that throws
-// away three quarters of the main roads is still a thin map. 24KB.
-constexpr uint16_t ROAD_VISIBLE_MAX = 6144;
+// Sized to what the segment budget can actually draw, not to what is in view.
+//
+// This was briefly 6144, on the reasoning that a dense extract has that many
+// arteries on screen. It does, and drawing them is what made the board crawl:
+// the budget above stops at 1400 segments, so thousands of candidates are
+// walked and then abandoned -- and because the list arrives in grid order, the
+// budget is spent on whichever corner came first, which is the same bias the
+// query was just fixed for, moved one stage later.
+//
+// A thousand candidates, evenly sampled by the query, is close to what 1400
+// segments covers. Nearly all of them get drawn, so the thinning is the even
+// one the query chose rather than an arbitrary cut-off. 1024 entries is 4KB
+// each for the list and its sorted copy.
+constexpr uint16_t ROAD_VISIBLE_MAX = 1024;
 
 // Manhattan distance below which a point is folded into the previous one.
 // 3px keeps curves smooth at this screen size while collapsing the runs of
@@ -201,20 +224,34 @@ void RoadDrawCb(lv_event_t *e) {
         }
     }
 
+    // Static, not on the stack: this runs on the LVGL task, whose stack is 8KB.
     static uint32_t visible[ROAD_VISIBLE_MAX];
+    static uint8_t visible_class[ROAD_VISIBLE_MAX];
+    static uint32_t sorted[ROAD_VISIBLE_MAX];
+
     uint16_t visible_count = (uint16_t)RoadMap_Query(view_min_lat, view_min_lon, view_max_lat,
                                                      view_max_lon, class_mask, visible,
                                                      ROAD_VISIBLE_MAX);
 
-    // Ways too short to draw are still dropped here; the class filter has
-    // already been applied by the query.
+    // Each way's record is read ONCE here, and the list is sorted into the
+    // order the passes below want it.
+    //
+    // The passes used to walk the whole list four times, calling RoadMap_Way
+    // on every entry to ask its class -- four scattered PSRAM reads per way
+    // per frame, which is the access pattern the spatial grid exists to avoid.
+    // At 6144 candidates that is 24,576 of them, and they are not cheap: the
+    // measurement that justified the grid was 7,964 such reads costing 9.9ms.
     uint16_t kept = 0;
+    uint16_t class_count[ROAD_CLASS_COUNT] = {0};
     for (uint16_t i = 0; i < visible_count; i++) {
         RoadWay_t way;
         if (!RoadMap_Way(visible[i], &way) || way.count < 2) {
             continue;
         }
-        visible[kept++] = visible[i];
+        visible[kept] = visible[i];
+        visible_class[kept] = way.klass;
+        class_count[way.klass]++;
+        kept++;
     }
     visible_count = kept;
 
@@ -226,8 +263,28 @@ void RoadDrawCb(lv_event_t *e) {
     static const uint8_t ORDER[ROAD_CLASS_COUNT] = {
         ROAD_CLASS_WATER, ROAD_CLASS_MINOR, ROAD_CLASS_SECONDARY, ROAD_CLASS_ARTERY};
 
+    // Counting sort into painter's order, so each pass walks a contiguous slice
+    // of its own class instead of the whole list.
+    uint16_t slice_start[ROAD_CLASS_COUNT] = {0};
+    {
+        uint16_t at = 0;
+        uint16_t cursor[ROAD_CLASS_COUNT];
+        for (int pass = 0; pass < ROAD_CLASS_COUNT; pass++) {
+            const uint8_t klass = ORDER[pass];
+            slice_start[klass] = at;
+            cursor[klass] = at;
+            at = (uint16_t)(at + class_count[klass]);
+        }
+        for (uint16_t i = 0; i < visible_count; i++) {
+            sorted[cursor[visible_class[i]]++] = visible[i];
+        }
+    }
+
     for (int pass = 0; pass < ROAD_CLASS_COUNT && segments < ROAD_MAX_SEGMENTS; pass++) {
         const uint8_t klass = ORDER[pass];
+        const uint16_t from = slice_start[klass];
+        const uint16_t to = (uint16_t)(from + class_count[klass]);
+        uint32_t class_segments = 0;
 
         lv_draw_line_dsc_t dsc;
         lv_draw_line_dsc_init(&dsc);
@@ -236,9 +293,11 @@ void RoadDrawCb(lv_event_t *e) {
         dsc.round_start = 1;
         dsc.round_end = 1;
 
-        for (uint16_t v = 0; v < visible_count && segments < ROAD_MAX_SEGMENTS; v++) {
+        for (uint16_t v = from; v < to && segments < ROAD_MAX_SEGMENTS &&
+                                class_segments < ROAD_CLASS_SEGMENTS[klass];
+             v++) {
             RoadWay_t way;
-            if (!RoadMap_Way(visible[v], &way) || way.klass != klass) {
+            if (!RoadMap_Way(sorted[v], &way)) {
                 continue;
             }
             // Decimate while projecting: a point that lands within a pixel or
@@ -275,6 +334,7 @@ void RoadDrawCb(lv_event_t *e) {
                     if ((code & prev_code) == 0) {
                         lv_draw_line(ctx, &dsc, &prev, &p);
                         segments++;
+                        class_segments++;
                     }
                 }
                 prev = p;
