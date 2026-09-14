@@ -331,12 +331,13 @@ int main(int argc, char **argv) {
         g_sim.moving_seconds = 6 * 3600 + 26 * 60 + 14;
         g_sim.gps.speed = 21.4f / 3.6f;
         g_sim.gps.num_sv = 11;
+        g_sim.have_hr = true;
+        g_sim.hr.bpm = 148;
         g_sim.battery.percent = 41;
-        g_sim.have_altitude = true;
-        g_sim.altitude_m = 1247.0f;
         g_sim.ascent_m = 2140.0f;
         Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
         Sim_Publish(TOPIC_BATTERY, nullptr, 0);
+        Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
 
         Page_Dashboard_ShowSecondPageForTest(true);
         snprintf(path, sizeof(path), "%s/07-second-page.ppm", out_dir);

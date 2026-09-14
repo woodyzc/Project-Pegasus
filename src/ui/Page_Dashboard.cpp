@@ -150,13 +150,14 @@ lv_obj_t *s_ascent_label = nullptr;
 lv_obj_t *s_page2 = nullptr;
 bool s_on_page2 = false;
 
-lv_obj_t *s_p2_ridetime = nullptr;
-lv_obj_t *s_p2_clock = nullptr;
-lv_obj_t *s_p2_altitude = nullptr;
-lv_obj_t *s_p2_descent = nullptr;
+lv_obj_t *s_p2_speed = nullptr;
+lv_obj_t *s_p2_speed_unit = nullptr;
 lv_obj_t *s_p2_avgspeed = nullptr;
 lv_obj_t *s_p2_avgspeed_unit = nullptr;
+lv_obj_t *s_p2_hr = nullptr;
 lv_obj_t *s_p2_avghr = nullptr;
+lv_obj_t *s_p2_ridetime = nullptr;
+lv_obj_t *s_p2_descent = nullptr;
 lv_obj_t *s_p2_battery = nullptr;
 lv_obj_t *s_p2_sats = nullptr;
 lv_obj_t *s_page_dots[2] = {nullptr, nullptr};
@@ -1275,23 +1276,29 @@ void RenderPage2() {
         return;
     }
 
+    // Live speed and live heart rate are COPIED from the first page's labels
+    // rather than formatted again. Both of those carry rules that took a while
+    // to settle -- a decimal dropped past 100, dashes rather than zeros before
+    // the first fix, a reading blanked once nobody has confirmed it for
+    // thirty seconds -- and a second implementation would drift from them one
+    // rule at a time. This way the two pages are the same number by
+    // construction, colour included.
+    if (s_speed_label != nullptr) {
+        lv_label_set_text(s_p2_speed, lv_label_get_text(s_speed_label));
+    }
+    lv_label_set_text(s_p2_speed_unit, Settings_SpeedUnitLabel());
+
+    if (s_hr_label != nullptr) {
+        lv_label_set_text(s_p2_hr, lv_label_get_text(s_hr_label));
+        lv_obj_set_style_text_color(s_p2_hr, lv_obj_get_style_text_color(s_hr_label, LV_PART_MAIN),
+                                    0);
+    }
+
     char buf[RIDE_SUMMARY_TIME_MAX];
     if (RideSummary_FormatDuration((uint32_t)RideStats_MovingSeconds(), buf, sizeof(buf))) {
         lv_label_set_text(s_p2_ridetime, buf);
     }
 
-    // The same string the header shows, taken from the same label rather than
-    // formatted again: two clocks a second apart on one screen is the kind of
-    // thing a rider notices and cannot unsee.
-    if (s_clock_label != nullptr) {
-        lv_label_set_text(s_p2_clock, lv_label_get_text(s_clock_label));
-    }
-
-    if (RideStats_HaveAltitude()) {
-        lv_label_set_text_fmt(s_p2_altitude, "%d", (int)(RideStats_AltitudeM() + 0.5f));
-    } else {
-        lv_label_set_text(s_p2_altitude, "--");
-    }
     lv_label_set_text_fmt(s_p2_descent, "%d", (int)(RideStats_DescentM() + 0.5f));
 
     lv_label_set_text_fmt(s_p2_avgspeed, "%.1f",
@@ -1793,24 +1800,29 @@ void PageDashboard::onViewLoad() {
         lv_obj_add_flag(s_page2, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
 
-        // What is here is what the first page has no room for, rather than the
-        // same figures again. The one repeat is the clock, because a page
-        // covering the header's neighbourhood that did not show the time would
-        // send the rider back for it.
-        s_p2_ridetime = MakeP2Cell(s_page2, 0, 0, P2_COL_W, P2_ROW_H, "RIDE TIME", nullptr,
-                                   nullptr);
-        s_p2_clock = MakeP2Cell(s_page2, P2_COL_W, 0, P2_COL_W, P2_ROW_H, "CLOCK", nullptr,
+        // Grouped by what each figure IS, not by where there happened to be
+        // room. The top two rows are a live reading beside its own average,
+        // one pair a row, so the column tells you which kind you are looking
+        // at before you have read the caption: left is now, right is the ride
+        // so far. Underneath, two rows of things that are neither -- what the
+        // ride has accumulated, then what the device itself is doing.
+        //
+        // The clock is not here any more and does not need to be: the status
+        // line above this page is never covered, and it has the time on it.
+        s_p2_speed = MakeP2Cell(s_page2, 0, 0, P2_COL_W, P2_ROW_H, "SPEED",
+                                Settings_SpeedUnitLabel(), &s_p2_speed_unit);
+        s_p2_avgspeed = MakeP2Cell(s_page2, P2_COL_W, 0, P2_COL_W, P2_ROW_H, "AVG SPEED",
+                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit);
+
+        s_p2_hr = MakeP2Cell(s_page2, 0, P2_ROW_H, P2_COL_W, P2_ROW_H, "HEART RATE", "bpm",
+                             nullptr);
+        s_p2_avghr = MakeP2Cell(s_page2, P2_COL_W, P2_ROW_H, P2_COL_W, P2_ROW_H, "AVG HR", "bpm",
                                 nullptr);
 
-        s_p2_altitude = MakeP2Cell(s_page2, 0, P2_ROW_H, P2_COL_W, P2_ROW_H, "ALTITUDE", "m",
-                                   nullptr);
-        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, P2_ROW_H, P2_COL_W, P2_ROW_H, "DESCENT", "m",
-                                  nullptr);
-
-        s_p2_avgspeed = MakeP2Cell(s_page2, 0, 2 * P2_ROW_H, P2_COL_W, P2_ROW_H, "AVG SPEED",
-                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit);
-        s_p2_avghr = MakeP2Cell(s_page2, P2_COL_W, 2 * P2_ROW_H, P2_COL_W, P2_ROW_H, "AVG HR",
-                                "bpm", nullptr);
+        s_p2_ridetime = MakeP2Cell(s_page2, 0, 2 * P2_ROW_H, P2_COL_W, P2_ROW_H, "RIDE TIME",
+                                   nullptr, nullptr);
+        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, 2 * P2_ROW_H, P2_COL_W, P2_ROW_H, "DESCENT",
+                                  "m", nullptr);
 
         s_p2_battery = MakeP2Cell(s_page2, 0, 3 * P2_ROW_H, P2_COL_W, P2_ROW_H, "BATTERY", "%",
                                   nullptr);
@@ -2006,13 +2018,14 @@ void PageDashboard::onViewUnload() {
     s_ascent_label = nullptr;
     s_page2 = nullptr;
     s_on_page2 = false;
-    s_p2_ridetime = nullptr;
-    s_p2_clock = nullptr;
-    s_p2_altitude = nullptr;
-    s_p2_descent = nullptr;
+    s_p2_speed = nullptr;
+    s_p2_speed_unit = nullptr;
     s_p2_avgspeed = nullptr;
     s_p2_avgspeed_unit = nullptr;
+    s_p2_hr = nullptr;
     s_p2_avghr = nullptr;
+    s_p2_ridetime = nullptr;
+    s_p2_descent = nullptr;
     s_p2_battery = nullptr;
     s_p2_sats = nullptr;
     s_page_dots[0] = nullptr;
