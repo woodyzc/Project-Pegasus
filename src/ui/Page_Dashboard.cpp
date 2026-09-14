@@ -1230,22 +1230,44 @@ void ShowPage2(bool on) {
 
 // A horizontal swipe anywhere flips between the pages.
 //
-// Ignored when it came from the inline map, which does its own dragging: a
-// rider panning the map sideways means the map, not the page, and LVGL sends
-// both the drag and a gesture for the same finger.
+// Ignored while the finger is over the inline map, which does its own
+// dragging: a rider panning the map sideways means the map, not the page, and
+// LVGL sends both the drag and a gesture for the same finger.
+//
+// Tested against the touch POINT rather than the event target, and that is not
+// a stylistic choice. LVGL does not deliver this event to the object under the
+// finger: indev_gesture() walks up from it for as long as each ancestor has
+// LV_OBJ_FLAG_GESTURE_BUBBLE, and then sends to whatever it stopped on. So the
+// target here is always the page root, and a walk up from it can never find
+// the map.
 void OnDashboardGesture(lv_event_t *e) {
-    const lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+    (void)e;
+    lv_indev_t *indev = lv_indev_get_act();
+    const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (dir != LV_DIR_LEFT && dir != LV_DIR_RIGHT) {
         return;
     }
-    if (s_nav_cell != nullptr && !s_on_page2) {
-        for (lv_obj_t *o = lv_event_get_target(e); o != nullptr; o = lv_obj_get_parent(o)) {
-            if (o == s_nav_cell) {
-                return;
-            }
+
+    if (s_nav_cell != nullptr && !s_on_page2 && indev != nullptr) {
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        lv_area_t nav;
+        lv_obj_get_coords(s_nav_cell, &nav);
+        if (_lv_area_is_point_on(&nav, &p, 0)) {
+            return;
         }
     }
+
     ShowPage2(dir == LV_DIR_LEFT);
+}
+
+// The page indicator doubles as the control, because a swipe is not a reliable
+// gesture on this panel -- the same one whose buttons had to be given a larger
+// hit area than they look. The dots are 5px; this is the 40x28 target around
+// them, transparent and sitting between the gear and the clock.
+void OnPageDotsClicked(lv_event_t *e) {
+    (void)e;
+    ShowPage2(!s_on_page2);
 }
 
 void RenderPage2() {
@@ -1812,20 +1834,40 @@ void PageDashboard::onViewLoad() {
         lv_obj_set_style_bg_opa(vline, LV_OPA_COVER, 0);
     }
 
-    // Which page is showing. Two dots beside the gear, where there is room and
-    // where the eye already goes for the settings button.
-    for (int i = 0; i < 2; i++) {
-        s_page_dots[i] = lv_obj_create(parent);
-        lv_obj_remove_style_all(s_page_dots[i]);
-        lv_obj_set_size(s_page_dots[i], 5, 5);
-        lv_obj_set_pos(s_page_dots[i], 30 + i * 9, 12);
-        lv_obj_set_style_radius(s_page_dots[i], 3, 0);
-        lv_obj_set_style_bg_opa(s_page_dots[i], LV_OPA_COVER, 0);
+    // Which page is showing, and how to change it. Two dots beside the gear,
+    // inside a tap target large enough to hit while riding: the swipe below is
+    // the quick way and this is the one that always works.
+    {
+        lv_obj_t *dots = lv_obj_create(parent);
+        lv_obj_remove_style_all(dots);
+        lv_obj_set_size(dots, 40, 28);
+        lv_obj_set_pos(dots, 26, 0);
+        lv_obj_clear_flag(dots, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(dots, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(dots, OnPageDotsClicked, LV_EVENT_CLICKED, nullptr);
+
+        for (int i = 0; i < 2; i++) {
+            s_page_dots[i] = lv_obj_create(dots);
+            lv_obj_remove_style_all(s_page_dots[i]);
+            lv_obj_set_size(s_page_dots[i], 5, 5);
+            lv_obj_set_pos(s_page_dots[i], 4 + i * 9, 11);
+            lv_obj_set_style_radius(s_page_dots[i], 3, 0);
+            lv_obj_set_style_bg_opa(s_page_dots[i], LV_OPA_COVER, 0);
+        }
     }
     RenderPageDots();
 
     // Swipe left for the second page, right for the first.
+    //
+    // The handler has to be here AND the flag cleared below, because LVGL
+    // delivers a gesture by walking up from the object under the finger for as
+    // long as each ancestor has LV_OBJ_FLAG_GESTURE_BUBBLE -- and every object
+    // created with a parent has it. Left alone, the walk runs past this page
+    // to the screen and the event is sent there, so a handler attached here is
+    // simply never called. That is what made the first version of this do
+    // nothing at all.
     lv_obj_add_event_cb(parent, OnDashboardGesture, LV_EVENT_GESTURE, this);
+    lv_obj_clear_flag(parent, LV_OBJ_FLAG_GESTURE_BUBBLE);
 
 
     // ---- Dividing lines ----
