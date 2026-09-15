@@ -346,7 +346,7 @@ int main(int argc, char **argv) {
         Sim_Publish(TOPIC_IMU_DATA, nullptr, 0);
 
         Page_Dashboard_ShowSecondPageForTest(true);
-        snprintf(path, sizeof(path), "%s/07-second-page.ppm", out_dir);
+        snprintf(path, sizeof(path), "%s/06-second-page.ppm", out_dir);
         Render(&page, path);
         Page_Dashboard_ShowSecondPageForTest(false);
     }
@@ -369,7 +369,7 @@ int main(int argc, char **argv) {
         RideSummary_t summary;
         RideSummary_Capture(&summary);
         Overlay_RideSummary_Show(&summary, true);
-        snprintf(path, sizeof(path), "%s/08-ride-summary.ppm", out_dir);
+        snprintf(path, sizeof(path), "%s/07-ride-summary.ppm", out_dir);
         Render(&page, path);
     }
 

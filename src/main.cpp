@@ -15,6 +15,7 @@
 #include "system/DataCenter.h"
 #include "system/LvglTask.h"
 #include "system/PageManager/PageManager.h"
+#include "ui/Splash.h"
 #include "system/PowerManager.h"
 #include "system/Settings.h"
 #include "system/RideStats.h"
@@ -43,6 +44,11 @@ void setup() {
     Touch_Init();
     Battery_Init();
     GPS_Init();
+
+    // Before anything slow. Everything below this -- the card, the road
+    // extract, the pages -- takes seconds on a cold boot, and this is what
+    // fills them.
+    Splash_Show();
 
     // After Display_Init(): applies the persisted backlight level to the panel.
     Settings_Init();
@@ -140,6 +146,10 @@ void setup() {
     // Before the LVGL task, because it creates an LVGL timer and LVGL here has
     // no lock: everything lv_* belongs to that task once it is running.
     PowerManager_Init();
+
+    // Waits out whatever is left of the two seconds, then hands the screen
+    // over. The first frame the LVGL task draws is the dashboard.
+    Splash_Dismiss();
 
     LvglTask_Start(); // Core 1: lv_timer_handler() loop (CLAUDE.md §4)
 
