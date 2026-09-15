@@ -158,8 +158,8 @@ lv_obj_t *s_p2_hr = nullptr;
 lv_obj_t *s_p2_avghr = nullptr;
 lv_obj_t *s_p2_ridetime = nullptr;
 lv_obj_t *s_p2_descent = nullptr;
+lv_obj_t *s_p2_incline = nullptr;
 lv_obj_t *s_p2_battery = nullptr;
-lv_obj_t *s_p2_sats = nullptr;
 lv_obj_t *s_page_dots[2] = {nullptr, nullptr};
 
 // Defined further down, beside the rest of the second page. Declared here
@@ -264,6 +264,14 @@ volatile bool s_tbt_dirty = false;
 // instead of waiting for the next GPS publish.
 float s_last_speed_kmh = 0.0f;
 bool s_has_speed = false;
+
+// The grade, kept as a number rather than only as the string the first page
+// draws. Both pages show it and they format it differently -- one appends the
+// per-cent sign to the figure, the other puts it on the caption row -- so
+// copying the label text between them, which is what speed and heart rate do,
+// would put two per-cent signs on the second page.
+float s_grade_pct = 0.0f;
+bool s_have_grade = false;
 
 // DataCenter callbacks -- may run on Core 0 (whichever core published). Must
 // NOT touch any LVGL object; only ever set a flag for the Core-1 refresh
@@ -1122,6 +1130,8 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         if (DataCenter_Pull(TOPIC_IMU_DATA, &imu, sizeof(imu))) {
             // Grade as a percentage of rise over run, from the IMU's pitch.
             const float grade = tanf(imu.pitch * (float)M_PI / 180.0f) * 100.0f;
+            s_grade_pct = grade;
+            s_have_grade = true;
             lv_label_set_text_fmt(s_incline_label, "%+.1f%%", grade);
             lv_obj_set_style_bg_color(
                 s_incline_cell, lv_color_hex(grade >= 3.0f ? COLOR_CLIMB_FILL : COLOR_CELL_BG), 0);
@@ -1331,6 +1341,15 @@ void RenderPage2() {
         lv_obj_set_style_text_color(s_p2_avghr, lv_color_hex(COLOR_VALUE), 0);
     }
 
+    // "--" with no IMU, which is every day on this board: the per-cent sign
+    // stays on the caption row either way, so the cell still says what it
+    // would be showing.
+    if (s_have_grade) {
+        lv_label_set_text_fmt(s_p2_incline, "%+.1f", (double)s_grade_pct);
+    } else {
+        lv_label_set_text(s_p2_incline, "--");
+    }
+
     Battery_t battery;
     if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
         lv_label_set_text_fmt(s_p2_battery, "%u", (unsigned)battery.percent);
@@ -1339,16 +1358,6 @@ void RenderPage2() {
             lv_color_hex((!battery.on_usb && battery.percent <= 10) ? COLOR_NAV_OFF_ROUTE
                                                                    : COLOR_VALUE),
             0);
-    }
-
-    GPS_Info_t gps;
-    if (DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps))) {
-        // Satellites USED in the solution, not seen. A rider waiting for a fix
-        // wants the number that has to reach four, and "seen" passes four long
-        // before the receiver can solve anything.
-        lv_label_set_text_fmt(s_p2_sats, "%u", (unsigned)gps.num_sv);
-        lv_obj_set_style_text_color(
-            s_p2_sats, lv_color_hex(gps.fix_valid ? COLOR_VALUE : COLOR_CAPTION), 0);
     }
 }
 
@@ -1852,10 +1861,10 @@ void PageDashboard::onViewLoad() {
                                   nullptr, &lv_font_montserrat_32);
         y += P2_SHORT_H;
 
-        s_p2_battery = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "BATTERY", "%", nullptr,
+        s_p2_incline = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "INCLINE", "%", nullptr,
                                   &lv_font_montserrat_40);
-        s_p2_sats = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "SATELLITES", nullptr,
-                               nullptr, &lv_font_montserrat_32);
+        s_p2_battery = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "BATTERY", "%",
+                                  nullptr, &lv_font_montserrat_32);
 
         // The same hairlines the first page draws, at the row boundaries.
         const lv_coord_t rules[3] = {P2_TALL_H, 2 * P2_TALL_H, 2 * P2_TALL_H + P2_SHORT_H};
@@ -2056,8 +2065,8 @@ void PageDashboard::onViewUnload() {
     s_p2_avghr = nullptr;
     s_p2_ridetime = nullptr;
     s_p2_descent = nullptr;
+    s_p2_incline = nullptr;
     s_p2_battery = nullptr;
-    s_p2_sats = nullptr;
     s_page_dots[0] = nullptr;
     s_page_dots[1] = nullptr;
     s_nav_cell = nullptr;

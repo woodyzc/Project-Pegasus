@@ -331,6 +331,10 @@ int main(int argc, char **argv) {
         g_sim.moving_seconds = 6 * 3600 + 26 * 60 + 14;
         g_sim.gps.speed = 21.4f / 3.6f;
         g_sim.gps.num_sv = 11;
+        // A grade, so the INCLINE cell renders a value rather than the "--"
+        // this board shows for want of an IMU.
+        g_sim.have_imu = true;
+        g_sim.imu.pitch = -4.0f;
         g_sim.have_hr = true;
         g_sim.hr.bpm = 148;
         g_sim.battery.percent = 41;
@@ -338,6 +342,8 @@ int main(int argc, char **argv) {
         Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
         Sim_Publish(TOPIC_BATTERY, nullptr, 0);
         Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
+
+        Sim_Publish(TOPIC_IMU_DATA, nullptr, 0);
 
         Page_Dashboard_ShowSecondPageForTest(true);
         snprintf(path, sizeof(path), "%s/07-second-page.ppm", out_dir);
