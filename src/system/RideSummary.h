@@ -47,6 +47,19 @@ typedef struct {
 // unit is which. Writes nothing and returns false if the buffer is too small.
 bool RideSummary_FormatDuration(uint32_t seconds, char *out, size_t out_size);
 
+// The same duration, in five glyphs: "m:ss" below an hour, "h:mm" from one.
+//
+// For a cell too narrow to hold "6:26:14", which at any large size is most of
+// them. Dropping the seconds past an hour costs nothing a rider reads -- after
+// six hours nobody is counting them -- while below an hour they are the half
+// that is still changing.
+//
+// Both forms are at most five glyphs, which is what makes the cell sizeable at
+// all: a format that was five glyphs sometimes and seven others would have to
+// be laid out for the seven.
+#define RIDE_SUMMARY_SHORT_TIME_MAX 8
+bool RideSummary_FormatDurationShort(uint32_t seconds, char *out, size_t out_size);
+
 // True when there is nothing worth showing -- no distance and no moving time.
 // A rider who presses "start new ride" twice in a row should not be handed an
 // empty report the second time.

@@ -73,6 +73,39 @@ int main(void) {
     }
     printf("done\n");
 
+    printf("- the short form is five glyphs, whatever the duration: ");
+    {
+        char buf[RIDE_SUMMARY_SHORT_TIME_MAX];
+        struct { uint32_t s; const char *want; } cases[] = {
+            {0, "0:00"},
+            {5, "0:05"},
+            {425, "7:05"},
+            {3599, "59:59"},   // the widest sub-hour form
+            {3600, "1:00"},    // and the seconds go, because nothing reads them
+            {3661, "1:01"},
+            {45296, "12:34"},  // the widest form there is
+            {0xFFFFFFFFu, "99:59"},
+        };
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            checks++;
+            const bool ok = RideSummary_FormatDurationShort(cases[i].s, buf, sizeof(buf));
+            if (!ok || strcmp(buf, cases[i].want) != 0) {
+                failures++;
+                printf("\n    FAIL: %us -> \"%s\", want \"%s\"", (unsigned)cases[i].s,
+                       ok ? buf : "(failed)", cases[i].want);
+            } else {
+                // The cell is laid out for five glyphs. Anything longer would
+                // be clipped on the panel rather than reported anywhere.
+                check(strlen(buf) <= 5, cases[i].want);
+            }
+        }
+        char small[4];
+        check(!RideSummary_FormatDurationShort(60, small, sizeof(small)), "a short buffer refuses");
+        check(small[0] == '\0', "and leaves nothing behind");
+        check(!RideSummary_FormatDurationShort(60, NULL, 10), "so does a null one");
+    }
+    printf("done\n");
+
     printf("- an empty ride is recognised as having nothing to say: ");
     {
         RideSummary_t s;

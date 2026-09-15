@@ -1197,9 +1197,12 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
 
     lv_obj_t *value = lv_label_create(cell);
     lv_label_set_text(value, "--");
-    // 24pt, not the first page's 28. "6:26:14" is seven glyphs and the widest
-    // thing either page has to hold; at 28 it runs out of a 120px cell.
-    lv_obj_set_style_text_font(value, &lv_font_montserrat_24, 0);
+    // 40pt, the same size the first page gives speed and heart rate, so the
+    // device has one big-number face rather than two. Up from 24, which was
+    // sized around a seven-glyph "6:26:14"; the ride time is five glyphs now
+    // (RideSummary_FormatDurationShort) and nothing on this page is wider than
+    // "59:59" or "1890", both of which fit a 120px cell at this size.
+    lv_obj_set_style_text_font(value, &lv_font_montserrat_40, 0);
     lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
     return value;
@@ -1294,8 +1297,10 @@ void RenderPage2() {
                                     0);
     }
 
-    char buf[RIDE_SUMMARY_TIME_MAX];
-    if (RideSummary_FormatDuration((uint32_t)RideStats_MovingSeconds(), buf, sizeof(buf))) {
+    // The short form here, the full one on the ride summary: that panel has
+    // the width for seconds and this cell does not.
+    char buf[RIDE_SUMMARY_SHORT_TIME_MAX];
+    if (RideSummary_FormatDurationShort((uint32_t)RideStats_MovingSeconds(), buf, sizeof(buf))) {
         lv_label_set_text(s_p2_ridetime, buf);
     }
 
