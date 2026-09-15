@@ -278,10 +278,16 @@ only started when the button is pressed, so there is no idle cost left to
 save. Everything still compiles and links with the flag off — the API answers
 false and says why, so the UI carries no conditionals.
 
-The access-point password is regenerated every session and shown on the panel.
-It is deliberately **not** derived from the MAC: the access point's BSSID *is*
-the MAC, so anything derived from it is printed on the outside of the thing it
-protects.
+The access-point password is fixed at the owner's request, so it can be typed
+from memory, and is shown on the panel. It has a digit on the end because WPA2
+refuses a passphrase under eight characters outright -- `WiFi.softAP()` returns
+false rather than falling back to an open network.
+
+The per-session random password it replaced is worth remembering for the reason
+it existed: the access point broadcasts the chip's MAC as its BSSID, so a
+MAC-derived password would be published alongside the network it protects. A
+fixed word is not derived from anything, so it is only as weak as it is short.
+Fine for a few minutes beside its owner; not something to leave running.
 
 ## 10. Companion App (`phone/android/`)
 

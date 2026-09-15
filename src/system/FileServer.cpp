@@ -9,7 +9,6 @@
 #include <SD_MMC.h>
 #include <WebServer.h>
 #include <WiFi.h>
-#include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -27,13 +26,22 @@ const IPAddress AP_IP(192, 168, 4, 1);
 // lower limit is one less way for a neighbour to occupy a slot.
 constexpr int MAX_STATIONS = 1;
 
-// Long enough that guessing is hopeless over a radio link that rate-limits
-// itself, short enough to read off a 2.8" panel and type on a phone.
-constexpr size_t PASSWORD_LEN = 10;
-
-// No 0/O, 1/l/I. Every one of those is a support question when someone reads
-// a password off a screen, and the alphabet still leaves 57^10 of them.
-constexpr char PASSWORD_ALPHABET[] = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+// Fixed, at the owner's request, so it can be typed from memory rather than
+// read off the panel each session.
+//
+// It is "pegasus1" and not "pegasus" because WPA2 will not take seven
+// characters: esp_wifi refuses a passphrase under eight outright, and
+// WiFi.softAP() returns false rather than falling back to an open network.
+// Eight is the floor, not a preference.
+//
+// This is weaker than the per-session random password it replaces, and the
+// reason that one existed is worth keeping written down: the access point
+// broadcasts the chip's MAC as its BSSID, so anything derived from the MAC is
+// published alongside the network it protects. A fixed word is not derived
+// from anything, so it is only as weak as it is short -- fine for a device
+// that is switched on for a few minutes beside its owner, and not something to
+// leave running.
+constexpr char AP_PASSWORD[] = "pegasus1";
 
 // Streamed in chunks rather than read whole. A road extract is 1.8MB and a
 // single read of one already tripped the task watchdog once.
@@ -42,7 +50,7 @@ constexpr size_t STREAM_CHUNK = 2048;
 WebServer s_server(HTTP_PORT);
 bool s_running = false;
 char s_ssid[32] = "";
-char s_password[PASSWORD_LEN + 1] = "";
+char s_password[sizeof(AP_PASSWORD)] = "";
 char s_url[32] = "";
 // The last byte is never written and stays NUL: SetStatus passes
 // sizeof - 1 to vsnprintf, so index 95 is out of its reach. That is load
@@ -67,17 +75,6 @@ void SetStatus(const char *fmt, ...) {
     va_start(args, fmt);
     vsnprintf(s_status, sizeof(s_status) - 1, fmt, args);
     va_end(args);
-}
-
-void MakePassword() {
-    const size_t alphabet_len = sizeof(PASSWORD_ALPHABET) - 1;
-    for (size_t i = 0; i < PASSWORD_LEN; i++) {
-        // esp_random() is the hardware RNG and is properly seeded once the
-        // radio is up, which it is by the time this runs. rand() here would be
-        // the same password on every board on every boot.
-        s_password[i] = PASSWORD_ALPHABET[esp_random() % alphabet_len];
-    }
-    s_password[PASSWORD_LEN] = '\0';
 }
 
 const char *DirLabel(const char *dir) {
@@ -364,7 +361,7 @@ bool FileServer_Start() {
     uint8_t mac[6] = {0};
     WiFi.macAddress(mac);
     snprintf(s_ssid, sizeof(s_ssid), "Pegasus-%02X%02X", mac[4], mac[5]);
-    MakePassword();
+    snprintf(s_password, sizeof(s_password), "%s", AP_PASSWORD);
 
     WiFi.mode(WIFI_AP);
     if (!WiFi.softAPConfig(AP_IP, AP_IP, IPAddress(255, 255, 255, 0))) {

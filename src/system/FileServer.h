@@ -59,10 +59,10 @@ void FileServer_StopAndRestart();
 
 bool FileServer_IsRunning();
 
-// The network name, and the password generated for this session. The password
-// is fresh every time the server starts, because the access point's BSSID is
-// the chip's own MAC -- anything derived from the MAC would be printed on the
-// side of the box it is meant to protect.
+// The network name, and the password. The password is fixed so it can be typed
+// from memory; it is still shown on the panel. FileServer.cpp records why it is
+// the word it is, why it has a digit on the end, and what a fixed password
+// costs against the per-session one it replaced.
 const char *FileServer_Ssid();
 const char *FileServer_Password();
 
