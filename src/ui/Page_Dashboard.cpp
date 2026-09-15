@@ -1167,7 +1167,8 @@ Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 // cells are 120px wide rather than 150 and the figures here are read at rest
 // rather than at speed.
 lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
-                     const char *caption, const char *unit, lv_obj_t **out_unit) {
+                     const char *caption, const char *unit, lv_obj_t **out_unit,
+                     const lv_font_t *font) {
     lv_obj_t *cell = lv_obj_create(parent);
     lv_obj_set_size(cell, w, h);
     lv_obj_set_pos(cell, x, y);
@@ -1197,12 +1198,7 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
 
     lv_obj_t *value = lv_label_create(cell);
     lv_label_set_text(value, "--");
-    // 40pt, the same size the first page gives speed and heart rate, so the
-    // device has one big-number face rather than two. Up from 24, which was
-    // sized around a seven-glyph "6:26:14"; the ride time is five glyphs now
-    // (RideSummary_FormatDurationShort) and nothing on this page is wider than
-    // "59:59" or "1890", both of which fit a 120px cell at this size.
-    lv_obj_set_style_text_font(value, &lv_font_montserrat_40, 0);
+    lv_obj_set_style_text_font(value, font, 0);
     lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
     return value;
@@ -1788,7 +1784,21 @@ void PageDashboard::onViewLoad() {
         const lv_coord_t P2_Y = STATUS_H;
         const lv_coord_t P2_H = ZONE_MARK_Y - P2_Y;    // 276
         const lv_coord_t P2_COL_W = SCREEN_W / 2;      // 120
-        const lv_coord_t P2_ROW_H = P2_H / 4;          // 69
+
+        // Two row heights, because the page holds two kinds of number.
+        //
+        // Live speed and heart rate are read at 25km/h on a bouncing bike, so
+        // they take 48pt and the taller rows that a 52px line box needs. The
+        // four below are read at a stop -- an average, a total, a battery, a
+        // satellite count -- and stay at 40pt in shorter rows. That is a
+        // hierarchy rather than an inconsistency: the size says which numbers
+        // are for riding.
+        //
+        // A single height would have capped everything at 40. The binding
+        // figure is "59:59" in the ride-time cell, which needs about 98px of
+        // the 108 a 120px cell has at 40pt and would not fit at all at 48.
+        const lv_coord_t P2_TALL_H = 76;               // 48pt: 52 + a 13px caption
+        const lv_coord_t P2_SHORT_H = (P2_H - 2 * P2_TALL_H) / 2; // 62
 
         s_page2 = lv_obj_create(parent);
         lv_obj_set_pos(s_page2, 0, P2_Y);
@@ -1814,31 +1824,40 @@ void PageDashboard::onViewLoad() {
         //
         // The clock is not here any more and does not need to be: the status
         // line above this page is never covered, and it has the time on it.
-        s_p2_speed = MakeP2Cell(s_page2, 0, 0, P2_COL_W, P2_ROW_H, "SPEED",
-                                Settings_SpeedUnitLabel(), &s_p2_speed_unit);
-        s_p2_avgspeed = MakeP2Cell(s_page2, P2_COL_W, 0, P2_COL_W, P2_ROW_H, "AVG SPEED",
-                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit);
+        const lv_font_t *big = &lv_font_montserrat_48;
+        const lv_font_t *small = &lv_font_montserrat_40;
+        lv_coord_t y = 0;
 
-        s_p2_hr = MakeP2Cell(s_page2, 0, P2_ROW_H, P2_COL_W, P2_ROW_H, "HEART RATE", "bpm",
-                             nullptr);
-        s_p2_avghr = MakeP2Cell(s_page2, P2_COL_W, P2_ROW_H, P2_COL_W, P2_ROW_H, "AVG HR", "bpm",
-                                nullptr);
+        s_p2_speed = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_TALL_H, "SPEED",
+                                Settings_SpeedUnitLabel(), &s_p2_speed_unit, big);
+        s_p2_avgspeed = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_TALL_H, "AVG SPEED",
+                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit, big);
+        y += P2_TALL_H;
 
-        s_p2_ridetime = MakeP2Cell(s_page2, 0, 2 * P2_ROW_H, P2_COL_W, P2_ROW_H, "RIDE TIME",
-                                   nullptr, nullptr);
-        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, 2 * P2_ROW_H, P2_COL_W, P2_ROW_H, "DESCENT",
-                                  "m", nullptr);
+        s_p2_hr = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_TALL_H, "HEART RATE", "bpm", nullptr,
+                             big);
+        s_p2_avghr = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_TALL_H, "AVG HR", "bpm",
+                                nullptr, big);
+        y += P2_TALL_H;
 
-        s_p2_battery = MakeP2Cell(s_page2, 0, 3 * P2_ROW_H, P2_COL_W, P2_ROW_H, "BATTERY", "%",
-                                  nullptr);
-        s_p2_sats = MakeP2Cell(s_page2, P2_COL_W, 3 * P2_ROW_H, P2_COL_W, P2_ROW_H, "SATELLITES",
-                               nullptr, nullptr);
+        s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "RIDE TIME", nullptr,
+                                   nullptr, small);
+        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_SHORT_H, "DESCENT", "m",
+                                  nullptr, small);
+        y += P2_SHORT_H;
 
-        // The same hairlines the first page draws, so the grids line up.
-        for (int r = 1; r < 4; r++) {
+        s_p2_battery = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "BATTERY", "%", nullptr,
+                                  small);
+        s_p2_sats = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_SHORT_H, "SATELLITES", nullptr,
+                               nullptr, small);
+
+        // The same hairlines the first page draws, at the row boundaries the
+        // two heights produce rather than at a fixed step.
+        const lv_coord_t rules[3] = {P2_TALL_H, 2 * P2_TALL_H, 2 * P2_TALL_H + P2_SHORT_H};
+        for (int r = 0; r < 3; r++) {
             lv_obj_t *line = lv_obj_create(s_page2);
             lv_obj_remove_style_all(line);
-            lv_obj_set_pos(line, 0, r * P2_ROW_H - 1);
+            lv_obj_set_pos(line, 0, rules[r] - 1);
             lv_obj_set_size(line, SCREEN_W, 1);
             lv_obj_set_style_bg_color(line, lv_color_hex(COLOR_CELL_BORDER), 0);
             lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
