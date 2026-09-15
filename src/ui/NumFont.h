@@ -22,18 +22,22 @@ extern "C" {
 
 extern const lv_font_t pegasus_font_num_88;
 
-// The second page's four figures: live speed, average speed, live heart rate,
-// average heart rate. Emboldened, because Montserrat Medium is the only weight
-// LVGL vendors and a thin face is the first thing a rider loses in bright sun,
-// so the generator draws these with an outline stroke rather than adding a
-// second TTF to the repository.
+// The second page's figures, in two sizes because its two columns are two
+// widths. Emboldened: Montserrat Medium is the only weight LVGL vendors and a
+// thin face is the first thing a rider loses in bright sun, so the generator
+// draws these with an outline stroke rather than adding a second TTF here.
 //
-// 46 with a 2px stroke, and both numbers are measured rather than chosen. The
-// live figure and its average share a row, so each gets half the panel, and
-// the widest string either can hold -- "99.9" -- comes to 110px against the
-// 112 a 120px cell offers at this page's 4px inset. 47 needs 114 and does not
-// fit; 48 needs 117.
-extern const lv_font_t pegasus_font_num_46b;
+// Both sizes are measured, not chosen. The widest string either can hold is
+// "99.9", and it has to fit the column minus two 4px insets:
+//
+//   live column     150 wide, 142 usable   58 gives 137   (60 gives 141)
+//   average column   90 wide,  82 usable   30 gives  80   (32 gives  83)
+//
+// The live figures are what a rider reads at speed and get the wide column;
+// the averages are read at a stop. That is the whole reason the columns are
+// unequal, and the reason the averages are small.
+extern const lv_font_t pegasus_font_num_58b;
+extern const lv_font_t pegasus_font_num_30b;
 
 #ifdef __cplusplus
 }

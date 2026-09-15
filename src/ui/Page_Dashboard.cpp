@@ -1164,6 +1164,14 @@ Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 // 108. The whole size of the figures on this page rests on this number.
 constexpr lv_coord_t P2_PAD = 4;
 
+// How far the figure sits above the bottom of its cell.
+//
+// The first page uses 1, which puts a 40pt number a pixel off the hairline
+// under it. At this page's sizes that reads as a number resting on the frame
+// rather than sitting in a cell, so it is lifted clear. There is room: the
+// tall rows are 76px and hold a 13px caption over a 45px line box.
+constexpr lv_coord_t P2_VALUE_Y = -8;
+
 // One cell of the second page: caption, optional unit, and a figure.
 //
 // Deliberately the same anatomy as MakeCell on the first page -- caption top
@@ -1205,7 +1213,7 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     lv_label_set_text(value, "--");
     lv_obj_set_style_text_font(value, font, 0);
     lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
-    lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, P2_PAD, CELL_VALUE_Y);
+    lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, P2_PAD, P2_VALUE_Y);
     return value;
 }
 
@@ -1787,23 +1795,25 @@ void PageDashboard::onViewLoad() {
     {
         const lv_coord_t P2_Y = STATUS_H;
         const lv_coord_t P2_H = ZONE_MARK_Y - P2_Y;    // 276
-        const lv_coord_t P2_COL_W = SCREEN_W / 2;      // 120
 
-        // Two rows of a live figure beside its own average, then two rows of
-        // everything else. The pairing is what the rider asked for and it
-        // costs size: sharing a row halves the width, and the widest string
-        // either speed cell can hold takes 110 of the 112 a half cell offers
-        // at this page's inset. Alone on a row the same figures were 42px
-        // tall; paired they are 35.
+        // Two unequal columns, and the inequality is the point.
         //
-        // The two below get the battery and the satellite count back, which
-        // the full-width layout had no room for. The battery is a second copy
-        // of the header's percentage and is here only because the row would
-        // otherwise be half empty.
+        // The live speed and the live heart rate share the wide one: they are
+        // what a rider reads at 25km/h, and width is the only thing that sets
+        // how large a figure can be. 150 against 90 is the same split the
+        // first page uses, so the two pages have one column line rather than
+        // two.
+        //
+        // What it costs is in NumFont.h: the wide column takes a 43px figure
+        // and the narrow one 23px. The averages are read at a stop, which is
+        // the trade -- but it is a real one, and they were the same size as
+        // the live figures a commit ago.
+        const lv_coord_t P2_LIVE_W = 150;
+        const lv_coord_t P2_AVG_W = SCREEN_W - P2_LIVE_W;          // 90
         const lv_coord_t P2_TALL_H = 76;
         const lv_coord_t P2_SHORT_H = (P2_H - 2 * P2_TALL_H) / 2;  // 62
-        const lv_font_t *big = &pegasus_font_num_46b;
-        const lv_font_t *small = &lv_font_montserrat_40;
+        const lv_font_t *live = &pegasus_font_num_58b;
+        const lv_font_t *avg = &pegasus_font_num_30b;
 
         s_page2 = lv_obj_create(parent);
         lv_obj_set_pos(s_page2, 0, P2_Y);
@@ -1821,28 +1831,31 @@ void PageDashboard::onViewLoad() {
         lv_obj_add_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
 
         lv_coord_t y = 0;
-        s_p2_speed = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_TALL_H, "SPEED",
-                                Settings_SpeedUnitLabel(), &s_p2_speed_unit, big);
-        s_p2_avgspeed = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_TALL_H, "AVG SPEED",
-                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit, big);
+        s_p2_speed = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_TALL_H, "SPEED",
+                                Settings_SpeedUnitLabel(), &s_p2_speed_unit, live);
+        s_p2_avgspeed = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_TALL_H, "AVG",
+                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit, avg);
         y += P2_TALL_H;
 
-        s_p2_hr = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_TALL_H, "HEART RATE", "bpm", nullptr,
-                             big);
-        s_p2_avghr = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_TALL_H, "AVG HR", "bpm",
-                                nullptr, big);
+        s_p2_hr = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_TALL_H, "HEART RATE", "bpm", nullptr,
+                             live);
+        s_p2_avghr = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_TALL_H, "AVG", "bpm",
+                                nullptr, avg);
         y += P2_TALL_H;
 
-        s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "RIDE TIME", nullptr,
-                                   nullptr, small);
-        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_SHORT_H, "DESCENT", "m",
-                                  nullptr, small);
+        // The narrow column cannot hold a four-digit descent at 40pt, so the
+        // bottom rows take their size from their own column too: 40 on the
+        // left, 32 on the right.
+        s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "RIDE TIME", nullptr,
+                                   nullptr, &lv_font_montserrat_40);
+        s_p2_descent = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "DESCENT", "m",
+                                  nullptr, &lv_font_montserrat_32);
         y += P2_SHORT_H;
 
-        s_p2_battery = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "BATTERY", "%", nullptr,
-                                  small);
-        s_p2_sats = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_SHORT_H, "SATELLITES", nullptr,
-                               nullptr, small);
+        s_p2_battery = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "BATTERY", "%", nullptr,
+                                  &lv_font_montserrat_40);
+        s_p2_sats = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "SATELLITES", nullptr,
+                               nullptr, &lv_font_montserrat_32);
 
         // The same hairlines the first page draws, at the row boundaries.
         const lv_coord_t rules[3] = {P2_TALL_H, 2 * P2_TALL_H, 2 * P2_TALL_H + P2_SHORT_H};
@@ -1857,7 +1870,7 @@ void PageDashboard::onViewLoad() {
         // Every row is split now, so it runs the full height.
         lv_obj_t *vline = lv_obj_create(s_page2);
         lv_obj_remove_style_all(vline);
-        lv_obj_set_pos(vline, P2_COL_W - 1, 0);
+        lv_obj_set_pos(vline, P2_LIVE_W - 1, 0);
         lv_obj_set_size(vline, 1, P2_H);
         lv_obj_set_style_bg_color(vline, lv_color_hex(COLOR_CELL_BORDER), 0);
         lv_obj_set_style_bg_opa(vline, LV_OPA_COVER, 0);
