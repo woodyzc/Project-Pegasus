@@ -22,20 +22,18 @@ extern "C" {
 
 extern const lv_font_t pegasus_font_num_88;
 
-// The second page's four big readouts: live speed, average speed, live heart
-// rate, average heart rate. 42px digits against the 48pt face's 34, and
-// emboldened -- Montserrat Medium is the only weight LVGL vendors, and a thin
-// face is the first thing a rider loses in bright sun or at a glance, so the
-// generator draws these with an outline stroke rather than adding a second TTF
-// to the repository.
+// The second page's four figures: live speed, average speed, live heart rate,
+// average heart rate. Emboldened, because Montserrat Medium is the only weight
+// LVGL vendors and a thin face is the first thing a rider loses in bright sun,
+// so the generator draws these with an outline stroke rather than adding a
+// second TTF to the repository.
 //
-// Each of the four has a full-width row, and that is not a style choice: two
-// of these numbers side by side need 240px of the 228 a row offers, and even
-// at the largest size that DOES fit a half cell the digits come out smaller
-// than they were before.
-//
-// 15KB. A full ASCII face this size and weight would be nearer 150.
-extern const lv_font_t pegasus_font_num_54b;
+// 46 with a 2px stroke, and both numbers are measured rather than chosen. The
+// live figure and its average share a row, so each gets half the panel, and
+// the widest string either can hold -- "99.9" -- comes to 110px against the
+// 112 a 120px cell offers at this page's 4px inset. 47 needs 114 and does not
+// fit; 48 needs 117.
+extern const lv_font_t pegasus_font_num_46b;
 
 #ifdef __cplusplus
 }

@@ -158,6 +158,8 @@ lv_obj_t *s_p2_hr = nullptr;
 lv_obj_t *s_p2_avghr = nullptr;
 lv_obj_t *s_p2_ridetime = nullptr;
 lv_obj_t *s_p2_descent = nullptr;
+lv_obj_t *s_p2_battery = nullptr;
+lv_obj_t *s_p2_sats = nullptr;
 lv_obj_t *s_page_dots[2] = {nullptr, nullptr};
 
 // Defined further down, beside the rest of the second page. Declared here
@@ -1157,6 +1159,11 @@ Account s_imu_account("Page_Dashboard/IMU", OnImuPublished);
 Account s_battery_account("Page_Dashboard/Battery", OnBatteryPublished);
 Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 
+// Four rather than the captions' six, and the two pixels are not cosmetic:
+// "99.9" in the bold face is 110px, and 120 minus two insets of six leaves
+// 108. The whole size of the figures on this page rests on this number.
+constexpr lv_coord_t P2_PAD = 4;
+
 // One cell of the second page: caption, optional unit, and a figure.
 //
 // Deliberately the same anatomy as MakeCell on the first page -- caption top
@@ -1181,14 +1188,14 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     lv_label_set_text(label, caption);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, CELL_PAD, CELL_CAPTION_Y);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, P2_PAD, CELL_CAPTION_Y);
 
     if (unit != nullptr) {
         lv_obj_t *u = lv_label_create(cell);
         lv_label_set_text(u, unit);
         lv_obj_set_style_text_font(u, &lv_font_montserrat_10, 0);
         lv_obj_set_style_text_color(u, lv_color_hex(COLOR_CAPTION), 0);
-        lv_obj_align(u, LV_ALIGN_TOP_RIGHT, -CELL_PAD, CELL_CAPTION_Y);
+        lv_obj_align(u, LV_ALIGN_TOP_RIGHT, -P2_PAD, CELL_CAPTION_Y);
         if (out_unit != nullptr) {
             *out_unit = u;
         }
@@ -1198,51 +1205,7 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     lv_label_set_text(value, "--");
     lv_obj_set_style_text_font(value, font, 0);
     lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
-    lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
-    return value;
-}
-
-// A full-width row holding one big number.
-//
-// One per row, and that is forced rather than chosen. Two of these side by
-// side need about 240px of the 228 a row offers, and the largest face that
-// does fit a half-width cell draws digits SMALLER than the page had before --
-// so pairing them would have made the figures worse in order to look tidier.
-//
-// Caption top left, unit top right, figure bottom left, exactly as every other
-// cell on both pages.
-lv_obj_t *MakeP2BigRow(lv_obj_t *parent, lv_coord_t w, lv_coord_t y, lv_coord_t h,
-                       const char *caption, const char *unit, lv_obj_t **out_unit) {
-    lv_obj_t *cell = lv_obj_create(parent);
-    lv_obj_set_size(cell, w, h);
-    lv_obj_set_pos(cell, 0, y);
-    lv_obj_set_style_bg_color(cell, lv_color_hex(COLOR_CELL_BG), 0);
-    lv_obj_set_style_border_width(cell, 0, 0);
-    lv_obj_set_style_radius(cell, 0, 0);
-    lv_obj_set_style_pad_all(cell, 0, 0);
-    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t *label = lv_label_create(cell);
-    lv_label_set_text(label, caption);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, CELL_PAD, CELL_CAPTION_Y);
-
-    lv_obj_t *u = lv_label_create(cell);
-    lv_label_set_text(u, unit);
-    lv_obj_set_style_text_font(u, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(u, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_align(u, LV_ALIGN_TOP_RIGHT, -CELL_PAD, CELL_CAPTION_Y);
-    if (out_unit != nullptr) {
-        *out_unit = u;
-    }
-
-    lv_obj_t *value = lv_label_create(cell);
-    lv_label_set_text(value, "--");
-    lv_obj_set_style_text_font(value, &pegasus_font_num_54b, 0);
-    lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
-    lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
+    lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, P2_PAD, CELL_VALUE_Y);
     return value;
 }
 
@@ -1358,6 +1321,26 @@ void RenderPage2() {
     } else {
         lv_label_set_text(s_p2_avghr, "--");
         lv_obj_set_style_text_color(s_p2_avghr, lv_color_hex(COLOR_VALUE), 0);
+    }
+
+    Battery_t battery;
+    if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
+        lv_label_set_text_fmt(s_p2_battery, "%u", (unsigned)battery.percent);
+        lv_obj_set_style_text_color(
+            s_p2_battery,
+            lv_color_hex((!battery.on_usb && battery.percent <= 10) ? COLOR_NAV_OFF_ROUTE
+                                                                   : COLOR_VALUE),
+            0);
+    }
+
+    GPS_Info_t gps;
+    if (DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps))) {
+        // Satellites USED in the solution, not seen. A rider waiting for a fix
+        // wants the number that has to reach four, and "seen" passes four long
+        // before the receiver can solve anything.
+        lv_label_set_text_fmt(s_p2_sats, "%u", (unsigned)gps.num_sv);
+        lv_obj_set_style_text_color(
+            s_p2_sats, lv_color_hex(gps.fix_valid ? COLOR_VALUE : COLOR_CAPTION), 0);
     }
 }
 
@@ -1806,20 +1789,21 @@ void PageDashboard::onViewLoad() {
         const lv_coord_t P2_H = ZONE_MARK_Y - P2_Y;    // 276
         const lv_coord_t P2_COL_W = SCREEN_W / 2;      // 120
 
-        // Four full-width rows, then one of two.
+        // Two rows of a live figure beside its own average, then two rows of
+        // everything else. The pairing is what the rider asked for and it
+        // costs size: sharing a row halves the width, and the widest string
+        // either speed cell can hold takes 110 of the 112 a half cell offers
+        // at this page's inset. Alone on a row the same figures were 42px
+        // tall; paired they are 35.
         //
-        // The averages are the same size as the live figures now, which is
-        // what makes the rows full width: at equal size, two of these numbers
-        // cannot share a row. See MakeP2BigRow.
-        //
-        // The battery is gone rather than shrunk. It was never missing: the
-        // status line above this page shows a percentage and an icon and is
-        // never covered, so the cell was a second copy of a number already on
-        // screen. The satellite count goes with it, which is a real loss and
-        // the only one -- it is a diagnostic for the minutes before a fix, not
-        // something read while riding.
-        const lv_coord_t P2_BIG_H = 58;
-        const lv_coord_t P2_LAST_H = P2_H - 4 * P2_BIG_H;  // 44
+        // The two below get the battery and the satellite count back, which
+        // the full-width layout had no room for. The battery is a second copy
+        // of the header's percentage and is here only because the row would
+        // otherwise be half empty.
+        const lv_coord_t P2_TALL_H = 76;
+        const lv_coord_t P2_SHORT_H = (P2_H - 2 * P2_TALL_H) / 2;  // 62
+        const lv_font_t *big = &pegasus_font_num_46b;
+        const lv_font_t *small = &lv_font_montserrat_40;
 
         s_page2 = lv_obj_create(parent);
         lv_obj_set_pos(s_page2, 0, P2_Y);
@@ -1837,27 +1821,32 @@ void PageDashboard::onViewLoad() {
         lv_obj_add_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
 
         lv_coord_t y = 0;
-        s_p2_speed = MakeP2BigRow(s_page2, SCREEN_W, y, P2_BIG_H, "SPEED", Settings_SpeedUnitLabel(),
-                                  &s_p2_speed_unit);
-        y += P2_BIG_H;
-        s_p2_avgspeed = MakeP2BigRow(s_page2, SCREEN_W, y, P2_BIG_H, "AVG SPEED",
-                                     Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit);
-        y += P2_BIG_H;
-        s_p2_hr = MakeP2BigRow(s_page2, SCREEN_W, y, P2_BIG_H, "HEART RATE", "bpm", nullptr);
-        y += P2_BIG_H;
-        s_p2_avghr = MakeP2BigRow(s_page2, SCREEN_W, y, P2_BIG_H, "AVG HR", "bpm", nullptr);
-        y += P2_BIG_H;
+        s_p2_speed = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_TALL_H, "SPEED",
+                                Settings_SpeedUnitLabel(), &s_p2_speed_unit, big);
+        s_p2_avgspeed = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_TALL_H, "AVG SPEED",
+                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit, big);
+        y += P2_TALL_H;
 
-        // The two that are read at a stop, in one shorter row at 24pt. They
-        // are the reason the four above could take 58px each.
-        s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_LAST_H, "RIDE TIME", nullptr,
-                                   nullptr, &lv_font_montserrat_24);
-        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_LAST_H, "DESCENT", "m",
-                                  nullptr, &lv_font_montserrat_24);
+        s_p2_hr = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_TALL_H, "HEART RATE", "bpm", nullptr,
+                             big);
+        s_p2_avghr = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_TALL_H, "AVG HR", "bpm",
+                                nullptr, big);
+        y += P2_TALL_H;
+
+        s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "RIDE TIME", nullptr,
+                                   nullptr, small);
+        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_SHORT_H, "DESCENT", "m",
+                                  nullptr, small);
+        y += P2_SHORT_H;
+
+        s_p2_battery = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "BATTERY", "%", nullptr,
+                                  small);
+        s_p2_sats = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_SHORT_H, "SATELLITES", nullptr,
+                               nullptr, small);
 
         // The same hairlines the first page draws, at the row boundaries.
-        const lv_coord_t rules[4] = {P2_BIG_H, 2 * P2_BIG_H, 3 * P2_BIG_H, 4 * P2_BIG_H};
-        for (int r = 0; r < 4; r++) {
+        const lv_coord_t rules[3] = {P2_TALL_H, 2 * P2_TALL_H, 2 * P2_TALL_H + P2_SHORT_H};
+        for (int r = 0; r < 3; r++) {
             lv_obj_t *line = lv_obj_create(s_page2);
             lv_obj_remove_style_all(line);
             lv_obj_set_pos(line, 0, rules[r] - 1);
@@ -1865,12 +1854,11 @@ void PageDashboard::onViewLoad() {
             lv_obj_set_style_bg_color(line, lv_color_hex(COLOR_CELL_BORDER), 0);
             lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
         }
-        // Only down the one split row. Running it the full height would draw
-        // a divider through the middle of four cells that have no division.
+        // Every row is split now, so it runs the full height.
         lv_obj_t *vline = lv_obj_create(s_page2);
         lv_obj_remove_style_all(vline);
-        lv_obj_set_pos(vline, P2_COL_W - 1, 4 * P2_BIG_H);
-        lv_obj_set_size(vline, 1, P2_LAST_H);
+        lv_obj_set_pos(vline, P2_COL_W - 1, 0);
+        lv_obj_set_size(vline, 1, P2_H);
         lv_obj_set_style_bg_color(vline, lv_color_hex(COLOR_CELL_BORDER), 0);
         lv_obj_set_style_bg_opa(vline, LV_OPA_COVER, 0);
     }
@@ -2055,6 +2043,8 @@ void PageDashboard::onViewUnload() {
     s_p2_avghr = nullptr;
     s_p2_ridetime = nullptr;
     s_p2_descent = nullptr;
+    s_p2_battery = nullptr;
+    s_p2_sats = nullptr;
     s_page_dots[0] = nullptr;
     s_page_dots[1] = nullptr;
     s_nav_cell = nullptr;
