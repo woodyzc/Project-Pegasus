@@ -35,4 +35,9 @@ void Splash_Dismiss();
 
 // The converted image, from tools/gensplash.py. 240x320 RGB565, which is the
 // panel's own format, so showing it costs a memcpy and no decoding.
+//
+// The original it was made from is assets/pegasus-splash.jpeg, and the command
+// is in assets/README.md. Keeping the source art matters here: SplashImage.c
+// is a 960KB array of hex bytes, which can be regenerated but cannot sensibly
+// be edited.
 extern "C" const lv_img_dsc_t pegasus_splash;
