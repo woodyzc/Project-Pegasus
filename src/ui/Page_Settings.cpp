@@ -76,6 +76,21 @@ lv_obj_t *MakeCard(lv_obj_t *parent, const char *caption) {
     return card;
 }
 
+// A swipe left leaves, matching the swipe right that opened this page.
+//
+// The dashboard puts settings, page one and page two on one strip and moves
+// along it with left and right; this is the far end of that strip, so left is
+// the way back and there is nothing further to the right.
+void OnSettingsGesture(lv_event_t *e) {
+    if (lv_indev_get_gesture_dir(lv_indev_get_act()) != LV_DIR_LEFT) {
+        return;
+    }
+    PageSettings *self = (PageSettings *)lv_event_get_user_data(e);
+    if (self != nullptr && self->_Manager != nullptr) {
+        self->_Manager->Pop();
+    }
+}
+
 void OnBackClicked(lv_event_t *e) {
     PageSettings *self = (PageSettings *)lv_event_get_user_data(e);
     if (self != nullptr && self->_Manager != nullptr) {
@@ -387,6 +402,15 @@ void PageSettings::onViewLoad() {
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
 
     // ---- Header ----
+    // Swipe left to leave. The handler has to be here AND the flag cleared,
+    // because LVGL delivers a gesture by walking up from the object under the
+    // finger for as long as each ancestor has LV_OBJ_FLAG_GESTURE_BUBBLE --
+    // and every object created with a parent has it. Left alone the walk runs
+    // past this page to the screen and the event is sent there, so a handler
+    // attached here is never called. The dashboard learned this the same way.
+    lv_obj_add_event_cb(parent, OnSettingsGesture, LV_EVENT_GESTURE, this);
+    lv_obj_clear_flag(parent, LV_OBJ_FLAG_GESTURE_BUBBLE);
+
     lv_obj_t *back_btn = lv_btn_create(parent);
     lv_obj_set_size(back_btn, 40, 32);
     lv_obj_set_ext_click_area(back_btn, 10);
@@ -419,6 +443,12 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_pad_all(body, 8, 0);
     lv_obj_set_style_pad_row(body, 10, 0);
     lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    // Vertical only, and it is not merely tidiness: LVGL suppresses a gesture
+    // for as long as something is scrolling, and a scrollable defaults to
+    // accepting drags in every direction. Left as LV_DIR_ALL, a sideways drag
+    // would start a horizontal scroll that goes nowhere -- the content is no
+    // wider than the page -- and swallow the swipe that leaves.
+    lv_obj_set_scroll_dir(body, LV_DIR_VER);
 
     // ---- Why we last restarted ----
     // First card, and only when there is bad news. A board in a reboot loop
