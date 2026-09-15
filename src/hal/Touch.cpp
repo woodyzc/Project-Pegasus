@@ -96,6 +96,16 @@ void Touch_Init() {
     pinMode(TOUCH_INT_PIN, INPUT); // FT6336G INT is active-low, open-drain; not currently used to gate reads (see Touch_Read)
 }
 
+bool Touch_IsPressed() {
+    uint8_t touch_count = 0;
+    if (!ReadReg(REG_TD_STATUS, &touch_count, 1)) {
+        // An I2C read that failed is not a press. Reporting one would let a
+        // loose connector skip the splash on every boot.
+        return false;
+    }
+    return (touch_count & 0x0F) != 0;
+}
+
 void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     uint8_t touch_count = 0;
     if (!ReadReg(REG_TD_STATUS, &touch_count, 1)) {

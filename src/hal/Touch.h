@@ -10,3 +10,8 @@ void Touch_Init();
 // already rotated to match the display's orientation. Registered as the
 // `read_cb` of an INDEV_TYPE_POINTER input device.
 void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data);
+
+// True while a finger is on the panel, asked directly rather than through
+// LVGL. For the boot splash, which runs before the LVGL task exists and so has
+// no input device to ask.
+bool Touch_IsPressed();

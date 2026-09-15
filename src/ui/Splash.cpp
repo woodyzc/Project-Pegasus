@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+#include "../hal/Touch.h"
+
 namespace {
 
 lv_obj_t *s_splash = nullptr;
@@ -36,13 +38,30 @@ void Splash_Dismiss() {
 
     // Unsigned, so a tick counter that wrapped between the two calls gives the
     // real elapsed time rather than an enormous one.
-    const uint32_t shown_for = millis() - s_shown_ms;
-    if (shown_for < SPLASH_MIN_MS) {
-        // A blocking wait, and the only one in setup(): nothing else is
-        // running yet that it could delay. The radios come up after
-        // LvglTask_Start(), and the LVGL task is what this is waiting to hand
-        // the screen to.
-        delay(SPLASH_MIN_MS - shown_for);
+    // A blocking wait, and the only one in setup(): nothing else is running yet
+    // that it could delay. The radios come up after LvglTask_Start(), and the
+    // LVGL task is what this is waiting to hand the screen to.
+    //
+    // Polled rather than slept through, so a touch can cut it short. 20ms is
+    // far below what a finger can beat and far above what the I2C read costs.
+    bool skipped = false;
+    while ((millis() - s_shown_ms) < SPLASH_MIN_MS) {
+        if (Touch_IsPressed()) {
+            skipped = true;
+            break;
+        }
+        delay(20);
+    }
+
+    // Wait for the finger to come off before handing the screen over.
+    // Otherwise the press that skipped the splash is still down when the
+    // dashboard appears, and LVGL delivers it to whatever is under it -- which
+    // could be the map tile, opening the route page on every skipped boot.
+    if (skipped) {
+        const uint32_t release_started = millis();
+        while (Touch_IsPressed() && (millis() - release_started) < 2000) {
+            delay(20);
+        }
     }
 
     lv_obj_del(s_splash);
