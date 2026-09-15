@@ -2,6 +2,7 @@
 #include <lvgl.h>
 
 #include "hal/Battery.h"
+#include "hal/BoardPower.h"
 #include "hal/Display.h"
 #include "hal/LvglFs.h"
 #include "hal/Touch.h"
@@ -35,6 +36,11 @@ static PageSettings s_page_settings;
 static PageMap s_page_map;
 
 void setup() {
+    // First, ahead of everything. On battery this board only stays powered
+    // because firmware closes its own latch -- until this runs, the rail is
+    // held up by the rider's thumb on the power key (see BoardPower.h).
+    BoardPower_Init();
+
     Serial.begin(115200);
 
     lv_init();

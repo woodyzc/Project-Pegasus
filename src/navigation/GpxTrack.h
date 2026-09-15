@@ -10,15 +10,18 @@
 // ---------------------------------------------------------------------------
 // The card is on SDIO, not SPI
 // ---------------------------------------------------------------------------
-// This board wires the microSD to the SDIO bus -- CLK 38, CMD 40, DATA
-// 39/41/47/48 -- so it needs SD_MMC, NOT the SPI `SD` library that most
-// ESP32 examples reach for. Those pins are free of the LCD (10-13, 45, 46),
-// the touch panel (15-18) and the battery sense (9).
+// This board wires the microSD to the SDIO bus -- CLK 14, CMD 17, D0 16 --
+// so it needs SD_MMC, NOT the SPI `SD` library that most ESP32 examples reach
+// for. Only D0 is brought out, so the bus is 1-bit; GPIO21 is a plain enable
+// that must be driven high first, not the fourth data line its `D3` silkscreen
+// suggests. These pins are free of the LCD (5, 39-42, 45), the touch panel
+// (1-4), the sensor I2C (10, 11), the battery sense (8) and the power key
+// (6, 7).
 // ---------------------------------------------------------------------------
 //
 // NOTE: no SD card has ever been inserted into this project. The GPX parsing
-// and the trail thinning are covered by test/host, but mounting, the 4-bit bus
-// and the file reading below are unverified against real hardware.
+// and the trail thinning are covered by test/host, but mounting, the bus and
+// the file reading below are unverified against real hardware.
 
 // Point storage lives in PSRAM at 8 bytes per point. 20k points is 160KB --
 // nothing against 8MB, and enough that a typical ride is thinned only lightly.
@@ -39,9 +42,10 @@ bool GpxTrack_CardMounted();
 // panel, since serial cannot (CLAUDE.md section 8).
 const char *GpxTrack_MountStatus();
 
-// 4, 1, or 0 if not mounted. A 1 means the 4-bit bus failed and the 1-bit
-// fallback carried it, which is worth seeing: it says D1/D2/D3 are not wired
-// or not pulled up the way the board's documentation claims.
+// 1 when mounted, 0 when not. Always 1 on this board -- only D0 is brought
+// out, so there is no wider mode to fall back from. Kept because the settings
+// page prints it and because the next board may well wire all four again,
+// which is exactly the thing worth seeing at a glance.
 int GpxTrack_BusWidth();
 
 uint64_t GpxTrack_CardSizeMb();

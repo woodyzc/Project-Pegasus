@@ -137,7 +137,7 @@ void EnterSleep() {
     //
     //   INT is the wake source, active-low, so ext0 waits for a 0.
     //   RST must stay high, or the ESP32 releasing every non-RTC pin resets
-    //   the FT6336G on the way into sleep and nothing is left to interrupt us.
+    //   the CST328 on the way into sleep and nothing is left to interrupt us.
     //
     // Both are within the RTC-capable range on the S3 (GPIO0-21), which is
     // what makes either possible at all.

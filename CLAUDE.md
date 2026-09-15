@@ -12,39 +12,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 2. Hardware Architecture & Pinout Specifications
 
-> ⚠️ **The board on the bench is NOT the board specified below.** Development
-> currently runs on a **Hosyond ESP32-S3 2.8" (ES3C28P reference design)**,
-> bought as a stand-in until the Waveshare unit arrives. It differs in the
-> display controller and every display/touch pin. `platformio.ini` on the
-> `board/hosyond-esp32-s3-2.8` branch is the authority on what is actually
-> wired; this section describes the *target* hardware.
+> **The real board arrived on 2026-09-15** and development moved to
+> `board/waveshare-esp32-s3-2.8`. The stand-in — a Hosyond ESP32-S3 2.8"
+> (ES3C28P) with an ILI9341V panel and an FT6336G — is preserved on
+> `board/hosyond-esp32-s3-2.8`; nothing on this branch should refer to its
+> pins. `platformio.ini` is the authority on what is wired.
 >
-> Confirmed on the Hosyond board (vendor docs + `esptool`): ILI9341V panel,
-> SPI on MOSI 11 / SCLK 12 / CS 10 / DC 46, backlight IO45 active-high, no
-> panel reset line; FT6336G touch on I2C SDA 16 / SCL 15, INT 17, **RST 18**;
-> 16MB flash and **8MB octal PSRAM** ("Embedded PSRAM 8MB (AP_3v3)"); battery
-> sense on **GPIO9** through a 2:1 divider with a TP4054 charger; microSD on
-> **SDIO** (CLK 38, CMD 40, DATA 39/41/47/48) — so `SD_MMC`, not the SPI `SD`
-> library.
+> ⚠️ **The pinout below came from the vendor's driver source, not the wiki.**
+> Waveshare's wiki publishes no full GPIO table for this board; the only
+> pins it states outright are the 12-pin external connector (SCL 10 / SDA 11
+> / TXD 43 / RXD 44, spare 15 and 18). Everything else is read out of
+> [`jeffvan302/WS_ESP32_Touch28`](https://github.com/jeffvan302/WS_ESP32_Touch28)
+> `src/` — Waveshare's own Arduino demo tidied into a library — which agrees
+> with the wiki everywhere the two overlap.
 >
-> Items below marked *(target board only)* have **not** been confirmed to
-> exist on the Hosyond board. Do not assume they are present.
+> ⚠️ **`deps/Waveshare-LCD-2.8` is the wrong board.** See §6. It documents
+> the **2.8B**, which is a different product, not a revision of this one.
+>
+> Nothing below is confirmed against this hardware yet: it is a paper port.
+> Items marked *(present, not yet driven)* are wired on the board but have no
+> firmware behind them on this branch.
 
-- **Core MCU & Display**: Waveshare ESP32-S3-Touch-LCD-2.8 (Dual-Core 240MHz, 16MB Flash, PSRAM, 2.8" ST7789 Touch LCD).
-- **GNSS Module**: u-blox MAX-M10S connected via dedicated UART (GPIO43/44).
+- **Core MCU & Display**: Waveshare ESP32-S3-Touch-LCD-2.8 V1 (ESP32-S3R8, dual-core 240MHz, 16MB Flash, 8MB octal PSRAM, 2.8" 240×320 **ST7789T3** IPS LCD on SPI).
+  - MOSI 45, SCLK 40, CS 42, DC 41, **RST 39** (a real reset line, unlike the stand-in), backlight 5 active-high. Vendor drives the panel at 80MHz.
+- **Touch**: **CST328** (Hynitron), I2C address `0x1A`, on its **own bus** — SDA 1 / SCL 3, INT 4, RST 2.
+  - *Not an FT6336G with different pins.* 16-bit big-endian register addresses, two 12-bit coordinates packed into three bytes, and a touch-count register that latches until written back to zero. `src/hal/Touch.cpp` is a rewrite, not a re-pin.
+  - A V2 of this board exists with a **CST3530** instead. If touch never answers, check which one is fitted before checking the wiring.
+- **GNSS Module**: u-blox MAX-M10S via UART1 on **RX 18 / TX 15** — the only two spare GPIOs on the board.
+  - *Not* GPIO43/44 as the original spec said: that is UART0, and §8 explains why it has to stay free.
   - *Constraint*: Force UBX binary protocol only; disable high-overhead NMEA text parsing.
   - *Power*: Retain micro-power RTC backup (~15μA) for <1s hot starts.
-- **IMU Sensor** *(target board only)*: Onboard QMI8658 6-axis IMU (I2C).
-  - *Uses*: Motion detection, inclination/slope calculation, anti-theft alarm, fall detection, and Any-Motion wake-up triggers.
-  - `Page_Dashboard`'s ELEVATION cell carries both readings: `NOW` is grade
-    from `IMU_Data_t.pitch` and reads "--" until an IMU publishes, `GAIN` is
-    total ascent from `Ascent.h`. Two equal rows rather than one large figure
-    over a small one, because which of the pair matters depends on the board,
-    and a ranking baked into the layout would be wrong on one of them.
+- **Sensor I2C bus** — SDA 11 / SCL 10, separate from the touch bus, and untouched by firmware so far:
+  - **IMU** *(present, not yet driven)*: QMI8658 6-axis at `0x6B`. Motion detection, inclination/slope, anti-theft alarm, fall detection, Any-Motion wake.
+    - `Page_Dashboard`'s ELEVATION cell carries both readings: `NOW` is grade
+      from `IMU_Data_t.pitch` and reads "--" until an IMU publishes, `GAIN` is
+      total ascent from `Ascent.h`. Two equal rows rather than one large figure
+      over a small one, because which of the pair matters depends on the board,
+      and a ranking baked into the layout would be wrong on one of them. This
+      board is the first to have the hardware to fill `NOW`.
+  - **RTC** *(present, not yet driven)*: PCF85063 at `0x51`, battery-backed.
+- **Storage**: microSD on **SDIO, 1-bit only** — CLK 14, CMD 17, D0 16. GPIO21 is *not* a data line: it is a plain enable that firmware must drive high before the card answers. `SD_MMC`, never the SPI `SD` library.
 - **Power & Control**:
-  - Onboard `BAT` Button (GPIO Interrupt) *(target board only)*: Soft-switch for manual Deep Sleep entry and wake-up.
-  - Power Subsystem: Target ~200μA standby current in Deep Sleep (5–6 months standby on 1000mAh battery).
-- **Audio Output** *(target board only)*: Onboard PCM5101 I2S decoder & speaker for key clicks, off-route alerts, and turn prompts.
+  - **Power latch on GPIO7 — load-bearing.** On battery the rail is held up by a soft latch, and it stays up only because firmware drives GPIO7 high. `BoardPower_Init()` is the first line of `setup()` for this reason. Invisible on USB, where the host holds the rail up regardless; it bites the first time the cable comes out. Driving it low is what powers the board off.
+  - Power key on GPIO6 *(present, not yet driven)*: the vendor reads it for long-press sleep / restart / shutdown. Until that lands there is **no software path to switch this board off**.
+  - Battery sense on **GPIO8 through a 3:1 divider** (the stand-in's was 2:1), with a ~0.99 trim the vendor applies. Target ~200μA standby in Deep Sleep (5–6 months on 1000mAh).
+- **Audio Output** *(present, not yet driven)*: onboard PCM5101 I2S decoder & speaker — DOUT 47, BCLK 48, LRCK/WS 38 — for key clicks, off-route alerts, and turn prompts.
 
 ## 3. Wireless Connectivity & Sensor Decoding
 
@@ -88,8 +100,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     has no lock, so `PowerManager` runs on an LVGL timer instead
     (`src/system/PowerManager.h`). The decision logic is pure and host-tested in
     `src/system/IdlePolicy.h`; deep sleep is opt-in because the wake source has
-    never been proven. IMU-based motion detection is still absent, because the
-    board on the bench has no IMU.
+    never been proven. IMU-based motion detection is still absent — but as of
+    the Waveshare board that is an omission rather than a hardware limit: the
+    QMI8658 is on the sensor bus (§2) waiting to be driven.
 - **Core 1 (UI & Life Cycle Core)**:
   - Task 1: LVGL rendering loop (`lv_timer_handler()`).
   - Task 2: X-TRACK `PageManager` life cycle management.
@@ -131,7 +144,7 @@ Each submodule's responsibility:
 - **`deps/SparkFun_u-blox_GNSS`** ([sparkfun/SparkFun_u-blox_GNSS_Arduino_Library](https://github.com/sparkfun/SparkFun_u-blox_GNSS_Arduino_Library)): Drive the u-blox MAX-M10S module, configure pure UBX binary protocol output, and parse high-precision fix data.
 - **`deps/Kalman`** ([balzer82/Kalman](https://github.com/balzer82/Kalman)) and **`deps/Arduino-KalmanFilter`** ([nhatuan84/Arduino-KalmanFilter](https://github.com/nhatuan84/Arduino-KalmanFilter)): Reference for the low-speed anti-drift Kalman-filter logic applied to GPS fixes.
 - **`deps/uBloxGPS`** ([SquirrelEng/uBloxGPS](https://github.com/SquirrelEng/uBloxGPS)): Lightweight reference for decoding the UBX binary `NAV-PVT` message directly (no NMEA parsing, smaller footprint than TinyGPS) — the UBX-parsing half of the original `OpenBikeComputer` request.
-- **`deps/Waveshare-LCD-2.8`** ([FatihErtugral/esp32s3-waveshare-2.8-touch-lcd](https://github.com/FatihErtugral/esp32s3-waveshare-2.8-touch-lcd)): Reference for driving the ST7789 screen, FT6336 touch panel, and QMI8658 IMU on this exact board. No official `waveshareteam` repo exists for the 2.8" ESP32-S3 board specifically — this is a third-party reference, confirmed with the user.
+- **`deps/Waveshare-LCD-2.8`** ([FatihErtugral/esp32s3-waveshare-2.8-touch-lcd](https://github.com/FatihErtugral/esp32s3-waveshare-2.8-touch-lcd)): ⚠️ **This is the wrong board, and this entry used to claim otherwise.** It was vendored as "the ST7789 / FT6336 / QMI8658 reference for this exact board". It is neither: it targets the **ESP32-S3-Touch-LCD-2.8B**, a different product with a 480×640 **ST7701 RGB parallel** panel, **GT911** touch, and a **TCA9554** I/O expander holding LCD reset, LCD CS, touch reset and SD power. Not one display or touch pin is shared with the board we have, and TFT_eSPI cannot drive an RGB parallel panel at all. The mistake cost nothing only because it was caught before the port started; the lesson is that "2.8" and "2.8B" are product names, not revisions. Still useful for the QMI8658 and PCF85063 register work, which the two boards do share. **For this board, the reference is [`jeffvan302/WS_ESP32_Touch28`](https://github.com/jeffvan302/WS_ESP32_Touch28)** — Waveshare's own Arduino demo as a library, and the source of every pin in §2. It is not vendored; the pins are transcribed into `platformio.ini` with attribution.
 
 Together, `deps/Kalman` + `deps/Arduino-KalmanFilter` + `deps/uBloxGPS` replace the originally-requested `deps/OpenBikeComputer` submodule, whose UBX/Kalman-filter code couldn't be located under that repo name (neither [timohueser/OpenBikeComputer](https://github.com/timohueser/OpenBikeComputer) nor [Random90/OpenBikeComputerRTOS_ESP32](https://github.com/Random90/OpenBikeComputerRTOS_ESP32) actually contains it).
 
@@ -161,11 +174,47 @@ These were each discovered the slow way. They are not optional trivia.
   - `-D USE_HSPI_PORT` — without it TFT_eSPI's S3 branch shares the Arduino
     global `SPI` object and `tft.begin()` panics
     (`esp_reset_reason() == ESP_RST_PANIC`): black screen, endless reboot.
-  - `-D TOUCH_RST_PIN=18` — the FT6336G answers nothing on I2C until its
-    reset line is driven high.
+  - `-D TOUCH_RST_PIN=2` — the CST328 answers nothing on I2C until it is
+    given a real reset pulse (high, low 5ms, high). Was pin 18 and an FT6336G
+    on the stand-in board; the flag survived the port, the pin did not.
 - **A setting that hangs at boot outlives a reflash**, because it lives in
   NVS. `Settings_Init()`'s bring-up watchdog exists for exactly this; do not
   remove it when adding radio modes.
+
+---
+
+**Carried over to the Waveshare board (2026-09-15), and not yet re-verified
+there.** Everything above this line was learned on the Hosyond stand-in. The
+LVGL, TFT_eSPI and NimBLE items are firmware-level and should hold unchanged;
+the serial item is a property of the ESP32-S3's USB-Serial-JTAG peripheral
+rather than of any one carrier board, so expect it to hold too. Below are the
+things the new board adds.
+
+- **GPIO7 is a power latch, and nothing on battery works without it.** The
+  rail is closed by the power key and held closed only by firmware driving
+  GPIO7 high; release the key before that happens and the board switches off
+  mid-boot. This is why `BoardPower_Init()` is the first statement in
+  `setup()`, ahead of the display. It is **completely invisible on USB**,
+  where the host holds the rail up regardless — so a board that works
+  perfectly on the bench and dies the moment it is unplugged is this, not a
+  battery fault. The corollary, until the power key is driven: there is no
+  software way to switch this board off.
+- **The CST328 latches its touch count until you clear it.** Register `0xD005`
+  holds the point count and does not reset on its own; every read path must
+  write it back to zero or the panel reports exactly one press and then looks
+  dead. `Touch_Init()` clears it once at the end, too — otherwise a finger
+  resting on the glass during bring-up leaves a press queued, and the boot
+  splash skips itself.
+- **The SD card is 1-bit, and GPIO21 is not the fourth data line.** Only D0 is
+  brought out. GPIO21 carries a `D3` label but behaves as an enable that must
+  be driven high before the card answers at all. Asking for a 4-bit bus here
+  trains against floating pins and fails slowly on every boot.
+- **The GNSS UART has nowhere else to go.** Between the panel (5, 39–42, 45),
+  touch (1–4), the sensor I2C (10, 11), the card (14, 16, 17, 21), battery
+  (8), power (6, 7), audio (38, 47, 48) and USB (19, 20), the only free pins
+  are **15 and 18** — plus UART0's 43/44, which the serial item above says to
+  keep. So GNSS is RX 18 / TX 15 and there is no second choice; anything else
+  that wants a pin on this board has to take one away from something.
 - **Register every GATT service before anything scans or connects.**
   NimBLE's `ble_gatts_mutable()` refuses to add a service while an
   advertisement, a scan, a connection attempt or an established connection

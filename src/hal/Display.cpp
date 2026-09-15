@@ -5,7 +5,7 @@
 #include <esp_heap_caps.h>
 
 // TFT_eSPI is configured entirely via the USER_SETUP_LOADED build_flags in
-// platformio.ini (ILI9341_DRIVER, TFT_MOSI/SCLK/CS/DC/BL, ...) -- no
+// platformio.ini (ST7789_DRIVER, TFT_MOSI/SCLK/CS/DC/RST/BL, ...) -- no
 // User_Setup.h needed.
 static TFT_eSPI tft = TFT_eSPI();
 
@@ -34,7 +34,8 @@ static uint8_t s_brightness_pct = 100;
 
 static void Backlight_Init() {
     // TFT_BL is a plain GPIO on this board (no dedicated PWM controller),
-    // driven on/off via ledc for future brightness control.
+    // driven on/off via ledc for future brightness control. Active high: the
+    // vendor drives the same pin with a plain 0-100% duty and no inversion.
     ledcSetup(BACKLIGHT_LEDC_CHANNEL, 5000, 8);
     ledcAttachPin(TFT_BL, BACKLIGHT_LEDC_CHANNEL);
     ledcWrite(BACKLIGHT_LEDC_CHANNEL, 255); // full brightness at boot

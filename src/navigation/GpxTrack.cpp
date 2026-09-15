@@ -12,22 +12,20 @@
 // SDIO pins for this board (see the header). Overridable per board from
 // platformio.ini, since a different carrier will wire the card elsewhere.
 #ifndef SD_CLK_PIN
-#define SD_CLK_PIN 38
+#define SD_CLK_PIN 14
 #endif
 #ifndef SD_CMD_PIN
-#define SD_CMD_PIN 40
+#define SD_CMD_PIN 17
 #endif
 #ifndef SD_D0_PIN
-#define SD_D0_PIN 39
+#define SD_D0_PIN 16
 #endif
-#ifndef SD_D1_PIN
-#define SD_D1_PIN 41
-#endif
-#ifndef SD_D2_PIN
-#define SD_D2_PIN 47
-#endif
-#ifndef SD_D3_PIN
-#define SD_D3_PIN 48
+// Not a data line. This board brings only D0 out to the SDIO controller and
+// leaves D3 as a plain GPIO that has to be driven high before the card will
+// answer -- so it is named for what it is rather than pretending to be the
+// fourth bit of a bus that does not exist here.
+#ifndef SD_D3_CTRL_PIN
+#define SD_D3_CTRL_PIN 21
 #endif
 
 namespace {
@@ -95,47 +93,39 @@ bool GpxTrack_MountCard() {
         return true;
     }
 
+    // D3 is a chip-select-ish enable here, not a data line: the card ignores
+    // the bus until it is high. It has to be driven before setPins(), because
+    // begin() trains the card immediately afterwards.
+    pinMode(SD_D3_CTRL_PIN, OUTPUT);
+    digitalWrite(SD_D3_CTRL_PIN, HIGH);
+    delay(10);
+
     // setPins() before begin(): SD_MMC defaults to the ESP32-S3's standard
     // slot pins, which are not the ones this board uses.
-    if (!SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_D1_PIN, SD_D2_PIN, SD_D3_PIN)) {
+    //
+    // 1-bit only, and the -1s are deliberate. The previous board wired all
+    // four data lines and this code tried 4-bit first; this one brings out
+    // only D0, so asking for 4-bit would train against three floating pins and
+    // fail slowly on every boot before falling back to the mode that was
+    // always going to be the answer. 1-bit is roughly four times slower, which
+    // matters not at all here: a GPX is read once at boot and the ride log
+    // writes a point per second.
+    if (!SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, -1, -1, -1)) {
         s_mount_status = "pin setup refused";
         NoteSdStep("sd_pins", 0);
         return false;
     }
     NoteSdStep("sd_pins", 1);
 
-    // format_if_empty stays false throughout -- silently formatting a rider's
-    // card would be an unforgivable way to handle a filesystem this code
-    // cannot read.
-    //
-    // Try 4-bit first, then fall back to 1-bit.
-    //
-    // 4-bit needs D1/D2/D3 actually wired and pulled up, and this board is
-    // already known not to match its own documentation (CLAUDE.md section 2 --
-    // it is not even the board the spec describes). 1-bit needs only CLK, CMD
-    // and D0, so it survives a card slot whose upper data lines are absent,
-    // unpulled, or shared with something else. It is roughly four times
-    // slower, which matters not at all here: a GPX is read once at boot and
-    // the ride log writes a point per second.
-    bool four_bit = SD_MMC.begin("/sdcard", false, false);
-    NoteSdStep("sd_4bit", four_bit ? 1 : 0);
-
-    if (!four_bit) {
-        SD_MMC.end();
-        if (!SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_D0_PIN, SD_D1_PIN, SD_D2_PIN, SD_D3_PIN)) {
-            s_mount_status = "pin setup refused (1-bit retry)";
-            return false;
-        }
-        const bool one_bit = SD_MMC.begin("/sdcard", true, false);
-        NoteSdStep("sd_1bit", one_bit ? 1 : 0);
-        if (!one_bit) {
-            s_mount_status = "no card, or wrong format (needs FAT32)";
-            return false;
-        }
-        s_bus_width = 1;
-    } else {
-        s_bus_width = 4;
+    // format_if_empty stays false -- silently formatting a rider's card would
+    // be an unforgivable way to handle a filesystem this code cannot read.
+    const bool one_bit = SD_MMC.begin("/sdcard", true, false);
+    NoteSdStep("sd_1bit", one_bit ? 1 : 0);
+    if (!one_bit) {
+        s_mount_status = "no card, or wrong format (needs FAT32)";
+        return false;
     }
+    s_bus_width = 1;
 
     const uint8_t type = SD_MMC.cardType();
     NoteSdStep("sd_type", type);

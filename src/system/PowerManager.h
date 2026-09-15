@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 // Deep sleep is off by default, and that is not timidity
 // ---------------------------------------------------------------------------
-// Waking depends on the FT6336G pulling its interrupt line low when it is
+// Waking depends on the CST328 pulling its interrupt line low when it is
 // touched, and on that line still meaning something after the ESP32 has let
 // every non-RTC pin go. Neither has ever been tested on this board, and there
 // is no BAT button here to fall back on -- the target board has one, this one

@@ -5,11 +5,18 @@
 #include "../system/DataCenter.h"
 
 #ifndef BATTERY_ADC_PIN
-#define BATTERY_ADC_PIN 9 // ADC1_CH8 on ESP32-S3; vendor pinout for this board
+#define BATTERY_ADC_PIN 8 // ADC1_CH7 on ESP32-S3; vendor pinout for this board
 #endif
 
 #ifndef BATTERY_DIVIDER_NUM
-#define BATTERY_DIVIDER_NUM 2 // 2:1 resistor divider -> pack mV = pin mV * 2
+#define BATTERY_DIVIDER_NUM 3 // 3:1 resistor divider -> pack mV = pin mV * 3
+#endif
+
+#ifndef BATTERY_CAL_PERMILLE
+// The vendor's trim on the nominal ratio: BAT_Driver.cpp divides by 0.990476,
+// i.e. the real divider sits about 1% off its nominal value. Kept as parts per
+// thousand so the whole conversion stays in integer arithmetic.
+#define BATTERY_CAL_PERMILLE 990
 #endif
 
 namespace {
@@ -79,7 +86,13 @@ uint16_t Battery_ReadMillivolts() {
     }
 
     const uint32_t pin_mv = total / SAMPLE_COUNT;
-    return (uint16_t)(pin_mv * BATTERY_DIVIDER_NUM);
+
+    // Divider ratio, then the vendor's calibration trim. Ordered so the
+    // multiply happens first: a 4.2V pack puts ~1.4V on the pin, so the
+    // intermediate is ~4200*1000 and nowhere near overflowing 32 bits, while
+    // dividing first would throw away the fraction the trim exists to correct.
+    const uint32_t pack_mv = (pin_mv * BATTERY_DIVIDER_NUM * 1000u) / BATTERY_CAL_PERMILLE;
+    return (uint16_t)pack_mv;
 }
 
 uint8_t Battery_PercentFromMillivolts(uint16_t millivolts) {
