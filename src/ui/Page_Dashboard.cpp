@@ -1153,13 +1153,6 @@ void OnMapClicked(lv_event_t *e) {
     }
 }
 
-void OnSettingsClicked(lv_event_t *e) {
-    PageDashboard *self = (PageDashboard *)lv_event_get_user_data(e);
-    if (self != nullptr && self->_Manager != nullptr) {
-        self->_Manager->Push(PAGE_NAME_SETTINGS);
-    }
-}
-
 // One Account per subscription. File-scope rather than members because the
 // DataCenter callbacks above are plain functions and there is only ever one
 // dashboard instance.
@@ -1264,7 +1257,6 @@ void ShowPage2(bool on) {
 // target here is always the page root, and a walk up from it can never find
 // the map.
 void OnDashboardGesture(lv_event_t *e) {
-    (void)e;
     lv_indev_t *indev = lv_indev_get_act();
     const lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (dir != LV_DIR_LEFT && dir != LV_DIR_RIGHT) {
@@ -1281,7 +1273,29 @@ void OnDashboardGesture(lv_event_t *e) {
         }
     }
 
-    ShowPage2(dir == LV_DIR_LEFT);
+    // Three places on one strip: settings, then the two data pages.
+    //
+    //     SETTINGS  <--  page 1  -->  page 2
+    //
+    // Left always goes further right along it and right always comes back, so
+    // the same flick means the same thing wherever the rider is. Settings
+    // replaced a button in the corner, which was the hardest target on the
+    // panel -- it needed a touch area half again its own size and was still
+    // missed.
+    if (dir == LV_DIR_LEFT) {
+        ShowPage2(true);
+        return;
+    }
+
+    if (s_on_page2) {
+        ShowPage2(false);
+        return;
+    }
+
+    PageDashboard *self = (PageDashboard *)lv_event_get_user_data(e);
+    if (self != nullptr && self->_Manager != nullptr) {
+        self->_Manager->Push(PAGE_NAME_SETTINGS);
+    }
 }
 
 // The page indicator doubles as the control, because a swipe is not a reliable
@@ -1693,27 +1707,12 @@ void PageDashboard::onViewLoad() {
     // Created after the navigation slot on purpose: it sits over the top of
     // it, and the navigation tile is opaque, so building it first would put
     // these behind it.
-    lv_obj_t *settings_btn = lv_btn_create(parent);
-    // The touch target is bigger than the button.
     //
-    // 34x24 is about 6mm by 4mm on this panel, which is smaller than the
-    // fingertip aiming at it, and it sits in the very corner where a finger
-    // cannot be centred on it at all. lv_obj_set_ext_click_area grows the area
-    // that responds without growing the thing that is drawn, so the control
-    // stays the size the layout wants and stops being a game of accuracy.
-    lv_obj_set_size(settings_btn, 34, 24);
-    lv_obj_set_ext_click_area(settings_btn, 12);
-    lv_obj_align(settings_btn, LV_ALIGN_TOP_LEFT, 3, 2);
-    lv_obj_set_style_bg_color(settings_btn, lv_color_hex(0x1D2A36), 0);
-    lv_obj_set_style_bg_color(settings_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
-    lv_obj_set_style_radius(settings_btn, 6, 0);
-    lv_obj_set_style_shadow_width(settings_btn, 0, 0);
-    lv_obj_add_event_cb(settings_btn, OnSettingsClicked, LV_EVENT_CLICKED, this);
-
-    lv_obj_t *gear = lv_label_create(settings_btn);
-    lv_label_set_text(gear, LV_SYMBOL_SETTINGS);
-    lv_obj_set_style_text_color(gear, lv_color_hex(COLOR_VALUE), 0);
-    lv_obj_center(gear);
+    // No settings button here any more. It was a 34x24 target in the very
+    // corner, given a touch area half again its own size because a fingertip
+    // could not be centred on it, and still missed often enough to be
+    // reported. A swipe right opens settings instead -- see
+    // OnDashboardGesture, which now owns all three destinations.
 
     // The time and its zone, in a flex row rather than aligned to each other.
     //
@@ -1892,7 +1891,10 @@ void PageDashboard::onViewLoad() {
         lv_obj_t *dots = lv_obj_create(parent);
         lv_obj_remove_style_all(dots);
         lv_obj_set_size(dots, 40, 28);
-        lv_obj_set_pos(dots, 26, 0);
+        // Into the corner the gear used to hold, rather than beside where it
+        // was: an indicator left orbiting a control that no longer exists
+        // reads as a gap.
+        lv_obj_set_pos(dots, 4, 0);
         lv_obj_clear_flag(dots, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(dots, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(dots, OnPageDotsClicked, LV_EVENT_CLICKED, nullptr);
