@@ -153,7 +153,6 @@ bool s_on_page2 = false;
 lv_obj_t *s_p2_speed = nullptr;
 lv_obj_t *s_p2_speed_unit = nullptr;
 lv_obj_t *s_p2_avgspeed = nullptr;
-lv_obj_t *s_p2_avgspeed_unit = nullptr;
 lv_obj_t *s_p2_hr = nullptr;
 lv_obj_t *s_p2_avghr = nullptr;
 lv_obj_t *s_p2_ridetime = nullptr;
@@ -1204,6 +1203,62 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     return value;
 }
 
+// A full-width cell: the live figure as large as the page allows, with its own
+// ride average tucked to the right of it.
+//
+// The same arrangement as the first page's speed and heart-rate cells, and for
+// the same reason -- the average belongs beside the number it is the average
+// OF, not in a cell of its own two rows away. Full width because 1.2x does not
+// fit half of one: "99.9" at this face is 121px and half the screen offers 108.
+lv_obj_t *MakeP2LiveCell(lv_obj_t *parent, lv_coord_t w, lv_coord_t y, lv_coord_t h,
+                         const char *caption, const char *unit, lv_obj_t **out_unit,
+                         lv_obj_t **out_avg) {
+    lv_obj_t *cell = lv_obj_create(parent);
+    lv_obj_set_size(cell, w, h);
+    lv_obj_set_pos(cell, 0, y);
+    lv_obj_set_style_bg_color(cell, lv_color_hex(COLOR_CELL_BG), 0);
+    lv_obj_set_style_border_width(cell, 0, 0);
+    lv_obj_set_style_radius(cell, 0, 0);
+    lv_obj_set_style_pad_all(cell, 0, 0);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *label = lv_label_create(cell);
+    lv_label_set_text(label, caption);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, CELL_PAD, CELL_CAPTION_Y);
+
+    lv_obj_t *u = lv_label_create(cell);
+    lv_label_set_text(u, unit);
+    lv_obj_set_style_text_font(u, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(u, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_align(u, LV_ALIGN_TOP_RIGHT, -CELL_PAD, CELL_CAPTION_Y);
+    if (out_unit != nullptr) {
+        *out_unit = u;
+    }
+
+    // One row of the ride block, not two: there is no MAX here, because the
+    // first page already carries it and this page is not a second copy of that
+    // one.
+    lv_obj_t *block = lv_obj_create(cell);
+    lv_obj_remove_style_all(block);
+    lv_obj_set_size(block, SECONDARY_W, SECONDARY_ROW_H);
+    lv_obj_clear_flag(block, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(block, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(block, LV_ALIGN_BOTTOM_RIGHT, -SECONDARY_INSET, CELL_VALUE_Y);
+    *out_avg = MakeSecondaryRow(block, "AVG");
+
+    lv_obj_t *value = lv_label_create(cell);
+    lv_label_set_text(value, "--");
+    // Digits only, generated: LVGL's Montserrat stops at 48 and this is 1.2x
+    // of it. See NumFont.h for why a digits-only face rather than a full one.
+    lv_obj_set_style_text_font(value, &pegasus_font_num_58, 0);
+    lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
+    lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
+    return value;
+}
+
 void RenderPageDots() {
     for (int i = 0; i < 2; i++) {
         if (s_page_dots[i] == nullptr) {
@@ -1286,6 +1341,10 @@ void RenderPage2() {
         lv_label_set_text(s_p2_speed, lv_label_get_text(s_speed_label));
     }
     lv_label_set_text(s_p2_speed_unit, Settings_SpeedUnitLabel());
+    // No unit beside the average: the cell's own unit label covers both
+    // figures, exactly as it does on the first page.
+    lv_label_set_text_fmt(s_p2_avgspeed, "%.1f",
+                          (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
 
     if (s_hr_label != nullptr) {
         lv_label_set_text(s_p2_hr, lv_label_get_text(s_hr_label));
@@ -1301,10 +1360,6 @@ void RenderPage2() {
     }
 
     lv_label_set_text_fmt(s_p2_descent, "%d", (int)(RideStats_DescentM() + 0.5f));
-
-    lv_label_set_text_fmt(s_p2_avgspeed, "%.1f",
-                          (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
-    lv_label_set_text(s_p2_avgspeed_unit, Settings_SpeedUnitLabel());
 
     const uint8_t avg_bpm = RideStats_AvgBpm();
     if (avg_bpm > 0) {
@@ -1785,19 +1840,19 @@ void PageDashboard::onViewLoad() {
         const lv_coord_t P2_H = ZONE_MARK_Y - P2_Y;    // 276
         const lv_coord_t P2_COL_W = SCREEN_W / 2;      // 120
 
-        // Two row heights, because the page holds two kinds of number.
+        // Two full-width rows, then two of two.
         //
-        // Live speed and heart rate are read at 25km/h on a bouncing bike, so
-        // they take 48pt and the taller rows that a 52px line box needs. The
-        // four below are read at a stop -- an average, a total, a battery, a
-        // satellite count -- and stay at 40pt in shorter rows. That is a
-        // hierarchy rather than an inconsistency: the size says which numbers
-        // are for riding.
+        // Live speed and heart rate are read at 25km/h on a bouncing bike and
+        // take the whole width, which is what lets them be 1.2x the largest
+        // face LVGL ships. The four below are read at a stop -- a total, a
+        // descent, a battery, a satellite count -- and stay at 40pt in half
+        // cells. The size says which numbers are for riding.
         //
-        // A single height would have capped everything at 40. The binding
-        // figure is "59:59" in the ride-time cell, which needs about 98px of
-        // the 108 a 120px cell has at 40pt and would not fit at all at 48.
-        const lv_coord_t P2_TALL_H = 76;               // 48pt: 52 + a 13px caption
+        // The wide rows are not wide because the figure needs 240px; it needs
+        // 121. They are wide because 108 is what half a screen offers and that
+        // is eight pixels short. The rest of the width pays for itself by
+        // carrying the ride average beside the figure it belongs to.
+        const lv_coord_t P2_TALL_H = 76;
         const lv_coord_t P2_SHORT_H = (P2_H - 2 * P2_TALL_H) / 2; // 62
 
         s_page2 = lv_obj_create(parent);
@@ -1824,20 +1879,15 @@ void PageDashboard::onViewLoad() {
         //
         // The clock is not here any more and does not need to be: the status
         // line above this page is never covered, and it has the time on it.
-        const lv_font_t *big = &lv_font_montserrat_48;
         const lv_font_t *small = &lv_font_montserrat_40;
         lv_coord_t y = 0;
 
-        s_p2_speed = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_TALL_H, "SPEED",
-                                Settings_SpeedUnitLabel(), &s_p2_speed_unit, big);
-        s_p2_avgspeed = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_TALL_H, "AVG SPEED",
-                                   Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit, big);
+        s_p2_speed = MakeP2LiveCell(s_page2, SCREEN_W, y, P2_TALL_H, "SPEED",
+                                    Settings_SpeedUnitLabel(), &s_p2_speed_unit, &s_p2_avgspeed);
         y += P2_TALL_H;
 
-        s_p2_hr = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_TALL_H, "HEART RATE", "bpm", nullptr,
-                             big);
-        s_p2_avghr = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_TALL_H, "AVG HR", "bpm",
-                                nullptr, big);
+        s_p2_hr = MakeP2LiveCell(s_page2, SCREEN_W, y, P2_TALL_H, "HEART RATE", "bpm", nullptr,
+                                 &s_p2_avghr);
         y += P2_TALL_H;
 
         s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "RIDE TIME", nullptr,
@@ -1862,10 +1912,12 @@ void PageDashboard::onViewLoad() {
             lv_obj_set_style_bg_color(line, lv_color_hex(COLOR_CELL_BORDER), 0);
             lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
         }
+        // Only down the two split rows. Running it the full height would draw
+        // a divider through the middle of the two cells that have no division.
         lv_obj_t *vline = lv_obj_create(s_page2);
         lv_obj_remove_style_all(vline);
-        lv_obj_set_pos(vline, P2_COL_W - 1, 0);
-        lv_obj_set_size(vline, 1, P2_H);
+        lv_obj_set_pos(vline, P2_COL_W - 1, 2 * P2_TALL_H);
+        lv_obj_set_size(vline, 1, 2 * P2_SHORT_H);
         lv_obj_set_style_bg_color(vline, lv_color_hex(COLOR_CELL_BORDER), 0);
         lv_obj_set_style_bg_opa(vline, LV_OPA_COVER, 0);
     }
@@ -2045,7 +2097,6 @@ void PageDashboard::onViewUnload() {
     s_p2_speed = nullptr;
     s_p2_speed_unit = nullptr;
     s_p2_avgspeed = nullptr;
-    s_p2_avgspeed_unit = nullptr;
     s_p2_hr = nullptr;
     s_p2_avghr = nullptr;
     s_p2_ridetime = nullptr;

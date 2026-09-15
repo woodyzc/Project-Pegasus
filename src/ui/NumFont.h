@@ -22,6 +22,15 @@ extern "C" {
 
 extern const lv_font_t pegasus_font_num_88;
 
+// The second page's live speed and heart rate, at 1.2x the 48pt face: 41px
+// digits against its 34. Generated for the same reason as the 88 above --
+// LVGL's Montserrat stops at 48 -- and restricted to the same characters,
+// which is every one those two readouts can produce including the "--" they
+// show before a fix or a strap.
+//
+// It costs 12.6KB. A full ASCII face at this size would be nearer 130.
+extern const lv_font_t pegasus_font_num_58;
+
 #ifdef __cplusplus
 }
 #endif

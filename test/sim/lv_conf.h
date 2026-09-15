@@ -106,10 +106,10 @@
 /* 0 since the turn distance moved to pegasus_font_num_88 (src/ui/NumFont.h),
  * which is generated at a size LVGL's built-ins do not reach. Nothing else
  * asked for 48pt, and the linker was already discarding it. */
-/* The second page's live speed and heart rate. Those two are read at 25km/h on
- * a bouncing bike; everything else on that page is read at a stop, and stays
- * at 40. line_height is 52, which is what decides the row height there. */
-#define LV_FONT_MONTSERRAT_48 1
+/* 0: the second page's live figures went past what LVGL ships and now use the
+ * generated pegasus_font_num_58 (src/ui/NumFont.h) instead, so nothing is left
+ * that wants 48. The linker was already dropping it. */
+#define LV_FONT_MONTSERRAT_48 0
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
 /* lv_label_set_text_fmt() goes through LVGL's own printf, not the C library's,
