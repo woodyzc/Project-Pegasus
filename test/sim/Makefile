@@ -39,7 +39,7 @@ LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
 APP_CXX := $(SRC)/ui/Page_Dashboard.cpp $(SRC)/ui/TbtIcons.cpp \
            $(SRC)/ui/Page_Map.cpp $(SRC)/ui/MapView.cpp \
            $(SRC)/ui/Overlay_RideSummary.cpp
-APP_C   := $(SRC)/ui/NumFont.c $(SRC)/ui/NumFont58.c $(SRC)/system/HrZone.c $(SRC)/system/TimeZone.c \
+APP_C   := $(SRC)/ui/NumFont.c $(SRC)/ui/NumFontBig.c $(SRC)/system/HrZone.c $(SRC)/system/TimeZone.c \
            $(SRC)/system/RideSummary.c $(SRC)/navigation/MapHeading.c \
            $(SRC)/system/TimeSource.c $(SRC)/navigation/TbtParse.c \
            $(SRC)/navigation/MapProject.c $(SRC)/navigation/TrackBuffer.c

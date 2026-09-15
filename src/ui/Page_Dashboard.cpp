@@ -153,12 +153,11 @@ bool s_on_page2 = false;
 lv_obj_t *s_p2_speed = nullptr;
 lv_obj_t *s_p2_speed_unit = nullptr;
 lv_obj_t *s_p2_avgspeed = nullptr;
+lv_obj_t *s_p2_avgspeed_unit = nullptr;
 lv_obj_t *s_p2_hr = nullptr;
 lv_obj_t *s_p2_avghr = nullptr;
 lv_obj_t *s_p2_ridetime = nullptr;
 lv_obj_t *s_p2_descent = nullptr;
-lv_obj_t *s_p2_battery = nullptr;
-lv_obj_t *s_p2_sats = nullptr;
 lv_obj_t *s_page_dots[2] = {nullptr, nullptr};
 
 // Defined further down, beside the rest of the second page. Declared here
@@ -1203,16 +1202,17 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     return value;
 }
 
-// A full-width cell: the live figure as large as the page allows, with its own
-// ride average tucked to the right of it.
+// A full-width row holding one big number.
 //
-// The same arrangement as the first page's speed and heart-rate cells, and for
-// the same reason -- the average belongs beside the number it is the average
-// OF, not in a cell of its own two rows away. Full width because 1.2x does not
-// fit half of one: "99.9" at this face is 121px and half the screen offers 108.
-lv_obj_t *MakeP2LiveCell(lv_obj_t *parent, lv_coord_t w, lv_coord_t y, lv_coord_t h,
-                         const char *caption, const char *unit, lv_obj_t **out_unit,
-                         lv_obj_t **out_avg) {
+// One per row, and that is forced rather than chosen. Two of these side by
+// side need about 240px of the 228 a row offers, and the largest face that
+// does fit a half-width cell draws digits SMALLER than the page had before --
+// so pairing them would have made the figures worse in order to look tidier.
+//
+// Caption top left, unit top right, figure bottom left, exactly as every other
+// cell on both pages.
+lv_obj_t *MakeP2BigRow(lv_obj_t *parent, lv_coord_t w, lv_coord_t y, lv_coord_t h,
+                       const char *caption, const char *unit, lv_obj_t **out_unit) {
     lv_obj_t *cell = lv_obj_create(parent);
     lv_obj_set_size(cell, w, h);
     lv_obj_set_pos(cell, 0, y);
@@ -1238,22 +1238,9 @@ lv_obj_t *MakeP2LiveCell(lv_obj_t *parent, lv_coord_t w, lv_coord_t y, lv_coord_
         *out_unit = u;
     }
 
-    // One row of the ride block, not two: there is no MAX here, because the
-    // first page already carries it and this page is not a second copy of that
-    // one.
-    lv_obj_t *block = lv_obj_create(cell);
-    lv_obj_remove_style_all(block);
-    lv_obj_set_size(block, SECONDARY_W, SECONDARY_ROW_H);
-    lv_obj_clear_flag(block, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(block, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(block, LV_ALIGN_BOTTOM_RIGHT, -SECONDARY_INSET, CELL_VALUE_Y);
-    *out_avg = MakeSecondaryRow(block, "AVG");
-
     lv_obj_t *value = lv_label_create(cell);
     lv_label_set_text(value, "--");
-    // Digits only, generated: LVGL's Montserrat stops at 48 and this is 1.2x
-    // of it. See NumFont.h for why a digits-only face rather than a full one.
-    lv_obj_set_style_text_font(value, &pegasus_font_num_58, 0);
+    lv_obj_set_style_text_font(value, &pegasus_font_num_54b, 0);
     lv_obj_set_style_text_color(value, lv_color_hex(COLOR_VALUE), 0);
     lv_obj_align(value, LV_ALIGN_BOTTOM_LEFT, CELL_PAD, CELL_VALUE_Y);
     return value;
@@ -1341,8 +1328,7 @@ void RenderPage2() {
         lv_label_set_text(s_p2_speed, lv_label_get_text(s_speed_label));
     }
     lv_label_set_text(s_p2_speed_unit, Settings_SpeedUnitLabel());
-    // No unit beside the average: the cell's own unit label covers both
-    // figures, exactly as it does on the first page.
+    lv_label_set_text(s_p2_avgspeed_unit, Settings_SpeedUnitLabel());
     lv_label_set_text_fmt(s_p2_avgspeed, "%.1f",
                           (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
 
@@ -1372,26 +1358,6 @@ void RenderPage2() {
     } else {
         lv_label_set_text(s_p2_avghr, "--");
         lv_obj_set_style_text_color(s_p2_avghr, lv_color_hex(COLOR_VALUE), 0);
-    }
-
-    Battery_t battery;
-    if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
-        lv_label_set_text_fmt(s_p2_battery, "%u", (unsigned)battery.percent);
-        lv_obj_set_style_text_color(
-            s_p2_battery,
-            lv_color_hex((!battery.on_usb && battery.percent <= 10) ? COLOR_NAV_OFF_ROUTE
-                                                                    : COLOR_VALUE),
-            0);
-    }
-
-    GPS_Info_t gps;
-    if (DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps))) {
-        // Satellites used in the solution, not seen. A rider waiting for a fix
-        // wants the number that has to reach four, and "seen" reaches four
-        // long before the receiver can solve anything.
-        lv_label_set_text_fmt(s_p2_sats, "%u", (unsigned)gps.num_sv);
-        lv_obj_set_style_text_color(
-            s_p2_sats, lv_color_hex(gps.fix_valid ? COLOR_VALUE : COLOR_CAPTION), 0);
     }
 }
 
@@ -1833,27 +1799,27 @@ void PageDashboard::onViewLoad() {
 
     // ---- The second data page ----
     // Covers the navigation region and the four cells, leaving the status line
-    // and the zone bar. Eight cells of 120x69: four rows between the status
-    // line at 28 and the zone marker at 304.
+    // and the zone bar. Four full-width rows and one split one, between the
+    // status line at 28 and the zone marker at 304.
     {
         const lv_coord_t P2_Y = STATUS_H;
         const lv_coord_t P2_H = ZONE_MARK_Y - P2_Y;    // 276
         const lv_coord_t P2_COL_W = SCREEN_W / 2;      // 120
 
-        // Two full-width rows, then two of two.
+        // Four full-width rows, then one of two.
         //
-        // Live speed and heart rate are read at 25km/h on a bouncing bike and
-        // take the whole width, which is what lets them be 1.2x the largest
-        // face LVGL ships. The four below are read at a stop -- a total, a
-        // descent, a battery, a satellite count -- and stay at 40pt in half
-        // cells. The size says which numbers are for riding.
+        // The averages are the same size as the live figures now, which is
+        // what makes the rows full width: at equal size, two of these numbers
+        // cannot share a row. See MakeP2BigRow.
         //
-        // The wide rows are not wide because the figure needs 240px; it needs
-        // 121. They are wide because 108 is what half a screen offers and that
-        // is eight pixels short. The rest of the width pays for itself by
-        // carrying the ride average beside the figure it belongs to.
-        const lv_coord_t P2_TALL_H = 76;
-        const lv_coord_t P2_SHORT_H = (P2_H - 2 * P2_TALL_H) / 2; // 62
+        // The battery is gone rather than shrunk. It was never missing: the
+        // status line above this page shows a percentage and an icon and is
+        // never covered, so the cell was a second copy of a number already on
+        // screen. The satellite count goes with it, which is a real loss and
+        // the only one -- it is a diagnostic for the minutes before a fix, not
+        // something read while riding.
+        const lv_coord_t P2_BIG_H = 58;
+        const lv_coord_t P2_LAST_H = P2_H - 4 * P2_BIG_H;  // 44
 
         s_page2 = lv_obj_create(parent);
         lv_obj_set_pos(s_page2, 0, P2_Y);
@@ -1870,41 +1836,28 @@ void PageDashboard::onViewLoad() {
         lv_obj_add_flag(s_page2, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
 
-        // Grouped by what each figure IS, not by where there happened to be
-        // room. The top two rows are a live reading beside its own average,
-        // one pair a row, so the column tells you which kind you are looking
-        // at before you have read the caption: left is now, right is the ride
-        // so far. Underneath, two rows of things that are neither -- what the
-        // ride has accumulated, then what the device itself is doing.
-        //
-        // The clock is not here any more and does not need to be: the status
-        // line above this page is never covered, and it has the time on it.
-        const lv_font_t *small = &lv_font_montserrat_40;
         lv_coord_t y = 0;
+        s_p2_speed = MakeP2BigRow(s_page2, SCREEN_W, y, P2_BIG_H, "SPEED", Settings_SpeedUnitLabel(),
+                                  &s_p2_speed_unit);
+        y += P2_BIG_H;
+        s_p2_avgspeed = MakeP2BigRow(s_page2, SCREEN_W, y, P2_BIG_H, "AVG SPEED",
+                                     Settings_SpeedUnitLabel(), &s_p2_avgspeed_unit);
+        y += P2_BIG_H;
+        s_p2_hr = MakeP2BigRow(s_page2, SCREEN_W, y, P2_BIG_H, "HEART RATE", "bpm", nullptr);
+        y += P2_BIG_H;
+        s_p2_avghr = MakeP2BigRow(s_page2, SCREEN_W, y, P2_BIG_H, "AVG HR", "bpm", nullptr);
+        y += P2_BIG_H;
 
-        s_p2_speed = MakeP2LiveCell(s_page2, SCREEN_W, y, P2_TALL_H, "SPEED",
-                                    Settings_SpeedUnitLabel(), &s_p2_speed_unit, &s_p2_avgspeed);
-        y += P2_TALL_H;
+        // The two that are read at a stop, in one shorter row at 24pt. They
+        // are the reason the four above could take 58px each.
+        s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_LAST_H, "RIDE TIME", nullptr,
+                                   nullptr, &lv_font_montserrat_24);
+        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_LAST_H, "DESCENT", "m",
+                                  nullptr, &lv_font_montserrat_24);
 
-        s_p2_hr = MakeP2LiveCell(s_page2, SCREEN_W, y, P2_TALL_H, "HEART RATE", "bpm", nullptr,
-                                 &s_p2_avghr);
-        y += P2_TALL_H;
-
-        s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "RIDE TIME", nullptr,
-                                   nullptr, small);
-        s_p2_descent = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_SHORT_H, "DESCENT", "m",
-                                  nullptr, small);
-        y += P2_SHORT_H;
-
-        s_p2_battery = MakeP2Cell(s_page2, 0, y, P2_COL_W, P2_SHORT_H, "BATTERY", "%", nullptr,
-                                  small);
-        s_p2_sats = MakeP2Cell(s_page2, P2_COL_W, y, P2_COL_W, P2_SHORT_H, "SATELLITES", nullptr,
-                               nullptr, small);
-
-        // The same hairlines the first page draws, at the row boundaries the
-        // two heights produce rather than at a fixed step.
-        const lv_coord_t rules[3] = {P2_TALL_H, 2 * P2_TALL_H, 2 * P2_TALL_H + P2_SHORT_H};
-        for (int r = 0; r < 3; r++) {
+        // The same hairlines the first page draws, at the row boundaries.
+        const lv_coord_t rules[4] = {P2_BIG_H, 2 * P2_BIG_H, 3 * P2_BIG_H, 4 * P2_BIG_H};
+        for (int r = 0; r < 4; r++) {
             lv_obj_t *line = lv_obj_create(s_page2);
             lv_obj_remove_style_all(line);
             lv_obj_set_pos(line, 0, rules[r] - 1);
@@ -1912,12 +1865,12 @@ void PageDashboard::onViewLoad() {
             lv_obj_set_style_bg_color(line, lv_color_hex(COLOR_CELL_BORDER), 0);
             lv_obj_set_style_bg_opa(line, LV_OPA_COVER, 0);
         }
-        // Only down the two split rows. Running it the full height would draw
-        // a divider through the middle of the two cells that have no division.
+        // Only down the one split row. Running it the full height would draw
+        // a divider through the middle of four cells that have no division.
         lv_obj_t *vline = lv_obj_create(s_page2);
         lv_obj_remove_style_all(vline);
-        lv_obj_set_pos(vline, P2_COL_W - 1, 2 * P2_TALL_H);
-        lv_obj_set_size(vline, 1, 2 * P2_SHORT_H);
+        lv_obj_set_pos(vline, P2_COL_W - 1, 4 * P2_BIG_H);
+        lv_obj_set_size(vline, 1, P2_LAST_H);
         lv_obj_set_style_bg_color(vline, lv_color_hex(COLOR_CELL_BORDER), 0);
         lv_obj_set_style_bg_opa(vline, LV_OPA_COVER, 0);
     }
@@ -2097,12 +2050,11 @@ void PageDashboard::onViewUnload() {
     s_p2_speed = nullptr;
     s_p2_speed_unit = nullptr;
     s_p2_avgspeed = nullptr;
+    s_p2_avgspeed_unit = nullptr;
     s_p2_hr = nullptr;
     s_p2_avghr = nullptr;
     s_p2_ridetime = nullptr;
     s_p2_descent = nullptr;
-    s_p2_battery = nullptr;
-    s_p2_sats = nullptr;
     s_page_dots[0] = nullptr;
     s_page_dots[1] = nullptr;
     s_nav_cell = nullptr;
