@@ -205,8 +205,13 @@ lv_obj_t *s_p2_avghr = nullptr;
 lv_obj_t *s_p2_ridetime = nullptr;
 lv_obj_t *s_p2_descent = nullptr;
 lv_obj_t *s_p2_incline = nullptr;
-lv_obj_t *s_p2_battery = nullptr;
-lv_obj_t *s_page_dots[2] = {nullptr, nullptr};
+// The second page's copy of TRIP, where the battery percentage used to be.
+// The battery is already in the status line on both pages, so the cell was
+// spending a quarter of this page repeating something always on screen.
+lv_obj_t *s_p2_trip = nullptr;
+lv_obj_t *s_p2_trip_unit = nullptr;
+lv_obj_t *s_p2_trip_caption = nullptr;
+lv_obj_t *s_p2_trip_cell = nullptr;
 
 // Defined further down, beside the rest of the second page. Declared here
 // because the once-a-second refresh sits above it and calls it.
@@ -820,48 +825,57 @@ void RenderClock() {
     }
 }
 
-// See s_trip_cell for why only the bad states are filled, and why filling
-// forces the text dark.
-void RenderRecordingState() {
-    if (s_trip_cell == nullptr) {
+// Paints one TRIP cell. There are two of them -- one per page -- and they must
+// never disagree: a rider who swipes to check something and sees a calm cell
+// on one page and an amber one on the other has learned that neither can be
+// trusted.
+void PaintTripCell(lv_obj_t *cell, lv_obj_t *caption, lv_obj_t *value, lv_obj_t *unit,
+                   bool recording, bool moving) {
+    if (cell == nullptr) {
         return;
     }
 
-    if (RideLog_IsRecording()) {
+    uint32_t bg;
+    lv_color_t ink;
+    if (recording) {
         // An ordinary cell again, exactly like its neighbours. Every colour is
         // restored explicitly rather than left to whatever it was: this is the
         // path back from the inverted look, and a value not put back here is a
         // cell that stays dark-on-light for the rest of the boot.
-        lv_obj_set_style_bg_color(s_trip_cell, lv_color_hex(COLOR_CELL_BG), 0);
-        if (s_trip_caption != nullptr) {
-            lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(COLOR_CAPTION), 0);
-        }
-        if (s_trip_label != nullptr) {
-            lv_obj_set_style_text_color(s_trip_label, lv_color_hex(COLOR_VALUE), 0);
-        }
-        if (s_trip_unit_label != nullptr) {
-            lv_obj_set_style_text_color(s_trip_unit_label, lv_color_hex(COLOR_CAPTION), 0);
-        }
-        return;
+        bg = COLOR_CELL_BG;
+        ink = lv_color_hex(COLOR_VALUE);
+    } else {
+        bg = moving ? COLOR_DANGER : COLOR_WARN;
+        ink = lv_color_hex(COLOR_BG);
     }
 
-    // Nothing is being written. How loudly to say so depends entirely on
+    lv_obj_set_style_bg_color(cell, lv_color_hex(bg), 0);
+    if (value != nullptr) {
+        lv_obj_set_style_text_color(value, ink, 0);
+    }
+    // The caption and unit are the quiet grey everywhere else on the panel,
+    // and that grey is illegible on amber -- so while filled they take the
+    // same dark ink as the figure rather than keeping their usual colour.
+    const lv_color_t trim = recording ? lv_color_hex(COLOR_CAPTION) : ink;
+    if (caption != nullptr) {
+        lv_obj_set_style_text_color(caption, trim, 0);
+    }
+    if (unit != nullptr) {
+        lv_obj_set_style_text_color(unit, trim, 0);
+    }
+}
+
+// See s_trip_cell for why only the bad states are filled, and why filling
+// forces the text dark.
+void RenderRecordingState() {
+    const bool recording = RideLog_IsRecording();
+    // Whether being disarmed is worth shouting about depends entirely on
     // whether the rider is going anywhere.
-    const bool moving_recently =
+    const bool moving =
         s_last_moving_ms != 0 && lv_tick_elaps(s_last_moving_ms) < REC_MOVING_HOLD_MS;
-    lv_obj_set_style_bg_color(s_trip_cell, lv_color_hex(moving_recently ? COLOR_DANGER : COLOR_WARN),
-                              0);
 
-    const lv_color_t ink = lv_color_hex(COLOR_BG);
-    if (s_trip_caption != nullptr) {
-        lv_obj_set_style_text_color(s_trip_caption, ink, 0);
-    }
-    if (s_trip_label != nullptr) {
-        lv_obj_set_style_text_color(s_trip_label, ink, 0);
-    }
-    if (s_trip_unit_label != nullptr) {
-        lv_obj_set_style_text_color(s_trip_unit_label, ink, 0);
-    }
+    PaintTripCell(s_trip_cell, s_trip_caption, s_trip_label, s_trip_unit_label, recording, moving);
+    PaintTripCell(s_p2_trip_cell, s_p2_trip_caption, s_p2_trip, s_p2_trip_unit, recording, moving);
 }
 
 void RenderSpeedAndTrip() {
@@ -1286,7 +1300,7 @@ constexpr lv_coord_t P2_VALUE_Y = -8;
 // rather than at speed.
 lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
                      const char *caption, const char *unit, lv_obj_t **out_unit,
-                     const lv_font_t *font) {
+                     const lv_font_t *font, lv_obj_t **out_caption = nullptr) {
     lv_obj_t *cell = lv_obj_create(parent);
     lv_obj_set_size(cell, w, h);
     lv_obj_set_pos(cell, x, y);
@@ -1302,6 +1316,9 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(COLOR_CAPTION), 0);
     lv_obj_align(label, LV_ALIGN_TOP_LEFT, P2_PAD, CELL_CAPTION_Y);
+    if (out_caption != nullptr) {
+        *out_caption = label;
+    }
 
     if (unit != nullptr) {
         lv_obj_t *u = lv_label_create(cell);
@@ -1322,16 +1339,6 @@ lv_obj_t *MakeP2Cell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     return value;
 }
 
-void RenderPageDots() {
-    for (int i = 0; i < 2; i++) {
-        if (s_page_dots[i] == nullptr) {
-            continue;
-        }
-        const bool here = (i == (s_on_page2 ? 1 : 0));
-        lv_obj_set_style_bg_color(s_page_dots[i],
-                                  lv_color_hex(here ? COLOR_ACCENT : COLOR_CELL_BORDER), 0);
-    }
-}
 
 void ShowPage2(bool on) {
     if (s_page2 == nullptr || on == s_on_page2) {
@@ -1343,7 +1350,6 @@ void ShowPage2(bool on) {
     } else {
         lv_obj_add_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
     }
-    RenderPageDots();
 }
 
 // A horizontal swipe anywhere flips between the pages.
@@ -1400,14 +1406,6 @@ void OnDashboardGesture(lv_event_t *e) {
     }
 }
 
-// The page indicator doubles as the control, because a swipe is not a reliable
-// gesture on this panel -- the same one whose buttons had to be given a larger
-// hit area than they look. The dots are 5px; this is the 40x28 target around
-// them, transparent and sitting between the gear and the clock.
-void OnPageDotsClicked(lv_event_t *e) {
-    (void)e;
-    ShowPage2(!s_on_page2);
-}
 
 void RenderPage2() {
     if (s_page2 == nullptr) {
@@ -1466,14 +1464,18 @@ void RenderPage2() {
         lv_label_set_text(s_p2_incline, "--");
     }
 
-    Battery_t battery;
-    if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
-        lv_label_set_text_fmt(s_p2_battery, "%u", (unsigned)battery.percent);
-        lv_obj_set_style_text_color(
-            s_p2_battery,
-            lv_color_hex((!battery.on_usb && battery.percent <= 10) ? COLOR_NAV_OFF_ROUTE
-                                                                   : COLOR_VALUE),
-            0);
+    // The trip, in the cell the battery used to hold. Its colours belong to
+    // RenderRecordingState, which owns both trip cells -- this only writes the
+    // figure, exactly as RenderSpeedAndTrip does for the first page.
+    if (s_p2_trip != nullptr) {
+        // Same rule as the first page: two decimals until three digits are
+        // needed, then one. Here it is a 90px column rather than a 108px one,
+        // which is why the font is a step smaller -- see where it is built.
+        const float trip = Settings_DistanceFromKm((float)Trip_Km());
+        lv_label_set_text_fmt(s_p2_trip, (trip >= 100.0f) ? "%.1f" : "%.2f", trip);
+    }
+    if (s_p2_trip_unit != nullptr) {
+        lv_label_set_text(s_p2_trip_unit, Settings_DistanceUnitLabel());
     }
 }
 
@@ -1965,8 +1967,14 @@ void PageDashboard::onViewLoad() {
 
         s_p2_incline = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "INCLINE", "%", nullptr,
                                   &lv_font_montserrat_40);
-        s_p2_battery = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "BATTERY", "%",
-                                  nullptr, &lv_font_montserrat_32);
+        // 28 rather than the 32 its neighbours in this column use. The trip
+        // is the widest figure on the page -- "123.4" is five glyphs where a
+        // descent is four -- and this column is 90px. Same reasoning as the
+        // note above, one step further.
+        s_p2_trip = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "TRIP",
+                               Settings_DistanceUnitLabel(), &s_p2_trip_unit,
+                               &lv_font_montserrat_28, &s_p2_trip_caption);
+        s_p2_trip_cell = lv_obj_get_parent(s_p2_trip);
 
         // The same hairlines the first page draws, at the row boundaries.
         const lv_coord_t rules[3] = {P2_TALL_H, 2 * P2_TALL_H, 2 * P2_TALL_H + P2_SHORT_H};
@@ -1987,31 +1995,6 @@ void PageDashboard::onViewLoad() {
         lv_obj_set_style_bg_opa(vline, LV_OPA_COVER, 0);
     }
 
-    // Which page is showing, and how to change it. Two dots beside the gear,
-    // inside a tap target large enough to hit while riding: the swipe below is
-    // the quick way and this is the one that always works.
-    {
-        lv_obj_t *dots = lv_obj_create(parent);
-        lv_obj_remove_style_all(dots);
-        lv_obj_set_size(dots, 40, 28);
-        // Into the corner the gear used to hold, rather than beside where it
-        // was: an indicator left orbiting a control that no longer exists
-        // reads as a gap.
-        lv_obj_set_pos(dots, 4, 0);
-        lv_obj_clear_flag(dots, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(dots, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(dots, OnPageDotsClicked, LV_EVENT_CLICKED, nullptr);
-
-        for (int i = 0; i < 2; i++) {
-            s_page_dots[i] = lv_obj_create(dots);
-            lv_obj_remove_style_all(s_page_dots[i]);
-            lv_obj_set_size(s_page_dots[i], 5, 5);
-            lv_obj_set_pos(s_page_dots[i], 4 + i * 9, 11);
-            lv_obj_set_style_radius(s_page_dots[i], 3, 0);
-            lv_obj_set_style_bg_opa(s_page_dots[i], LV_OPA_COVER, 0);
-        }
-    }
-    RenderPageDots();
 
     // Swipe left for the second page, right for the first.
     //
@@ -2178,9 +2161,10 @@ void PageDashboard::onViewUnload() {
     s_p2_ridetime = nullptr;
     s_p2_descent = nullptr;
     s_p2_incline = nullptr;
-    s_p2_battery = nullptr;
-    s_page_dots[0] = nullptr;
-    s_page_dots[1] = nullptr;
+    s_p2_trip = nullptr;
+    s_p2_trip_unit = nullptr;
+    s_p2_trip_caption = nullptr;
+    s_p2_trip_cell = nullptr;
     s_nav_cell = nullptr;
     s_nav_is_map = false;
     for (int i = 0; i < HR_ZONE_COUNT; i++) {

@@ -543,41 +543,69 @@ void PageSettings::onViewLoad() {
         lv_obj_set_width(hint, LV_PCT(100));
     }
 
-    // ---- Brightness ----
-    lv_obj_t *bright_card = MakeCard(body, "DISPLAY BRIGHTNESS");
-    s_brightness_value = lv_label_create(bright_card);
-    lv_label_set_text_fmt(s_brightness_value, "%d%%", (int)Settings_GetBrightness());
-    lv_obj_set_style_text_font(s_brightness_value, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(s_brightness_value, lv_color_hex(COLOR_VALUE), 0);
+    // ---- The ride ----
+    // First on the page, at the rider's asking. It is the only card
+    // holding controls that are touched on every single ride -- start
+    // and finish -- where everything below it is set once and left.
+    lv_obj_t *trip_card = MakeCard(body, "RIDE");
+    lv_obj_t *reset_btn = lv_btn_create(trip_card);
+    lv_obj_set_width(reset_btn, LV_PCT(100));
+    // Green rather than the red it wore as "Reset trip distance". The gesture
+    // is now something the rider does at the start of every ride, and a
+    // warning colour on a routine action is a warning nobody reads.
+    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(0x16281E), 0);
+    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(COLOR_OK), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(reset_btn, 0, 0);
+    lv_obj_add_event_cb(reset_btn, OnStartNewRideClicked, LV_EVENT_CLICKED, nullptr);
 
-    lv_obj_t *slider = lv_slider_create(bright_card);
-    lv_obj_set_width(slider, LV_PCT(100));
-    // Floor of 5%: a 0% backlight looks identical to a crashed board, and
-    // recovering would mean navigating a screen you cannot see.
-    lv_slider_set_range(slider, 5, 100);
-    lv_slider_set_value(slider, Settings_GetBrightness(), LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(slider, lv_color_hex(COLOR_ACCENT), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(slider, lv_color_hex(COLOR_ACCENT), LV_PART_KNOB);
-    lv_obj_add_event_cb(slider, OnBrightnessChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_t *reset_label = lv_label_create(reset_btn);
+    lv_label_set_text(reset_label, LV_SYMBOL_PLAY "  Start new ride");
+    lv_obj_set_style_text_font(reset_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(reset_label, lv_color_hex(COLOR_OK), 0);
+    lv_obj_center(reset_label);
 
-    // ---- Units ----
-    lv_obj_t *unit_card = MakeCard(body, "UNITS");
-    s_unit_value = lv_label_create(unit_card);
-    lv_label_set_text(s_unit_value, Settings_SpeedUnitLabel());
-    lv_obj_set_style_text_font(s_unit_value, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(s_unit_value, lv_color_hex(COLOR_VALUE), 0);
+    // The other half of the pair. Below rather than beside it: two buttons
+    // sharing a row on a 240px panel are two buttons a gloved thumb cannot
+    // tell apart, and one of this pair silently stops recording.
+    //
+    // Deliberately not a warning colour either. Finishing a ride is the
+    // ordinary end of one, done as often as starting, and nothing it does is
+    // destructive -- the file is closed complete and the summary is shown.
+    lv_obj_t *finish_btn = lv_btn_create(trip_card);
+    lv_obj_set_width(finish_btn, LV_PCT(100));
+    lv_obj_set_style_bg_color(finish_btn, lv_color_hex(0x14242E), 0);
+    lv_obj_set_style_bg_color(finish_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(finish_btn, 0, 0);
+    lv_obj_add_event_cb(finish_btn, OnFinishRideClicked, LV_EVENT_CLICKED, nullptr);
 
-    lv_obj_t *unit_hint = lv_label_create(unit_card);
-    lv_label_set_text(unit_hint, "Off: km/h + km    On: mph + mi");
-    lv_obj_set_style_text_font(unit_hint, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(unit_hint, lv_color_hex(COLOR_CAPTION), 0);
+    lv_obj_t *finish_label = lv_label_create(finish_btn);
+    lv_label_set_text(finish_label, LV_SYMBOL_STOP "  Finish ride");
+    lv_obj_set_style_text_font(finish_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(finish_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_center(finish_label);
 
-    lv_obj_t *unit_sw = lv_switch_create(unit_card);
-    lv_obj_set_style_bg_color(unit_sw, lv_color_hex(COLOR_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
-    if (Settings_GetSpeedUnit() == SPEED_UNIT_MPH) {
-        lv_obj_add_state(unit_sw, LV_STATE_CHECKED);
-    }
-    lv_obj_add_event_cb(unit_sw, OnUnitToggled, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_t *summary_btn = lv_btn_create(trip_card);
+    lv_obj_set_width(summary_btn, LV_PCT(100));
+    lv_obj_set_style_bg_color(summary_btn, lv_color_hex(0x14242E), 0);
+    lv_obj_set_style_bg_color(summary_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(summary_btn, 0, 0);
+    lv_obj_add_event_cb(summary_btn, OnRideSummaryClicked, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *summary_label = lv_label_create(summary_btn);
+    lv_label_set_text(summary_label, LV_SYMBOL_LIST "  Ride summary");
+    lv_obj_set_style_text_font(summary_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(summary_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_center(summary_label);
+
+    s_trip_status = lv_label_create(trip_card);
+    lv_label_set_text(s_trip_status,
+                      "Press at the start of a ride. Clears the odometer and the "
+                      "averages, starts a new file on the card, and reports what "
+                      "the last ride came to.");
+    lv_obj_set_style_text_font(s_trip_status, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_long_mode(s_trip_status, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_trip_status, LV_PCT(100));
 
     // ---- Heart rate ----
     // No source to choose any more: BLE is the only one. The card stays
@@ -704,6 +732,42 @@ void PageSettings::onViewLoad() {
 
     RefreshHrZoneCard();
 
+    // ---- Brightness ----
+    lv_obj_t *bright_card = MakeCard(body, "DISPLAY BRIGHTNESS");
+    s_brightness_value = lv_label_create(bright_card);
+    lv_label_set_text_fmt(s_brightness_value, "%d%%", (int)Settings_GetBrightness());
+    lv_obj_set_style_text_font(s_brightness_value, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_brightness_value, lv_color_hex(COLOR_VALUE), 0);
+
+    lv_obj_t *slider = lv_slider_create(bright_card);
+    lv_obj_set_width(slider, LV_PCT(100));
+    // Floor of 5%: a 0% backlight looks identical to a crashed board, and
+    // recovering would mean navigating a screen you cannot see.
+    lv_slider_set_range(slider, 5, 100);
+    lv_slider_set_value(slider, Settings_GetBrightness(), LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(COLOR_ACCENT), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(COLOR_ACCENT), LV_PART_KNOB);
+    lv_obj_add_event_cb(slider, OnBrightnessChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+
+    // ---- Units ----
+    lv_obj_t *unit_card = MakeCard(body, "UNITS");
+    s_unit_value = lv_label_create(unit_card);
+    lv_label_set_text(s_unit_value, Settings_SpeedUnitLabel());
+    lv_obj_set_style_text_font(s_unit_value, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_unit_value, lv_color_hex(COLOR_VALUE), 0);
+
+    lv_obj_t *unit_hint = lv_label_create(unit_card);
+    lv_label_set_text(unit_hint, "Off: km/h + km    On: mph + mi");
+    lv_obj_set_style_text_font(unit_hint, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(unit_hint, lv_color_hex(COLOR_CAPTION), 0);
+
+    lv_obj_t *unit_sw = lv_switch_create(unit_card);
+    lv_obj_set_style_bg_color(unit_sw, lv_color_hex(COLOR_ACCENT), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    if (Settings_GetSpeedUnit() == SPEED_UNIT_MPH) {
+        lv_obj_add_state(unit_sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(unit_sw, OnUnitToggled, LV_EVENT_VALUE_CHANGED, nullptr);
+
     // ---- Navigation ----
     // Coupled to the heart-rate source by the one exclusivity rule in
     // Settings.h; both selectors repair the other and say what moved.
@@ -784,67 +848,6 @@ void PageSettings::onViewLoad() {
     lv_obj_set_width(s_nav_note, LV_PCT(100));
 
     RefreshNavSelection();
-
-    // ---- Reset trip ----
-    lv_obj_t *trip_card = MakeCard(body, "RIDE");
-    lv_obj_t *reset_btn = lv_btn_create(trip_card);
-    lv_obj_set_width(reset_btn, LV_PCT(100));
-    // Green rather than the red it wore as "Reset trip distance". The gesture
-    // is now something the rider does at the start of every ride, and a
-    // warning colour on a routine action is a warning nobody reads.
-    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(0x16281E), 0);
-    lv_obj_set_style_bg_color(reset_btn, lv_color_hex(COLOR_OK), LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_width(reset_btn, 0, 0);
-    lv_obj_add_event_cb(reset_btn, OnStartNewRideClicked, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *reset_label = lv_label_create(reset_btn);
-    lv_label_set_text(reset_label, LV_SYMBOL_PLAY "  Start new ride");
-    lv_obj_set_style_text_font(reset_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(reset_label, lv_color_hex(COLOR_OK), 0);
-    lv_obj_center(reset_label);
-
-    // The other half of the pair. Below rather than beside it: two buttons
-    // sharing a row on a 240px panel are two buttons a gloved thumb cannot
-    // tell apart, and one of this pair silently stops recording.
-    //
-    // Deliberately not a warning colour either. Finishing a ride is the
-    // ordinary end of one, done as often as starting, and nothing it does is
-    // destructive -- the file is closed complete and the summary is shown.
-    lv_obj_t *finish_btn = lv_btn_create(trip_card);
-    lv_obj_set_width(finish_btn, LV_PCT(100));
-    lv_obj_set_style_bg_color(finish_btn, lv_color_hex(0x14242E), 0);
-    lv_obj_set_style_bg_color(finish_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_width(finish_btn, 0, 0);
-    lv_obj_add_event_cb(finish_btn, OnFinishRideClicked, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *finish_label = lv_label_create(finish_btn);
-    lv_label_set_text(finish_label, LV_SYMBOL_STOP "  Finish ride");
-    lv_obj_set_style_text_font(finish_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(finish_label, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_center(finish_label);
-
-    lv_obj_t *summary_btn = lv_btn_create(trip_card);
-    lv_obj_set_width(summary_btn, LV_PCT(100));
-    lv_obj_set_style_bg_color(summary_btn, lv_color_hex(0x14242E), 0);
-    lv_obj_set_style_bg_color(summary_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_width(summary_btn, 0, 0);
-    lv_obj_add_event_cb(summary_btn, OnRideSummaryClicked, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *summary_label = lv_label_create(summary_btn);
-    lv_label_set_text(summary_label, LV_SYMBOL_LIST "  Ride summary");
-    lv_obj_set_style_text_font(summary_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(summary_label, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_center(summary_label);
-
-    s_trip_status = lv_label_create(trip_card);
-    lv_label_set_text(s_trip_status,
-                      "Press at the start of a ride. Clears the odometer and the "
-                      "averages, starts a new file on the card, and reports what "
-                      "the last ride came to.");
-    lv_obj_set_style_text_font(s_trip_status, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_CAPTION), 0);
-    lv_label_set_long_mode(s_trip_status, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_trip_status, LV_PCT(100));
 
     // ---- Power ----
     // The two stages that always happen are described rather than offered:
