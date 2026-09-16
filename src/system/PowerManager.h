@@ -36,6 +36,10 @@
 #define POWER_DIM_AFTER_MS 60000u
 #define POWER_BLANK_AFTER_MS 180000u
 #define POWER_SLEEP_AFTER_MS 300000u
+// Thirty minutes, against five after a finished ride. A device that has
+// recorded nothing has been told nothing, and may be waiting on a rider who is
+// still pumping a tyre; disappearing on them is worse than staying awake.
+#define POWER_SLEEP_IDLE_MS 1800000u
 
 // Subscribes to GPS and battery, takes the current brightness as the rider's
 // setting, and starts the LVGL timer that drives everything else.
@@ -79,3 +83,8 @@ uint32_t PowerManager_DownclockCount();
 
 // What is currently preventing sleep, as a sentence, or "" if nothing is.
 const char *PowerManager_InhibitText();
+
+// The sleep threshold that applies right now: the short one after a finished
+// ride, the long one when nothing has been recorded. For the settings page's
+// countdown, which must not re-derive a rule that lives in IdlePolicy.
+uint32_t PowerManager_SleepAfterMs();

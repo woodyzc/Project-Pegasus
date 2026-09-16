@@ -234,9 +234,18 @@ These were each discovered the slow way. They are not optional trivia.
   That does not work — movement simply opened a new file, so a forgotten
   device produced one clean ride followed by a string of junk ones. Closing
   without disarming splits the problem up; it does not solve it.
+- **Deep sleep is gated on ride state, not on USB.** It used to be gated on
+  `Battery_t.on_usb`, which is a threshold at 4500mV on a reading of the *pack*
+  voltage — and a 1S charger terminates at 4.2V, so on this hardware that flag
+  can never be true. A gate that never closes is worse than no gate: it reads
+  as protection while providing none. The rule now asks something the firmware
+  knows exactly: an armed ride blocks sleep outright (recording *or* waiting on
+  a first fix), a finished ride sleeps after five minutes, and a device that
+  has recorded nothing waits thirty — because it has been told nothing and may
+  be waiting on a rider who has not started yet.
 - **An inhibitor that blocks sleep does not block blanking.** `IdlePolicy_Stage()`
-  returns BLANK *before* it consults `on_usb`, `recording` or `sleep_enabled` —
-  those three only decide whether it goes further. So "never sleeps on USB" has
+  returns BLANK *before* it consults ride state or `sleep_enabled` — those
+  only decide whether it goes further. So "never sleeps on USB" has
   never meant "never blanks on USB", and anything tied to blanking (the
   downclock, for one) happens on a bench-powered board exactly as it does on a
   battery. Only the file server inhibits everything. This is worth knowing

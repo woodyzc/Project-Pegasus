@@ -108,6 +108,16 @@ uint32_t RideLog_AutoEndCount();
 // not recording exist to pay that cost down, and this state is what they read.
 bool RideLog_IsArmed();
 
+// True once a ride has been opened this boot, and stays true afterwards.
+//
+// With RideLog_IsArmed() it tells the three states apart: armed is a ride
+// under way, recorded-and-not-armed is a ride that finished, and neither is a
+// device that has done nothing since power-on. PowerManager needs that last
+// distinction -- a rider who pressed "finish" has said they are done and the
+// board may sleep soon, where a board that has been told nothing may be
+// waiting on a rider who has not started yet.
+bool RideLog_HasRecorded();
+
 // The rider says the ride is over. Closes the file and disarms, so moving
 // again does not start another one. Posts through the writer queue like
 // RideLog_StartNewRide(), so a point published a moment earlier still lands

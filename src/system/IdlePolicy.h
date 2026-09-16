@@ -29,7 +29,13 @@ typedef enum {
 typedef struct {
     uint32_t dim_after_ms;
     uint32_t blank_after_ms;
-    uint32_t sleep_after_ms;
+    // Two sleep thresholds, because the two situations are not alike. A rider
+    // who has pressed "finish" has said they are done, so the device may go
+    // soon. A device that has never recorded anything has been told nothing at
+    // all -- it might be sitting on a bar waiting for its owner to finish
+    // faffing with a shoe -- so it waits much longer before disappearing.
+    uint32_t sleep_after_ms;   // a ride was recorded and has ended
+    uint32_t sleep_idle_ms;    // no ride has happened this boot
     // Off until the rider turns it on. Waking from deep sleep depends on the
     // touch controller asserting its interrupt line, which has never been
     // tested on this board -- and if it does not, the device looks dead until
@@ -40,17 +46,31 @@ typedef struct {
 // Things that are happening regardless of whether anyone is touching the
 // screen. Each blocks a different amount, and the differences are the point.
 typedef struct {
-    // Charging or bench-powered. Blocks sleep only: a device that sleeps
-    // while plugged into the laptop that is flashing it looks broken, and
-    // there is no battery to save.
-    bool on_usb;
-    // A ride is being written to the card. Blocks sleep only -- the screen
-    // may go dark at a long lunch stop, but sleeping would end the ride.
-    bool recording;
+    // A ride is under way: recording, or armed and waiting for its first fix.
+    // Blocks sleep outright -- the screen may go dark at a long lunch stop,
+    // but sleeping would end the ride, and a rider who has pressed "start" and
+    // is waiting on satellites is about to need the device.
+    bool ride_active;
+    // A ride was recorded this boot and is over. Not an inhibitor at all: it
+    // selects the shorter of the two sleep thresholds, because the rider has
+    // said in as many words that they are finished.
+    bool ride_finished;
     // WiFi file transfer. Blocks everything: the password is on the screen,
     // and sleeping would drop a transfer in progress.
     bool transferring;
 } IdleInhibit_t;
+
+// ---- Why "on USB" is not in that list any more ----
+//
+// It was, and it was the main thing standing between a plugged-in board and
+// deep sleep. It came from Battery_t.on_usb, which is a threshold at 4500mV on
+// a reading of the PACK voltage -- and a 1S charger terminates at 4.2V, so on
+// this hardware that flag can never be true. A gate that never closes is worse
+// than no gate: it reads as protection while providing none.
+//
+// The replacement asks a question the firmware can actually answer. Whether to
+// sleep depends on whether the rider is using the device, not on whether a
+// cable is in it, and ride state is known exactly.
 
 // The stage for this much idle time. `inhibit` may be NULL, meaning nothing
 // is inhibiting anything.

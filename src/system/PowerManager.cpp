@@ -22,6 +22,7 @@ namespace {
 constexpr uint32_t DIM_AFTER_MS = POWER_DIM_AFTER_MS;
 constexpr uint32_t BLANK_AFTER_MS = POWER_BLANK_AFTER_MS;
 constexpr uint32_t SLEEP_AFTER_MS = POWER_SLEEP_AFTER_MS;
+constexpr uint32_t SLEEP_IDLE_MS = POWER_SLEEP_IDLE_MS;
 
 // Movement counts as activity even though nobody is touching anything. Set
 // above the receiver's own wander so a parked bike does not hold the screen
@@ -115,10 +116,6 @@ PowerStage_t s_stage = POWER_STAGE_ACTIVE;
 uint8_t s_active_percent = 100;
 bool s_screen_off = false;
 
-// Cached from the bus, because reading it in Service() would mean pulling a
-// topic every second for a value that changes every few.
-volatile bool s_on_usb = true; // assume plugged in until told otherwise
-
 void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
     (void)topic;
     (void)user_arg;
@@ -131,31 +128,26 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     }
 }
 
-void OnBatteryPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
-    (void)topic;
-    (void)user_arg;
-    if (data == nullptr || size != sizeof(Battery_t)) {
-        return;
-    }
-    s_on_usb = ((const Battery_t *)data)->on_usb;
-}
 
 Account s_gps_account("Power/GPS", OnGpsPublished);
-Account s_battery_account("Power/Battery", OnBatteryPublished);
 
 IdlePolicy_t Policy() {
     IdlePolicy_t policy;
     policy.dim_after_ms = DIM_AFTER_MS;
     policy.blank_after_ms = BLANK_AFTER_MS;
     policy.sleep_after_ms = SLEEP_AFTER_MS;
+    policy.sleep_idle_ms = SLEEP_IDLE_MS;
     policy.sleep_enabled = Settings_GetSleepEnabled();
     return policy;
 }
 
 IdleInhibit_t Inhibit() {
     IdleInhibit_t inhibit;
-    inhibit.on_usb = s_on_usb;
-    inhibit.recording = RideLog_IsRecording();
+    // Armed rather than recording. A rider who has pressed "start" and is
+    // standing in a car park waiting for satellites has no file open yet, and
+    // is the last person who should watch the device switch itself off.
+    inhibit.ride_active = RideLog_IsArmed();
+    inhibit.ride_finished = RideLog_HasRecorded() && !RideLog_IsArmed();
     inhibit.transferring = FileServer_IsRunning();
     return inhibit;
 }
@@ -296,7 +288,6 @@ void PowerManager_Init() {
     s_screen_off = false;
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
-    DataCenter_Subscribe(TOPIC_BATTERY, &s_battery_account);
 
     s_timer = lv_timer_create(Service, TICK_MS, nullptr);
 }
@@ -359,11 +350,19 @@ const char *PowerManager_InhibitText() {
     if (!Settings_GetSleepEnabled()) {
         return "deep sleep is switched off";
     }
-    if (s_on_usb) {
-        return "USB power is connected";
-    }
-    if (RideLog_IsRecording()) {
-        return "a ride is being recorded";
+    // Armed, not recording: a rider waiting on a first fix has no file open
+    // and is exactly who this is protecting. Says which of the two it is,
+    // because "waiting for a fix" and "writing" call for different patience.
+    if (RideLog_IsArmed()) {
+        return RideLog_IsRecording() ? "a ride is being recorded"
+                                     : "a ride is armed, waiting for a fix";
     }
     return "";
+}
+
+uint32_t PowerManager_SleepAfterMs() {
+    // Asked rather than re-derived. The settings page used to compute its
+    // countdown from POWER_SLEEP_AFTER_MS directly, which was harmless while
+    // there was one threshold and silently wrong the moment there were two.
+    return Inhibit().ride_finished ? SLEEP_AFTER_MS : SLEEP_IDLE_MS;
 }

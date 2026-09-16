@@ -477,9 +477,10 @@ void RefreshPowerStatus() {
                               (unsigned)PowerManager_DownclockCount(), blocked);
     } else {
         const uint32_t idle_ms = PowerManager_IdleMs();
-        const uint32_t left_s = (idle_ms >= POWER_SLEEP_AFTER_MS)
-                                    ? 0u
-                                    : ((POWER_SLEEP_AFTER_MS - idle_ms) / 1000u);
+        // Asked for, not recomputed: there are two thresholds now and which
+        // applies depends on whether a ride has been recorded and finished.
+        const uint32_t after_ms = PowerManager_SleepAfterMs();
+        const uint32_t left_s = (idle_ms >= after_ms) ? 0u : ((after_ms - idle_ms) / 1000u);
         lv_label_set_text_fmt(s_power_status, "Screen: %s @ %uMHz (idled %ux).\nSleeps in %u s.",
                               PowerManager_StageText(), (unsigned)PowerManager_CpuMhz(),
                               (unsigned)PowerManager_DownclockCount(), (unsigned)left_s);

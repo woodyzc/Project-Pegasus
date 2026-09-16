@@ -123,6 +123,15 @@ volatile uint32_t s_last_motion_ms = 0;
 // and never look again.
 volatile bool s_armed = false;
 
+// True once a file has been opened this boot, and never cleared afterwards.
+//
+// Distinguishes "the rider rode and finished" from "nothing has happened since
+// power-on", which look identical from s_armed alone and mean opposite things
+// to PowerManager: the first is a rider saying they are done, the second is a
+// device that has been told nothing and should not vanish on someone who has
+// not started yet.
+volatile bool s_has_recorded = false;
+
 // How many rides have been closed by the timeout since boot. On the panel,
 // because an auto-end is otherwise silent -- the rider would find out at the
 // end of the day that their ride is in two files, with nothing saying why.
@@ -346,6 +355,7 @@ void WriterTask(void *pv) {
                     continue;
                 }
                 s_recording = true;
+                s_has_recorded = true;
                 // Start the idle clock at the open, not at boot: a device that
                 // sat indoors for twenty minutes waiting for a fix must not
                 // end its ride on the first point it writes.
@@ -551,6 +561,10 @@ bool RideLog_FinishRide() {
 
 bool RideLog_IsArmed() {
     return s_armed;
+}
+
+bool RideLog_HasRecorded() {
+    return s_has_recorded;
 }
 
 uint32_t RideLog_AutoEndCount() {

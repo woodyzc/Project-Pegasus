@@ -16,8 +16,8 @@ PowerStage_t IdlePolicy_Stage(const IdlePolicy_t *policy, uint32_t idle_ms,
         return POWER_STAGE_ACTIVE;
     }
 
-    const bool on_usb = (inhibit != NULL) && inhibit->on_usb;
-    const bool recording = (inhibit != NULL) && inhibit->recording;
+    const bool ride_active = (inhibit != NULL) && inhibit->ride_active;
+    const bool ride_finished = (inhibit != NULL) && inhibit->ride_finished;
     const bool transferring = (inhibit != NULL) && inhibit->transferring;
 
     // Nothing dims while the file server is up: the password the rider is
@@ -33,14 +33,20 @@ PowerStage_t IdlePolicy_Stage(const IdlePolicy_t *policy, uint32_t idle_ms,
         return POWER_STAGE_DIM;
     }
 
-    // Past the blank threshold. Whether it goes further is a separate
-    // question, and three different things can answer no. Checked in this
-    // order so that a device on USB reports BLANK rather than pretending the
-    // sleep threshold was never reached.
-    if (!policy->sleep_enabled || on_usb || recording) {
+    // Past the blank threshold. Whether it goes further is a separate question,
+    // and it is answered in two parts: may we sleep at all, and if so, after
+    // how long. Both report BLANK rather than pretending the threshold was
+    // never reached, so the panel can say what stage it is really in.
+    if (!policy->sleep_enabled || ride_active) {
         return POWER_STAGE_BLANK;
     }
-    if (idle_ms < policy->sleep_after_ms) {
+
+    // A finished ride is a statement of intent, so it gets the short wait. A
+    // device that has recorded nothing has made no such statement and gets the
+    // long one -- it may be waiting on a rider who has not started yet, and
+    // vanishing on them is worse than staying awake a while longer.
+    const uint32_t threshold = ride_finished ? policy->sleep_after_ms : policy->sleep_idle_ms;
+    if (idle_ms < threshold) {
         return POWER_STAGE_BLANK;
     }
     return POWER_STAGE_SLEEP;
