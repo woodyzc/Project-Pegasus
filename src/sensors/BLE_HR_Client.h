@@ -10,13 +10,43 @@ class NimBLERemoteCharacteristic;
 // subscribes to Heart Rate Measurement (0x2A37).
 //
 // Discovery is deliberately separated from reconnection: BLE_HR_Start() scans
-// once to learn the peer's address, and every later reconnect dials that
-// stored address directly with no scan. That split was originally forced by
-// ANT+ coexistence, which consumed the scan windows. ANT+ is gone and the
-// split stays, because it is better behaviour on its own -- a reconnect that
-// does not rescan comes back faster and does not put a scan on the controller
+// to learn the peer's address, and every later reconnect dials that stored
+// address directly with no scan. That split was originally forced by ANT+
+// coexistence, which consumed the scan windows. ANT+ is gone and the split
+// stays, because it is better behaviour on its own -- a reconnect that does
+// not rescan comes back faster and does not put a scan on the controller
 // beside a connection attempt, which is the load CLAUDE.md section 8 warns
 // about.
+//
+// It is NOT one-shot, whatever older comments here used to say. The supervisor
+// rescans every couple of seconds for as long as it has no peer, and after a
+// few failed direct connects it throws the stored address away and goes back
+// to discovery -- because a watch's resolvable private address rotates, so the
+// address that worked an hour ago can be dead while the peer is broadcasting
+// happily under a new one. Nothing here needs a restart to look again.
+//
+// ---------------------------------------------------------------------------
+// The peer can still make itself unfindable, and so far only a watch has
+// ---------------------------------------------------------------------------
+// If the head unit resets without saying goodbye, the peer goes on believing
+// the link is up -- and a peripheral that thinks it is connected stops
+// advertising. The board then scans for something deliberately not there.
+// BLE_HR_Shutdown() exists to prevent exactly this; see its comment.
+//
+// Observed on the bench with a Galaxy Watch 8 (2026-09-15): after a restart it
+// never came back, and the only cure was switching broadcasting off on the
+// watch and restarting again. That is a watch-shaped failure, and there is
+// good reason to expect a plain strap not to share it:
+//
+//   * a strap's supervision timeout is seconds, so it notices the dead link
+//     and resumes advertising on its own almost immediately;
+//   * a watch is a whole operating system with its own connection manager and
+//     app-level state, which can hold a phantom link far longer and may not
+//     re-advertise until something prods it.
+//
+// That is reasoning, not a measurement -- no strap has been tested here yet.
+// When one is, the test is: connect, restart, then touch nothing and watch how
+// long the link status on the settings page takes to come back by itself.
 
 // Initialises NimBLE and configures scanning for the Heart Rate Service
 // (0x180D). Call once, before BLE_HR_Start().
@@ -51,7 +81,13 @@ void OnNotifyCallback(NimBLERemoteCharacteristic *characteristic, uint8_t *data,
 // True while a BLE HR peer is connected and subscribed.
 bool BLE_HR_IsConnected();
 
-// One word for the settings page: "connected", "reconnecting", "searching",
-// or a note that only a restart will rescan. Serial is unusable on this board
-// (CLAUDE.md §8), so the panel is the only place this can be seen.
+// One line for the settings page: "connected (N.Ns)", "connected, no data",
+// "reconnecting (N fails)", or "searching (N seen, M HR)". Serial is unusable
+// on this board (CLAUDE.md §8), so the panel is the only place this can be
+// seen.
+//
+// The M in that last one is the whole diagnostic: M == 0 means no peer is
+// advertising the heart-rate service at all, which is the peer holding a
+// phantom link and is not something this end can fix. M > 0 with no
+// connection is ours.
 const char *BLE_HR_StatusText();

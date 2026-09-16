@@ -66,11 +66,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     BLE Heart Rate Service (`0x180D`) peer — a strap or the Galaxy Watch 8 —
     and subscribe to Heart Rate Measurement (`0x2A37`).
   - Discovery is separated from reconnection on purpose: `BLE_HR_Start()`
-    scans once to learn the peer's address, and every later reconnect dials it
+    scans to learn the peer's address, and every later reconnect dials it
     directly. That split was originally forced by ANT+ coexistence and stays
     because it is better behaviour on its own — it does not put a scan on the
     controller beside a connection attempt, which is the load section 8 warns
-    about.
+    about. It is **not** one-shot: the supervisor rescans every couple of
+    seconds while it has no peer, and discards the stored address after a few
+    failed connects, because a watch's resolvable private address rotates.
+  - **A peer can still make itself unfindable, and so far only a watch has.**
+    A reset without a goodbye leaves the peer believing the link is up, and a
+    peripheral that thinks it is connected stops advertising — so the board
+    scans for something deliberately not there. `BLE_HR_Shutdown()` exists to
+    prevent that, and writes its outcome to NVS; the settings page shows it as
+    "Last disconnect on restart", which is what to read before touching any
+    timing. Seen on a Galaxy Watch 8 (2026-09-15), where the only cure was
+    switching broadcasting off on the watch. Expect a strap not to share it —
+    its supervision timeout is seconds, so it re-advertises on its own — but
+    that is reasoning, not a measurement.
   - The parsing half is `src/sensors/BleHrParse.c`, host-tested with no NimBLE
     dependency.
 - **BLE Turn-by-Turn**: a NimBLE GATT server the phone writes into. Chosen in

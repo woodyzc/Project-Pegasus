@@ -408,6 +408,24 @@ void BLE_HR_Shutdown() {
     // however it is reached, including the settings page's Restart button. It
     // cannot cover a power cut or the reset esptool asserts when flashing;
     // nothing running on the chip can.
+    //
+    // ⚠️ It is also not sufficient on its own, and the peer decides that.
+    // Observed 2026-09-15 with a Galaxy Watch 8: a restart left the watch
+    // unfindable, and the only cure was switching broadcasting off on the
+    // watch and restarting again -- which is not something a rider can do at
+    // the roadside, and not something a strap even offers.
+    //
+    // Expect this to be watch-only. A strap's supervision timeout is seconds,
+    // so it works out the link is dead and starts advertising again by itself;
+    // a watch is a whole operating system with a connection manager and
+    // app-level state, and can sit on a phantom link far longer. Untested with
+    // a strap -- see BLE_HR_Client.h for how to test it when one arrives.
+    //
+    // Before changing any timing here, read "Last disconnect on restart" on
+    // the settings page: it is written to NVS below precisely so this question
+    // can be answered rather than guessed at. "clean in NNNms" means the
+    // goodbye reached the peer and the fault is the peer's; "TIMED OUT" means
+    // kShutdownDisconnectMs is too short and this end is at fault.
     if (s_client == nullptr || !s_client->isConnected()) {
         RecordShutdown(1, 0);
         return;
