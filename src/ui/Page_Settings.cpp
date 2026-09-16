@@ -312,16 +312,28 @@ void RefreshPowerStatus() {
     if (s_power_status == nullptr) {
         return;
     }
+    // The clock line goes on BOTH branches, and that is the whole point of it
+    // being a separate line. It first went only on the "nothing is blocking
+    // sleep" branch, which is the branch almost nobody ever sees: deep sleep
+    // ships switched off and the board is usually on USB, so InhibitText()
+    // returns something nearly always and the diagnostic was invisible.
+    //
+    // The two are about different things. Those inhibitors stop DEEP SLEEP.
+    // Dimming, blanking and the downclock that rides along with blanking
+    // happen regardless -- "Never sleeps on USB" does not mean "never
+    // blanks on USB". Reporting the clock only when sleep was possible tied
+    // it to a condition it has nothing to do with.
     const char *blocked = PowerManager_InhibitText();
     if (blocked[0] != '\0') {
-        lv_label_set_text_fmt(s_power_status, "Screen: %s. Will not sleep: %s.",
-                              PowerManager_StageText(), blocked);
+        lv_label_set_text_fmt(s_power_status, "Screen: %s @ %uMHz (idled %ux).\nWill not sleep: %s.",
+                              PowerManager_StageText(), (unsigned)PowerManager_CpuMhz(),
+                              (unsigned)PowerManager_DownclockCount(), blocked);
     } else {
         const uint32_t idle_ms = PowerManager_IdleMs();
         const uint32_t left_s = (idle_ms >= POWER_SLEEP_AFTER_MS)
                                     ? 0u
                                     : ((POWER_SLEEP_AFTER_MS - idle_ms) / 1000u);
-        lv_label_set_text_fmt(s_power_status, "Screen: %s @ %uMHz (idled %ux). Sleeps in %u s.",
+        lv_label_set_text_fmt(s_power_status, "Screen: %s @ %uMHz (idled %ux).\nSleeps in %u s.",
                               PowerManager_StageText(), (unsigned)PowerManager_CpuMhz(),
                               (unsigned)PowerManager_DownclockCount(), (unsigned)left_s);
     }
