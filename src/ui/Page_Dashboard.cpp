@@ -39,7 +39,8 @@ constexpr uint32_t COLOR_BG = 0x101820;      // screen background
 constexpr uint32_t COLOR_CAPTION = 0x93A4B8; // small all-caps labels
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;   // primary readouts
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
-constexpr uint32_t COLOR_WARN = 0xFFD166;    // armed-but-idle states
+constexpr uint32_t COLOR_WARN = 0xFFD166;    // not recording
+constexpr uint32_t COLOR_OK = 0x7CE38B;      // recording (same green the settings page uses)
 constexpr uint32_t COLOR_DANGER = 0xFF6B6B;  // moving and not recording
 
 // Turn-by-turn computed on board from the cached route rather than received
@@ -128,10 +129,12 @@ lv_obj_t *s_trip_label = nullptr;
 // so the odometer climbs, the speed moves and the averages fill in exactly as
 // they would on a recorded ride. Two hours later the card is empty.
 //
-// So the TRIP caption carries the state, in the cell whose figure the rider is
-// already watching, and it escalates: nothing while recording, amber while
-// stopped and disarmed, red while MOVING and disarmed. Red is the one that
-// matters and it is deliberately loud.
+// So the whole TRIP cell carries the state, in colour and nothing else. Green
+// is recording, amber is not, red is not-while-moving. No word is added: a
+// 10px "OFF" beside a 28pt figure is the first thing lost to a glance at
+// speed, sunlight or a bumpy road, whereas the colour of the figure itself is
+// the one thing that survives all three. The rider learns two colours once and
+// reads them thereafter without looking directly at the cell.
 lv_obj_t *s_trip_caption = nullptr;
 
 // The last publish that showed the rider moving. Updated only inside the
@@ -141,8 +144,8 @@ lv_obj_t *s_trip_caption = nullptr;
 uint32_t s_last_moving_ms = 0;
 
 // Movement, and then some. Traffic lights and a fix's own wander would
-// otherwise flip the caption between amber and red every few seconds, which
-// on the cell next to the speed is worse than either state alone.
+// otherwise flip the cell between amber and red every few seconds, which next
+// to the speed is worse than either state alone.
 constexpr float REC_MOVING_KMH = 3.6f; // 1.0 m/s, the same line PowerManager draws
 constexpr uint32_t REC_MOVING_HOLD_MS = 30000;
 lv_obj_t *s_trip_unit_label = nullptr;
@@ -806,30 +809,35 @@ void RenderClock() {
     }
 }
 
-// Three states, escalating. See s_trip_caption for why this lives on the TRIP
-// cell rather than anywhere more obviously its own.
+// Colour only -- see s_trip_caption for why there is no word here, and why
+// this paints the whole cell rather than one label in it.
 void RenderRecordingState() {
     if (s_trip_caption == nullptr) {
         return;
     }
 
+    uint32_t colour;
     if (RideLog_IsRecording()) {
-        lv_label_set_text(s_trip_caption, "TRIP");
-        lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(COLOR_CAPTION), 0);
-        return;
+        colour = COLOR_OK;
+    } else {
+        // Disarmed. Whether that is worth shouting about depends entirely on
+        // whether the rider is going anywhere.
+        const bool moving_recently =
+            s_last_moving_ms != 0 && lv_tick_elaps(s_last_moving_ms) < REC_MOVING_HOLD_MS;
+        colour = moving_recently ? COLOR_DANGER : COLOR_WARN;
     }
 
-    // Disarmed. Whether that is worth shouting about depends entirely on
-    // whether the rider is going anywhere.
-    const bool moving_recently =
-        s_last_moving_ms != 0 && lv_tick_elaps(s_last_moving_ms) < REC_MOVING_HOLD_MS;
-
-    if (moving_recently) {
-        lv_label_set_text(s_trip_caption, "NOT RECORDING");
-        lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(COLOR_DANGER), 0);
-    } else {
-        lv_label_set_text(s_trip_caption, "TRIP - OFF");
-        lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(COLOR_WARN), 0);
+    // All three together, which is what makes it read as a section rather
+    // than as a label that happens to be a different colour. The figure is the
+    // part that carries it -- it is the largest thing in the cell and the one
+    // the rider is already looking at -- and the caption and unit follow so
+    // the cell does not come out half dressed.
+    lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(colour), 0);
+    if (s_trip_label != nullptr) {
+        lv_obj_set_style_text_color(s_trip_label, lv_color_hex(colour), 0);
+    }
+    if (s_trip_unit_label != nullptr) {
+        lv_obj_set_style_text_color(s_trip_unit_label, lv_color_hex(colour), 0);
     }
 }
 
@@ -2069,6 +2077,11 @@ void PageDashboard::onViewLoad() {
     }
 
     RenderSpeedAndTrip();
+    // Before the first frame, not on the first one-second tick. The cell is
+    // built in the ordinary white, and leaving it to the timer would show the
+    // rider a recording-coloured TRIP for a moment on a device that is not
+    // recording -- which is the one thing this cell exists not to do.
+    RenderRecordingState();
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
     DataCenter_Subscribe(TOPIC_HEART_RATE, &s_hr_account);
