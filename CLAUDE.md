@@ -204,11 +204,13 @@ These were each discovered the slow way. They are not optional trivia.
   trap sharp is that nothing else on the dashboard betrays it — `Trip` and
   `RideStats` subscribe to GPS directly and never consult the log, so the
   odometer climbs, the speed moves and the averages fill in exactly as on a
-  recorded ride. The whole TRIP cell is the defence, and it signals in colour
-  alone — green recording, amber not, red not-while-moving. No word is added
-  on purpose: a 10px "OFF" beside a 28pt figure is the first thing lost to a
-  glance at speed, in sunlight, on a rough road, whereas the colour of the
-  figure itself survives all three. Do not quietly demote it.
+  recorded ride. The whole TRIP cell is the defence: it is *filled* — green
+  recording, amber not, red not-while-moving — with no word added. A 10px
+  "OFF" beside a 28pt figure is the first thing lost to a glance at speed, in
+  sunlight, on a rough road, whereas a block of colour a quarter of the screen
+  wide survives all three and is read from outside the point of focus. Its
+  text is `COLOR_BG`, dark-on-light and the only thing legible against both
+  fills — the one place on this panel that inverts. Do not quietly demote it.
 
   An earlier attempt closed the file on the timeout but left recording armed.
   That does not work — movement simply opened a new file, so a forgotten

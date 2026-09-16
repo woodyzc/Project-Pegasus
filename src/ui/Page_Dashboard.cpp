@@ -129,13 +129,20 @@ lv_obj_t *s_trip_label = nullptr;
 // so the odometer climbs, the speed moves and the averages fill in exactly as
 // they would on a recorded ride. Two hours later the card is empty.
 //
-// So the whole TRIP cell carries the state, in colour and nothing else. Green
-// is recording, amber is not, red is not-while-moving. No word is added: a
-// 10px "OFF" beside a 28pt figure is the first thing lost to a glance at
-// speed, sunlight or a bumpy road, whereas the colour of the figure itself is
-// the one thing that survives all three. The rider learns two colours once and
-// reads them thereafter without looking directly at the cell.
+// So the whole TRIP cell carries the state, as a filled background and
+// nothing else. No word is added: a 10px "OFF" beside a 28pt figure is the
+// first thing lost to a glance at speed, in sunlight or on a rough road,
+// whereas a block of colour the size of a quarter of the screen survives all
+// three and is read from outside the point of focus. The rider learns two
+// colours once.
+//
+// Filled rather than tinted text, at the rider's asking, and that decides the
+// text colour for us: amber and green are both light, so the only thing
+// legible on both is something dark. COLOR_BG is the palette's darkest value
+// and already the colour the rider's eye reads the panel against, so the
+// figure inverts cleanly instead of needing a fourth colour invented for it.
 lv_obj_t *s_trip_caption = nullptr;
+lv_obj_t *s_trip_cell = nullptr;
 
 // The last publish that showed the rider moving. Updated only inside the
 // publish branch, never from the cached speed: a fix that drops away stops
@@ -809,35 +816,38 @@ void RenderClock() {
     }
 }
 
-// Colour only -- see s_trip_caption for why there is no word here, and why
-// this paints the whole cell rather than one label in it.
+// See s_trip_cell for why this fills the cell rather than colouring its text,
+// and why the text then has to be dark.
 void RenderRecordingState() {
-    if (s_trip_caption == nullptr) {
+    if (s_trip_cell == nullptr) {
         return;
     }
 
-    uint32_t colour;
+    uint32_t bg;
     if (RideLog_IsRecording()) {
-        colour = COLOR_OK;
+        bg = COLOR_OK;
     } else {
         // Disarmed. Whether that is worth shouting about depends entirely on
         // whether the rider is going anywhere.
         const bool moving_recently =
             s_last_moving_ms != 0 && lv_tick_elaps(s_last_moving_ms) < REC_MOVING_HOLD_MS;
-        colour = moving_recently ? COLOR_DANGER : COLOR_WARN;
+        bg = moving_recently ? COLOR_DANGER : COLOR_WARN;
     }
 
-    // All three together, which is what makes it read as a section rather
-    // than as a label that happens to be a different colour. The figure is the
-    // part that carries it -- it is the largest thing in the cell and the one
-    // the rider is already looking at -- and the caption and unit follow so
-    // the cell does not come out half dressed.
-    lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(colour), 0);
+    lv_obj_set_style_bg_color(s_trip_cell, lv_color_hex(bg), 0);
+
+    // Fixed, and set here rather than once at build time so that one function
+    // owns everything about how this cell looks. All three are light-on-dark
+    // everywhere else on the panel and have to be dark-on-light only here.
+    const lv_color_t ink = lv_color_hex(COLOR_BG);
+    if (s_trip_caption != nullptr) {
+        lv_obj_set_style_text_color(s_trip_caption, ink, 0);
+    }
     if (s_trip_label != nullptr) {
-        lv_obj_set_style_text_color(s_trip_label, lv_color_hex(colour), 0);
+        lv_obj_set_style_text_color(s_trip_label, ink, 0);
     }
     if (s_trip_unit_label != nullptr) {
-        lv_obj_set_style_text_color(s_trip_unit_label, lv_color_hex(colour), 0);
+        lv_obj_set_style_text_color(s_trip_unit_label, ink, 0);
     }
 }
 
@@ -1863,6 +1873,7 @@ void PageDashboard::onViewLoad() {
     // grid, small enough that "188.4" fits a column narrowed to give the ride
     // averages room to be legible.
     lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, SEC_W, CELL_H, "TRIP", &s_trip_caption);
+    s_trip_cell = trip_cell;
     s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_28);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
 
@@ -2119,6 +2130,7 @@ void PageDashboard::onViewUnload() {
     s_speed_unit_label = nullptr;
     s_trip_label = nullptr;
     s_trip_caption = nullptr;
+    s_trip_cell = nullptr;
     s_clock_label = nullptr;
     s_clock_caption = nullptr;
     s_active_tz = nullptr;
