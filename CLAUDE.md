@@ -204,13 +204,19 @@ These were each discovered the slow way. They are not optional trivia.
   trap sharp is that nothing else on the dashboard betrays it — `Trip` and
   `RideStats` subscribe to GPS directly and never consult the log, so the
   odometer climbs, the speed moves and the averages fill in exactly as on a
-  recorded ride. The whole TRIP cell is the defence: it is *filled* — green
-  recording, amber not, red not-while-moving — with no word added. A 10px
-  "OFF" beside a 28pt figure is the first thing lost to a glance at speed, in
-  sunlight, on a rough road, whereas a block of colour a quarter of the screen
-  wide survives all three and is read from outside the point of focus. Its
-  text is `COLOR_BG`, dark-on-light and the only thing legible against both
-  fills — the one place on this panel that inverts. Do not quietly demote it.
+  recorded ride. The TRIP cell is the defence: it is *filled* when, and only
+  when, nothing is being written — amber stopped, red while moving — and looks
+  like any other cell while recording. Filling the good state too was tried
+  and dropped: a rider is recording for hours, and a block of colour held for
+  hours stops being seen, besides spending the panel's one loud gesture on the
+  situation that is fine. No word is added either way — a 10px "OFF" beside a
+  28pt figure is the first thing lost to a glance at speed, in sunlight, on a
+  rough road, whereas a filled block a quarter of the screen wide is read from
+  outside the point of focus. While filled, its text is `COLOR_BG`: amber and
+  red are both light, so only dark is legible on both, which makes this the
+  one place on the panel that inverts — and every colour has to be put back
+  explicitly on the way out, or the cell stays inverted for the rest of the
+  boot. Do not quietly demote it.
 
   An earlier attempt closed the file on the timeout but left recording armed.
   That does not work — movement simply opened a new file, so a forgotten

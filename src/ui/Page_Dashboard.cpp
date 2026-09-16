@@ -39,8 +39,7 @@ constexpr uint32_t COLOR_BG = 0x101820;      // screen background
 constexpr uint32_t COLOR_CAPTION = 0x93A4B8; // small all-caps labels
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;   // primary readouts
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
-constexpr uint32_t COLOR_WARN = 0xFFD166;    // not recording
-constexpr uint32_t COLOR_OK = 0x7CE38B;      // recording (same green the settings page uses)
+constexpr uint32_t COLOR_WARN = 0xFFD166;    // not recording, stopped
 constexpr uint32_t COLOR_DANGER = 0xFF6B6B;  // moving and not recording
 
 // Turn-by-turn computed on board from the cached route rather than received
@@ -129,18 +128,23 @@ lv_obj_t *s_trip_label = nullptr;
 // so the odometer climbs, the speed moves and the averages fill in exactly as
 // they would on a recorded ride. Two hours later the card is empty.
 //
-// So the whole TRIP cell carries the state, as a filled background and
-// nothing else. No word is added: a 10px "OFF" beside a 28pt figure is the
-// first thing lost to a glance at speed, in sunlight or on a rough road,
-// whereas a block of colour the size of a quarter of the screen survives all
-// three and is read from outside the point of focus. The rider learns two
-// colours once.
+// So the TRIP cell is filled when, and only when, nothing is being written --
+// amber stopped, red while moving. Recording is the state a rider is in for
+// hours, and a block of colour held for hours stops being seen; worse, it
+// spends the panel's one loud gesture on the situation that is fine. So a
+// recording ride looks exactly like every other cell, and the colour means
+// "something is wrong" rather than "here is the recording state".
 //
-// Filled rather than tinted text, at the rider's asking, and that decides the
-// text colour for us: amber and green are both light, so the only thing
-// legible on both is something dark. COLOR_BG is the palette's darkest value
-// and already the colour the rider's eye reads the panel against, so the
-// figure inverts cleanly instead of needing a fourth colour invented for it.
+// No word is added either way: a 10px "OFF" beside a 28pt figure is the first
+// thing lost to a glance at speed, in sunlight or on a rough road, whereas a
+// filled block a quarter of the screen wide is read from outside the point of
+// focus.
+//
+// The fill decides the text colour with it. Amber and red are both light, so
+// the only thing legible on both is dark, and COLOR_BG -- the colour the
+// rider already reads the panel against -- inverts cleanly rather than needing
+// a fourth colour invented for it. That inversion is undone on the way back:
+// see RenderRecordingState.
 lv_obj_t *s_trip_caption = nullptr;
 lv_obj_t *s_trip_cell = nullptr;
 
@@ -816,29 +820,38 @@ void RenderClock() {
     }
 }
 
-// See s_trip_cell for why this fills the cell rather than colouring its text,
-// and why the text then has to be dark.
+// See s_trip_cell for why only the bad states are filled, and why filling
+// forces the text dark.
 void RenderRecordingState() {
     if (s_trip_cell == nullptr) {
         return;
     }
 
-    uint32_t bg;
     if (RideLog_IsRecording()) {
-        bg = COLOR_OK;
-    } else {
-        // Disarmed. Whether that is worth shouting about depends entirely on
-        // whether the rider is going anywhere.
-        const bool moving_recently =
-            s_last_moving_ms != 0 && lv_tick_elaps(s_last_moving_ms) < REC_MOVING_HOLD_MS;
-        bg = moving_recently ? COLOR_DANGER : COLOR_WARN;
+        // An ordinary cell again, exactly like its neighbours. Every colour is
+        // restored explicitly rather than left to whatever it was: this is the
+        // path back from the inverted look, and a value not put back here is a
+        // cell that stays dark-on-light for the rest of the boot.
+        lv_obj_set_style_bg_color(s_trip_cell, lv_color_hex(COLOR_CELL_BG), 0);
+        if (s_trip_caption != nullptr) {
+            lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(COLOR_CAPTION), 0);
+        }
+        if (s_trip_label != nullptr) {
+            lv_obj_set_style_text_color(s_trip_label, lv_color_hex(COLOR_VALUE), 0);
+        }
+        if (s_trip_unit_label != nullptr) {
+            lv_obj_set_style_text_color(s_trip_unit_label, lv_color_hex(COLOR_CAPTION), 0);
+        }
+        return;
     }
 
-    lv_obj_set_style_bg_color(s_trip_cell, lv_color_hex(bg), 0);
+    // Nothing is being written. How loudly to say so depends entirely on
+    // whether the rider is going anywhere.
+    const bool moving_recently =
+        s_last_moving_ms != 0 && lv_tick_elaps(s_last_moving_ms) < REC_MOVING_HOLD_MS;
+    lv_obj_set_style_bg_color(s_trip_cell, lv_color_hex(moving_recently ? COLOR_DANGER : COLOR_WARN),
+                              0);
 
-    // Fixed, and set here rather than once at build time so that one function
-    // owns everything about how this cell looks. All three are light-on-dark
-    // everywhere else on the panel and have to be dark-on-light only here.
     const lv_color_t ink = lv_color_hex(COLOR_BG);
     if (s_trip_caption != nullptr) {
         lv_obj_set_style_text_color(s_trip_caption, ink, 0);
