@@ -54,6 +54,10 @@ constexpr int HR_BPM_STEP = 5;
 constexpr int NAV_MODE_COUNT = 2; // index i == NavMode_t value i (TBT=0, GPX=1)
 lv_obj_t *s_nav_btns[NAV_MODE_COUNT] = {nullptr, nullptr};
 lv_obj_t *s_nav_note = nullptr;
+// Shown only while the chosen mode differs from the one this boot actually
+// started with. A restart button standing there permanently would read as
+// something the rider is supposed to press.
+lv_obj_t *s_nav_restart_btn = nullptr;
 NavMode_t s_nav_mode_at_load = NAV_MODE_TBT;
 
 // One card per settings group, so the page scrolls as a tidy stack.
@@ -190,6 +194,20 @@ void OnFinishRideClicked(lv_event_t *e) {
     }
 }
 
+// Hidden unless a mode change is waiting on it. Every branch of
+// RefreshNavSelection that is not "saved, not yet applied" hides it, which is
+// why that one branch returns early rather than falling through.
+void ShowNavRestart(bool on) {
+    if (s_nav_restart_btn == nullptr) {
+        return;
+    }
+    if (on) {
+        lv_obj_clear_flag(s_nav_restart_btn, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_nav_restart_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void RefreshNavSelection() {
     const NavMode_t current = Settings_GetNavMode();
 
@@ -209,6 +227,17 @@ void RefreshNavSelection() {
     if (s_nav_note == nullptr) {
         return;
     }
+
+    // Decided on its own, before the note is written, and deliberately not
+    // folded into the chain below. The chain picks which of seven things to
+    // say; this asks one question -- would restarting change anything -- and
+    // an early attempt to answer it inside the chain got it wrong, because the
+    // branch for "GPX selected but no card" fires ahead of the one for "mode
+    // changed" and would have hidden the button on a note that ends with the
+    // word "restart".
+    const bool mode_change_pending = (current != s_nav_mode_at_load);
+    const bool card_would_be_remounted = (current == NAV_MODE_GPX && !GpxTrack_CardMounted());
+    ShowNavRestart(mode_change_pending || card_would_be_remounted);
 
     // First, because it explains a setting the rider did not choose. The
     // reporting for this used to live in the heart-rate card, which the ANT+
@@ -338,6 +367,27 @@ void OnRestartClicked(lv_event_t *e) {
     // which is invisible directly before a reset.
     BLE_HR_Shutdown();
     ESP.restart();
+}
+
+// The restart button, built twice: once in NAVIGATION where a mode change
+// needs it, and once at the bottom of DEVICE as the general utility.
+//
+// It used to live in HEART RATE, which was where it had ended up rather than
+// where it belonged -- a power button under the strap settings, several
+// screens above the mode change that was the only thing actually requiring it.
+lv_obj_t *MakeRestartButton(lv_obj_t *card, const char *text) {
+    lv_obj_t *btn = lv_btn_create(card);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x24313D), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    lv_obj_add_event_cb(btn, OnRestartClicked, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *label = lv_label_create(btn);
+    lv_label_set_text(label, text);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
+    lv_obj_center(label);
+    return btn;
 }
 
 void RefreshPowerStatus() {
@@ -620,18 +670,6 @@ void PageSettings::onViewLoad() {
     lv_label_set_long_mode(hr_hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(hr_hint, LV_PCT(100));
 
-    lv_obj_t *restart_btn = lv_btn_create(hr_card);
-    lv_obj_set_width(restart_btn, LV_PCT(100));
-    lv_obj_set_style_bg_color(restart_btn, lv_color_hex(0x24313D), 0);
-    lv_obj_set_style_bg_color(restart_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_width(restart_btn, 0, 0);
-    lv_obj_add_event_cb(restart_btn, OnRestartClicked, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *restart_label = lv_label_create(restart_btn);
-    lv_label_set_text(restart_label, LV_SYMBOL_POWER "  Restart now");
-    lv_obj_set_style_text_font(restart_label, &lv_font_montserrat_12, 0);
-    lv_obj_center(restart_label);
-
     // Live link state, in the card about the heart-rate source rather than
     // buried at the bottom of DEVICE -- this is where someone looks when the
     // reading is missing, and it was several screens of scrolling away.
@@ -847,6 +885,13 @@ void PageSettings::onViewLoad() {
     lv_label_set_long_mode(s_nav_note, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_nav_note, LV_PCT(100));
 
+    // Directly beneath the note that asks for it. Both radio modes are
+    // configured once at init (CLAUDE.md section 3), so a mode change is saved
+    // immediately and applied never, until this is pressed -- which made the
+    // setting look broken when the only button that could finish it was in
+    // another card several screens away.
+    s_nav_restart_btn = MakeRestartButton(nav_card, LV_SYMBOL_POWER "  Restart to apply");
+
     RefreshNavSelection();
 
     // ---- Power ----
@@ -1016,6 +1061,12 @@ void PageSettings::onViewLoad() {
     s_uptime_value = MakeInfoRow(info_card, "Uptime", "--");
     s_heap_value = MakeInfoRow(info_card, "Memory", "--");
 
+    // The general one, at the very bottom of the page. A restart is a
+    // diagnostic on this board rather than a setting -- it is how a stuck
+    // radio gets another go, and the reset reason above is how you find out
+    // what happened -- so it belongs here with the other diagnostics rather
+    // than beside the strap settings, where it used to be.
+    MakeRestartButton(info_card, LV_SYMBOL_POWER "  Restart device");
 
     s_info_timer = lv_timer_create(InfoTimerCallback, 1000, nullptr);
     InfoTimerCallback(nullptr); // populate immediately rather than after 1s
@@ -1040,6 +1091,7 @@ void PageSettings::onViewUnload() {
     s_hr_max_value = nullptr;
     s_hr_zone_table = nullptr;
     s_nav_note = nullptr;
+    s_nav_restart_btn = nullptr;
     for (int i = 0; i < NAV_MODE_COUNT; i++) {
         s_nav_btns[i] = nullptr;
     }
