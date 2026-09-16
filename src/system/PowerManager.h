@@ -61,5 +61,21 @@ PowerStage_t PowerManager_Stage();
 uint32_t PowerManager_IdleMs();
 const char *PowerManager_StageText();
 
+// The CPU clock right now, in MHz: 240 normally, 80 while the screen is dark.
+//
+// Exposed because it is otherwise invisible -- a downclock that silently
+// failed and one that silently never reverted look identical from outside, and
+// the second is the one that would make the device feel broken. Serial cannot
+// report it (CLAUDE.md section 8), so the settings page does.
+uint32_t PowerManager_CpuMhz();
+
+// How many times the clock has been dropped to 80MHz since boot.
+//
+// The live reading above cannot confirm the downclock works, because it only
+// happens while the screen is dark. This can: if the count has gone up by the
+// time the rider wakes the device and opens this page, the switch fired -- and
+// the page being readable proves it reverted.
+uint32_t PowerManager_DownclockCount();
+
 // What is currently preventing sleep, as a sentence, or "" if nothing is.
 const char *PowerManager_InhibitText();

@@ -39,6 +39,74 @@ constexpr uint32_t SLEEP_NOTICE_MS = 2500;
 // cancelled reads as the device ignoring you.
 constexpr uint32_t TICK_MS = 250;
 
+// ---- CPU frequency, and why 80 is a floor rather than a starting point ----
+//
+// Blanking the screen used to save the backlight and nothing else: the S3 kept
+// running both cores at 240MHz, servicing LVGL, polling touch over I2C and
+// re-rendering, all against a panel nobody could see. This drops the clock
+// while the screen is dark and puts it back the instant anything happens.
+//
+// ⚠️ 80MHz is the LOWEST value that is safe here, and the reason is not
+// performance. On the ESP32-S3 the APB clock stays at 80MHz for any CPU
+// frequency sourced from the PLL -- 240, 160, 80 -- so UART, LEDC and SPI are
+// untouched by the switch. Below 80 the CPU is sourced from the crystal and
+// APB follows it down, which would change the GNSS baud rate, the backlight
+// PWM frequency and the panel's SPI clock at once. arduino-esp32 will not warn
+// you: its S3 branch of calculateApb() returns a hardcoded APB_CLK_FREQ, so
+// its own apb-change callbacks never fire and every peripheral goes on
+// believing the old rate. Pick 40MHz here and the symptom is a GNSS that
+// silently stops decoding, a long way from this line.
+//
+// WiFi is not a concern despite sharing the same sensitivity: the file server
+// inhibits every stage including BLANK (see Inhibit()), so the clock is
+// already back at full speed for the whole time the radio is up.
+//
+// BLE is the one thing here that is not proven. setCpuFrequencyMhz() is a raw
+// switch that bypasses esp_pm entirely, so unlike the IDF power-management
+// framework it takes no lock the BT controller can hold against it, and a
+// heart-rate link stays up across a blank. The reasoning for why it should be
+// fine: the controller keeps its own clock domain, APB does not move (above),
+// and 80MHz is a speed whole ESP32 products run BLE at. The reasoning for why
+// to watch it anyway: none of that is a measurement. If the strap drops out
+// after the screen goes dark and recovers when it comes back, this is the
+// cause -- raise CPU_MHZ_IDLE to 160, or gate the downclock on there being no
+// BLE peer connected.
+constexpr uint32_t CPU_MHZ_FULL = 240;
+constexpr uint32_t CPU_MHZ_IDLE = 80;
+
+// Only BLANK downclocks. DIM still shows a readable screen the rider may be
+// watching, and SLEEP is two ticks from deep sleep with a notice up -- neither
+// is worth the risk of a sluggish frame for a saving measured in seconds.
+uint32_t CpuMhzForStage(PowerStage_t stage) {
+    return (stage == POWER_STAGE_BLANK) ? CPU_MHZ_IDLE : CPU_MHZ_FULL;
+}
+
+uint32_t s_cpu_mhz = CPU_MHZ_FULL;
+
+// How many times the clock has actually been dropped. The settings page shows
+// it, and it is the only way to confirm any of this works: the downclock
+// happens exactly when the screen is too dark to read, so a live reading can
+// only ever say 240. A count that goes up after a few minutes of not touching
+// the device says the switch fired AND that it came back -- because the page
+// being legible at all means we are at full speed again.
+uint32_t s_downclock_count = 0;
+
+void SetCpuMhz(uint32_t mhz) {
+    if (mhz == s_cpu_mhz) {
+        return;
+    }
+    // setCpuFrequencyMhz() returns false and changes nothing on a value the
+    // chip cannot produce, so a failed switch leaves us at the old clock --
+    // slower than intended, never broken. Record what actually happened rather
+    // than what was asked for.
+    if (setCpuFrequencyMhz(mhz)) {
+        s_cpu_mhz = mhz;
+        if (mhz == CPU_MHZ_IDLE) {
+            s_downclock_count++;
+        }
+    }
+}
+
 volatile uint32_t s_last_activity_ms = 0;
 lv_obj_t *s_notice = nullptr;
 uint32_t s_notice_since_ms = 0;
@@ -156,6 +224,7 @@ void ApplyStage(PowerStage_t stage) {
     s_stage = stage;
     Display_SetBrightness(IdlePolicy_Brightness(stage, s_active_percent));
     s_screen_off = (stage == POWER_STAGE_BLANK);
+    SetCpuMhz(CpuMhzForStage(stage));
 }
 
 void Service(lv_timer_t *timer) {
@@ -223,6 +292,12 @@ void PowerManager_NoteActivity() {
     // Straight back to full, without waiting for the next Service(): a screen
     // that takes a second to brighten reads as a screen that missed the touch.
     if (s_stage != POWER_STAGE_ACTIVE) {
+        // Clock first, everything else after. This path exists to feel
+        // instant, and the work of waking -- re-reading a setting, pushing a
+        // backlight level, then the frame LVGL draws next -- all runs faster
+        // once the switch is done. It costs microseconds.
+        SetCpuMhz(CPU_MHZ_FULL);
+
         // Re-read, because the rider may have changed it on the settings page
         // while the stage machine was holding a dimmed value.
         s_active_percent = Settings_GetBrightness();
@@ -242,6 +317,14 @@ PowerStage_t PowerManager_Stage() {
 
 uint32_t PowerManager_IdleMs() {
     return millis() - s_last_activity_ms;
+}
+
+uint32_t PowerManager_CpuMhz() {
+    return s_cpu_mhz;
+}
+
+uint32_t PowerManager_DownclockCount() {
+    return s_downclock_count;
 }
 
 const char *PowerManager_StageText() {

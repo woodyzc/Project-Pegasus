@@ -321,8 +321,9 @@ void RefreshPowerStatus() {
         const uint32_t left_s = (idle_ms >= POWER_SLEEP_AFTER_MS)
                                     ? 0u
                                     : ((POWER_SLEEP_AFTER_MS - idle_ms) / 1000u);
-        lv_label_set_text_fmt(s_power_status, "Screen: %s. Sleeps in %u s.",
-                              PowerManager_StageText(), (unsigned)left_s);
+        lv_label_set_text_fmt(s_power_status, "Screen: %s @ %uMHz (idled %ux). Sleeps in %u s.",
+                              PowerManager_StageText(), (unsigned)PowerManager_CpuMhz(),
+                              (unsigned)PowerManager_DownclockCount(), (unsigned)left_s);
     }
 }
 
