@@ -42,6 +42,34 @@ constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
 constexpr uint32_t COLOR_WARN = 0xFFD166;    // not recording, stopped
 constexpr uint32_t COLOR_DANGER = 0xFF6B6B;  // moving and not recording
 
+// ---- Cotopaxi-ish colour blocking, on exactly two cells ----
+//
+// Bright fills on SPEED and ELEVATION, and only those two. The other three
+// cells on this page have already spent their background or their text on
+// meaning, and decoration would be taking it back:
+//
+//   TRIP       fills itself amber or red to say nothing is being recorded.
+//              That is the whole safety mechanism behind manual arming, and a
+//              permanent colour under it would leave the alert as one bright
+//              block among several.
+//   HEART RATE colours its figure by training zone, five saturated colours
+//              chosen to be read in sunlight. Any fill behind them fights at
+//              least one -- zone 4's red on anything warm, zone 1's blue on
+//              anything cool.
+//   NAV        uses amber, red and green for onboard / off-route / imminent.
+//
+// Both colours are picked from the cool half of the wheel on purpose. The
+// alert language on this screen lives in the amber-to-coral arc (TRIP's
+// 0xFFD166 at about 42 degrees of hue, its 0xFF6B6B at about 0), so anything
+// decorative has to stay well clear of it or a rider stops being able to tell
+// "this cell is shouting" from "this cell is just blue". Turquoise sits near
+// 174 degrees and the violet near 257; neither can be mistaken for a warning.
+//
+// Dark ink on both, for the same reason the TRIP fill uses it: these are light
+// colours and COLOR_BG is the only thing legible on them.
+constexpr uint32_t COLOR_CELL_SPEED = 0x2FC6B7;     // turquoise
+constexpr uint32_t COLOR_CELL_ELEVATION = 0xA88BFF; // violet
+
 // Turn-by-turn computed on board from the cached route rather than received
 // live from the phone. Colour rather than a word or an icon: the navigation
 // tile is already the densest thing on the panel, and at a junction the rider
@@ -412,6 +440,32 @@ constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
 // their contents, so a long value cannot drift into a neighbour -- which is
 // exactly how the clock ended up on top of the incline figure when these were
 // free-floating labels.
+// Paints every label inside a cell one colour, however deeply nested.
+//
+// Recursive because these cells are not flat: MakeSecondary builds a container
+// holding two rows, and each row holds a caption word beside its figure, so a
+// single pass over the cell's direct children would recolour the figures and
+// leave the words in the old grey -- unreadable on a bright fill, and the kind
+// of half-done look that reads as a rendering fault rather than a choice.
+//
+// Setting a text colour on a container rather than a label is harmless; it is
+// a style property like any other, and LVGL simply inherits it downward.
+//
+// Only safe for cells whose text colours are static. HEART RATE recolours its
+// figure by zone on every update and would overwrite this on the next tick;
+// TRIP does the same from RenderRecordingState. Both are excluded above.
+void TintCellText(lv_obj_t *obj, lv_color_t colour) {
+    const uint32_t count = lv_obj_get_child_cnt(obj);
+    for (uint32_t i = 0; i < count; i++) {
+        lv_obj_t *child = lv_obj_get_child(obj, i);
+        if (child == nullptr) {
+            continue;
+        }
+        lv_obj_set_style_text_color(child, colour, 0);
+        TintCellText(child, colour);
+    }
+}
+
 lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
                    const char *caption, lv_obj_t **out_caption = nullptr) {
     lv_obj_t *cell = lv_obj_create(parent);
@@ -1876,8 +1930,12 @@ void PageDashboard::onViewLoad() {
     lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, STATS_W, CELL_H, "SPEED");
     s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_40);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
-    lv_obj_set_style_text_color(s_speed_unit_label, lv_color_hex(COLOR_ACCENT), 0);
     MakeSecondary(speed_cell, &s_speed_avg_label, &s_speed_max_label);
+    // After every child exists, so nothing built above keeps the old grey.
+    // The accent colour the unit used to carry is gone with it: on a turquoise
+    // fill, accent-on-bright is the one pairing with no contrast left at all.
+    lv_obj_set_style_bg_color(speed_cell, lv_color_hex(COLOR_CELL_SPEED), 0);
+    TintCellText(speed_cell, lv_color_hex(COLOR_BG));
 
     lv_obj_t *hr_cell = MakeCell(parent, COL1, ROW2, STATS_W, CELL_H, "HEART RATE");
     s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_40);
@@ -1897,9 +1955,9 @@ void PageDashboard::onViewLoad() {
     // figure spells out its own.
     s_incline_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "ELEVATION");
     MakeElevationBlock(s_incline_cell, SEC_W, &s_incline_label, &s_ascent_label);
-    lv_obj_set_style_text_color(s_incline_label, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_set_style_text_color(s_ascent_label, lv_color_hex(COLOR_ACCENT), 0);
     lv_label_set_text(s_ascent_label, "0m");
+    lv_obj_set_style_bg_color(s_incline_cell, lv_color_hex(COLOR_CELL_ELEVATION), 0);
+    TintCellText(s_incline_cell, lv_color_hex(COLOR_BG));
 
     // ---- The second data page ----
     // Covers the navigation region and the four cells, leaving the status line
