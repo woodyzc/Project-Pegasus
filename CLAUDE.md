@@ -166,6 +166,33 @@ These were each discovered the slow way. They are not optional trivia.
 - **A setting that hangs at boot outlives a reflash**, because it lives in
   NVS. `Settings_Init()`'s bring-up watchdog exists for exactly this; do not
   remove it when adding radio modes.
+- **Dropping the CPU to 80MHz while the screen is dark works, and is safe for
+  every peripheral on this board.** Verified on hardware 2026-09-15: the
+  downclock counter on the settings page went to `1x` after a blank, and the
+  touch that woke it, the panel that redrew and the backlight that came back
+  all behaved normally. So I2C, SPI and LEDC survive the switch — and since
+  the GNSS UART hangs off the same APB, it should too (untested, no module).
+
+  **80MHz is a floor, not a starting point.** On the S3, APB is a fixed 80MHz
+  for any PLL-sourced CPU frequency (`soc.h`: `APB_CLK_FREQ`, and
+  `UART_CLK_FREQ` derives from it), so 240→80 moves nothing. Below 80 the CPU
+  sources from the crystal and APB follows it down — and arduino-esp32's S3
+  branch of `calculateApb()` returns a hardcoded constant, so its apb-change
+  callbacks never fire and no peripheral is told. Pick 40MHz and the GNSS
+  silently stops decoding, a long way from the line that caused it.
+
+  Still unproven: whether a BLE heart-rate link survives a blank.
+  `setCpuFrequencyMhz()` bypasses `esp_pm` entirely and takes no lock the BT
+  controller can hold against it. If the strap drops when the screen goes dark
+  and recovers when it comes back, that is the cause.
+- **An inhibitor that blocks sleep does not block blanking.** `IdlePolicy_Stage()`
+  returns BLANK *before* it consults `on_usb`, `recording` or `sleep_enabled` —
+  those three only decide whether it goes further. So "never sleeps on USB" has
+  never meant "never blanks on USB", and anything tied to blanking (the
+  downclock, for one) happens on a bench-powered board exactly as it does on a
+  battery. Only the file server inhibits everything. This is worth knowing
+  before wiring a diagnostic to the wrong branch, which is how the CPU clock
+  readout came to be invisible on the one screen built to show it.
 - **Register every GATT service before anything scans or connects.**
   NimBLE's `ble_gatts_mutable()` refuses to add a service while an
   advertisement, a scan, a connection attempt or an established connection
