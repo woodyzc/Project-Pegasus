@@ -1984,7 +1984,7 @@ void PageDashboard::onViewLoad() {
         const lv_coord_t P2_TALL_H = 76;
         const lv_coord_t P2_SHORT_H = (P2_H - 2 * P2_TALL_H) / 2;  // 62
         const lv_font_t *live = &pegasus_font_num_58b;
-        const lv_font_t *avg = &pegasus_font_num_30b;
+        const lv_font_t *avg = &pegasus_font_num_36b;
 
         s_page2 = lv_obj_create(parent);
         lv_obj_set_pos(s_page2, 0, P2_Y);

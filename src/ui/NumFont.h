@@ -23,21 +23,28 @@ extern "C" {
 extern const lv_font_t pegasus_font_num_88;
 
 // The second page's figures, in two sizes because its two columns are two
-// widths. Emboldened: Montserrat Medium is the only weight LVGL vendors and a
-// thin face is the first thing a rider loses in bright sun, so the generator
-// draws these with an outline stroke rather than adding a second TTF here.
+// widths. Emboldened: Montserrat Medium is the only weight LVGL vendors, so
+// the generator thickens the same outlines with a stroke rather than adding a
+// second TTF here. The stroke is part of the size -- it grows a glyph by twice
+// its width in both directions -- which is why the averages could be made both
+// thinner and taller at once by trading two pixels of stroke for six of size.
 //
 // Both sizes are measured, not chosen. The widest string either can hold is
 // "99.9", and it has to fit the column minus two 4px insets:
 //
-//   live column     150 wide, 142 usable   58 gives 137   (60 gives 141)
-//   average column   90 wide,  82 usable   30 gives  80   (32 gives  83)
+//   live column     150 wide, 142 usable   58/2 gives 137   (60 gives 141)
+//   average column   90 wide,  82 usable   36/1 gives  82   (38 gives  86)
+//
+// ⚠️ The average is at exactly 82.00px -- it lands on the inset, with nothing
+// spare. Anything that widens those glyphs, a bigger size or a heavier stroke
+// or a character wider than '9', runs into the column edge. Re-measure before
+// touching it; tools/gennumfont.py prints the numbers.
 //
 // The live figures are what a rider reads at speed and get the wide column;
 // the averages are read at a stop. That is the whole reason the columns are
-// unequal, and the reason the averages are small.
+// unequal, and the reason the averages are smaller.
 extern const lv_font_t pegasus_font_num_58b;
-extern const lv_font_t pegasus_font_num_30b;
+extern const lv_font_t pegasus_font_num_36b;
 
 #ifdef __cplusplus
 }
