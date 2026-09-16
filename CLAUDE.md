@@ -181,10 +181,18 @@ These were each discovered the slow way. They are not optional trivia.
   callbacks never fire and no peripheral is told. Pick 40MHz and the GNSS
   silently stops decoding, a long way from the line that caused it.
 
-  Still unproven: whether a BLE heart-rate link survives a blank.
-  `setCpuFrequencyMhz()` bypasses `esp_pm` entirely and takes no lock the BT
-  controller can hold against it. If the strap drops when the screen goes dark
-  and recovers when it comes back, that is the cause.
+  **BLE survives it too** — verified the same day with a strap on, across a
+  blank of over two minutes: the dashboard showed a live BPM on wake, and it
+  blanks the reading after `HR_STALE_MS` (5s), so a measurement had arrived
+  within five seconds of the screen coming back. This was the one part
+  expected to break, because `setCpuFrequencyMhz()` bypasses `esp_pm` entirely
+  and takes no lock the BT controller can hold against it.
+
+  Read that evidence for what it is: it proves data was flowing, not strictly
+  that the link never dropped and re-established during the dark. A reconnect
+  uses exponential backoff, so a wake landing mid-backoff would more likely
+  have shown "--" — but if a disconnect counter is ever wanted, that is what
+  would close the gap.
 - **An inhibitor that blocks sleep does not block blanking.** `IdlePolicy_Stage()`
   returns BLANK *before* it consults `on_usb`, `recording` or `sleep_enabled` —
   those three only decide whether it goes further. So "never sleeps on USB" has
