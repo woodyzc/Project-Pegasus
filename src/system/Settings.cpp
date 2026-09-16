@@ -25,7 +25,22 @@ constexpr char KEY_BOOT_COUNT[] = "boots";
 constexpr char KEY_SLEEP[] = "sleepen";
 constexpr char KEY_TRACKUP[] = "trackup";
 
-constexpr uint8_t DEFAULT_BRIGHTNESS = 100;
+// 60, not 100. The backlight is the largest single draw on this board while
+// riding -- roughly half of it -- and it is the only one of the big three that
+// costs nothing to turn down: the downclock never fires on a moving bike
+// (PowerManager keeps the screen awake while the GPS reports movement) and the
+// receiver cannot be throttled without costing fixes. On the estimates in
+// CLAUDE.md this is the difference between about six hours and about eight.
+//
+// Only a default. NVS wins if the rider has ever moved the slider, which is
+// the right way round: someone who chose 100 in bright sun chose it knowing
+// what it looked like, and a firmware update must not quietly darken their
+// screen. It therefore does nothing at all on a board that already has a
+// stored value.
+//
+// Unverified in sunlight -- nobody has ridden with this. If 60 turns out to be
+// unreadable outdoors the number is wrong, not the reasoning.
+constexpr uint8_t DEFAULT_BRIGHTNESS = 60;
 constexpr float KM_TO_MILES = 0.621371f;
 
 
