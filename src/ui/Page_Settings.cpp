@@ -15,6 +15,7 @@
 #include "../sensors/BLE_HR_Client.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
+#include "../system/DataCenter.h"
 #include "../system/PowerManager.h"
 #include "../system/Settings.h"
 #include "Page_Dashboard.h"
@@ -37,6 +38,22 @@ lv_obj_t *s_trip_status = nullptr;
 lv_obj_t *s_uptime_value = nullptr;
 lv_obj_t *s_ridelog_value = nullptr;
 lv_obj_t *s_power_status = nullptr;
+
+// ---- The raw battery reading, because the derived one cannot be checked ----
+//
+// Everything else on this board shows a percentage, and a percentage cannot
+// tell you whether the thing it was derived from is sane. Two questions this
+// answers and nothing else could:
+//
+//   * is the divider right? A 3:1 that is really 2:1 reads as a pack that is
+//     simply flatter or fuller than it is, on a curve where 3.7V and 4.2V are
+//     only half a volt apart.
+//   * is `on usb` ever true? It is a threshold at 4500mV on this same reading,
+//     and a 1S charger terminates at 4.2V -- so if the ADC senses the pack
+//     rather than VBUS, that flag can never fire, and it is the only thing
+//     stopping the board deep-sleeping while plugged into the laptop that is
+//     flashing it. Read this with the cable in before trusting deep sleep.
+lv_obj_t *s_power_battery = nullptr;
 lv_obj_t *s_hrlink_value = nullptr;
 lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
@@ -424,6 +441,21 @@ lv_obj_t *MakeRestartButton(lv_obj_t *card, const char *text) {
 }
 
 void RefreshPowerStatus() {
+    // Raw first, and deliberately raw: millivolts as measured, the percentage
+    // derived from them, and the USB flag that is a threshold on the same
+    // number. Printed together so a wrong divider or an impossible threshold
+    // is visible as a disagreement rather than having to be inferred.
+    if (s_power_battery != nullptr) {
+        Battery_t battery;
+        if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
+            lv_label_set_text_fmt(s_power_battery, "Battery: %u mV, %u%%, on USB: %s",
+                                  (unsigned)battery.millivolts, (unsigned)battery.percent,
+                                  battery.on_usb ? "yes" : "NO");
+        } else {
+            lv_label_set_text(s_power_battery, "Battery: nothing published yet");
+        }
+    }
+
     if (s_power_status == nullptr) {
         return;
     }
@@ -1010,6 +1042,12 @@ void PageSettings::onViewLoad() {
     lv_label_set_long_mode(power_hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(power_hint, LV_PCT(100));
 
+    s_power_battery = lv_label_create(power_card);
+    lv_obj_set_style_text_font(s_power_battery, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(s_power_battery, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_long_mode(s_power_battery, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_power_battery, LV_PCT(100));
+
     s_power_status = lv_label_create(power_card);
     lv_obj_set_style_text_font(s_power_status, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(s_power_status, lv_color_hex(COLOR_ACCENT), 0);
@@ -1160,6 +1198,7 @@ void PageSettings::onViewUnload() {
     s_uptime_value = nullptr;
     s_ridelog_value = nullptr;
     s_power_status = nullptr;
+    s_power_battery = nullptr;
     s_hrlink_value = nullptr;
     s_tbtlink_value = nullptr;
     s_heap_value = nullptr;

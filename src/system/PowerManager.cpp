@@ -250,7 +250,22 @@ void Service(lv_timer_t *timer) {
         // already running, so instead the notice goes up on one pass and the
         // sleep happens on a later one -- with the ordinary render in between.
         if (s_notice == nullptr) {
+            // Set here rather than through ApplyStage(), and it has to be:
+            // ApplyStage would take the brightness to zero on the way in --
+            // IdlePolicy_Brightness(SLEEP) is 0 -- only for ShowNotice() to
+            // put it straight back, and it would leave s_screen_off false,
+            // which is the opposite of what the line below needs.
             s_stage = POWER_STAGE_SLEEP;
+
+            // The clock, by hand, for the same reason. This is the stage that
+            // renders a notice and then runs BLE_HR_Shutdown(), and it is
+            // reached only from BLANK, which means it inherits 80MHz unless
+            // something says otherwise. CpuMhzForStage() has said SLEEP should
+            // be at full speed since the downclock was added; until now
+            // nothing ever asked it, so the branch was dead and the notice was
+            // always drawn at 80.
+            SetCpuMhz(CpuMhzForStage(POWER_STAGE_SLEEP));
+
             // Treated as a dark screen even though it is lit, so the touch
             // that cancels the sleep is swallowed. A label is not clickable,
             // so without this the press would fall through the notice and hit
