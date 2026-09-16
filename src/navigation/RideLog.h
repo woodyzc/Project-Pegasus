@@ -82,3 +82,15 @@ bool RideLog_StartNewRide();
 // Points written so far, for the settings page to show that it is working.
 uint32_t RideLog_PointCount();
 
+// How many rides have been closed by the inactivity timeout since boot.
+//
+// Recording starts on its own and used to never stop, so a device left in a
+// bag wrote the walk home, the drive and the next morning's train into one
+// ride -- and held deep sleep off throughout. Fifteen minutes without movement
+// now ends it, and moving again starts a new one.
+//
+// Surfaced because an auto-end is otherwise completely silent: a rider would
+// discover at the end of the day that one ride is in two files, with nothing
+// anywhere saying why.
+uint32_t RideLog_AutoEndCount();
+

@@ -390,6 +390,15 @@ void InfoTimerCallback(lv_timer_t *timer) {
         if (RideLog_IsRecording()) {
             lv_label_set_text_fmt(s_ridelog_value, "Ride log: %s (%u pts)", RideLog_FileName(),
                                   (unsigned)RideLog_PointCount());
+        } else if (RideLog_AutoEndCount() > 0) {
+            // Not the same state as "waiting for fix", and saying so matters:
+            // a rider who stops for twenty minutes comes back to a device that
+            // is no longer recording, and the difference between "it gave up
+            // because you stopped" and "it never got a fix" is the difference
+            // between riding on and hunting for a fault.
+            lv_label_set_text_fmt(s_ridelog_value,
+                                  "Ride log: ended after 15 min still (%ux). Moving starts a new one.",
+                                  (unsigned)RideLog_AutoEndCount());
         } else {
             lv_label_set_text(s_ridelog_value, "Ride log: waiting for fix");
         }

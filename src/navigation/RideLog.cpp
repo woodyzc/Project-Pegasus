@@ -33,6 +33,32 @@ constexpr uint32_t MAX_POINT_INTERVAL_MS = 30000;
 // seconds of track; the cost of flushing more often is card wear.
 constexpr uint32_t FLUSH_INTERVAL_MS = 10000;
 
+// ---- Ending a ride nobody ended ----
+//
+// Recording starts by itself on the first valid fix and, until this existed,
+// never stopped. Ride home, drop the bike computer in a bag, and it went on
+// writing: the GPX picked up the walk to the door, the drive to the shops and
+// the train the next morning, all as one ride. It also held deep sleep off
+// the whole time, because a device that sleeps mid-ride loses the ride.
+//
+// So: this long with no movement and the ride is over. The file is closed
+// properly and the next time the rider actually moves, a NEW ride begins --
+// s_failed stays clear precisely so that can happen.
+//
+// The number is a trade with no right answer, and both directions are real.
+// Too short splits one ride into two files across a long lunch. Too long is
+// the behaviour this replaces. Fifteen minutes sits above any traffic light,
+// any puncture and most café stops, and below the point where a forgotten
+// device has written anything much. Raise it if rides here keep getting cut
+// in half; it is meant to be tuned.
+constexpr uint32_t AUTO_END_AFTER_MS = 15u * 60u * 1000u;
+
+// Below this the rider is stopped, not riding. Same threshold PowerManager
+// uses to decide the screen should stay awake, and for the same reason: it
+// has to sit above the wander a stationary receiver reports, or a parked bike
+// looks like it is creeping along and the ride never ends.
+constexpr float AUTO_END_MOVING_MPS = 1.0f;
+
 typedef struct {
     double lat;
     double lon;
@@ -65,6 +91,21 @@ QueueHandle_t s_queue = nullptr;
 File s_file;
 // Read from the UI core via RideLog_IsRecording(), written by the writer task.
 volatile bool s_recording = false;
+
+// The last time the rider was actually moving. Written from the GPS task in
+// OnGpsPublished, read by the writer task -- volatile for the same reason
+// s_last_bpm is, and a 32-bit aligned load is atomic on this core.
+//
+// A lost fix advances this timer rather than freezing it, and that is the
+// case that matters most: OnGpsPublished returns early when fix_valid is
+// false, so a device in a bag stops updating this and the ride ends on its
+// own. That is exactly the scenario this whole mechanism exists for.
+volatile uint32_t s_last_motion_ms = 0;
+
+// How many rides have been closed by the timeout since boot. On the panel,
+// because an auto-end is otherwise silent -- the rider would find out at the
+// end of the day that their ride is in two files, with nothing saying why.
+uint32_t s_auto_end_count = 0;
 // Set once the card has refused us, so the ride is not spent retrying.
 bool s_failed = false;
 char s_name[48] = "";
@@ -263,6 +304,10 @@ void WriterTask(void *pv) {
                     continue;
                 }
                 s_recording = true;
+                // Start the idle clock at the open, not at boot: a device that
+                // sat indoors for twenty minutes waiting for a fix must not
+                // end its ride on the first point it writes.
+                s_last_motion_ms = millis();
             }
 
             if (s_recording && !AppendPoint(point)) {
@@ -281,6 +326,35 @@ void WriterTask(void *pv) {
         if (s_recording && (millis() - s_last_flush_ms) >= FLUSH_INTERVAL_MS) {
             s_file.flush();
             s_last_flush_ms = millis();
+        }
+
+        // ---- The ride nobody ended ----
+        // Checked here because this task already wakes every FLUSH_INTERVAL_MS
+        // whether or not a point arrived, so the timeout needs no timer of its
+        // own -- and the no-fix case, which is the one that matters, produces
+        // no points at all and would never be noticed by a check on the
+        // receive path.
+        //
+        // Unsigned subtraction, so the 49-day millis() wrap gives a small
+        // number rather than instantly ending the ride.
+        if (s_recording && (millis() - s_last_motion_ms) >= AUTO_END_AFTER_MS) {
+            // The same close the rider's own "new ride" gesture uses. It
+            // flushes, closes, and clears the name and point count as well --
+            // which matters, because the settings page reads those, and a
+            // finished ride still showing a filename and a rising point count
+            // is worse than no line at all.
+            //
+            // The footer is already written after every point, so what it
+            // closes is a complete document.
+            CloseRide();
+            s_auto_end_count++;
+
+            // s_failed is deliberately NOT set. The next time the rider moves,
+            // OnGpsPublished queues a point, the open path above runs and a
+            // fresh ride begins -- which is the whole point of ending this
+            // one. (CloseRide() has already cleared s_has_last, so that first
+            // point is kept rather than dropped for sitting close to the last
+            // point of the previous ride.)
         }
     }
 }
@@ -327,6 +401,15 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     }
 
     const uint32_t now = millis();
+
+    // Before the spacing filter below, not after. That filter drops points the
+    // rider has not travelled far enough to justify, which is a question about
+    // the file -- whereas this is a question about whether they are riding at
+    // all, and a slow crawl that never clears MIN_POINT_SPACING_M is still
+    // riding.
+    if (gps->speed >= AUTO_END_MOVING_MPS) {
+        s_last_motion_ms = now;
+    }
     if (s_has_last) {
         const double moved =
             TripAccum_DistanceMetres(s_last_lat, s_last_lon, gps->lat, gps->lon);
@@ -406,6 +489,10 @@ bool RideLog_StartNewRide() {
     // all. A full queue means the writer is badly behind, which the caller
     // reports rather than waits out.
     return xQueueSend(s_queue, &cmd, 0) == pdTRUE;
+}
+
+uint32_t RideLog_AutoEndCount() {
+    return s_auto_end_count;
 }
 
 bool RideLog_IsRecording() {
