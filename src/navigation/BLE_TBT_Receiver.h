@@ -103,6 +103,15 @@ void BLE_TBT_StartAdvertising();
 // Both are safe no-ops when turn-by-turn was never started (GPX mode), and the
 // pause is deliberately short: a connect attempt times out in 5s, and the
 // phone only loses the chance to discover the head unit for that long.
+// The whole NimBLE stack has just been deinitialised, so forget every pointer
+// into it. Called by BLE_HR_Client's shutdown, which owns the teardown because
+// it owns the disconnect that must come first.
+//
+// Without it the server pointer here outlives the server: deinit(true) deletes
+// it, nothing clears it, and every null check in this module then passes on a
+// corpse.
+void BLE_TBT_NoteStackReleased();
+
 void BLE_TBT_PauseAdvertising();
 void BLE_TBT_ResumeAdvertising();
 

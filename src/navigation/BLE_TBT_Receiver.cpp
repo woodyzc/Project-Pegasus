@@ -343,6 +343,20 @@ void BLE_TBT_StartAdvertising() {
     s_start_result = adv_ok ? "started" : "adv REFUSED";
 }
 
+void BLE_TBT_NoteStackReleased() {
+    // NimBLEDevice::deinit(true) destroys the server this module created, and
+    // nothing here would otherwise notice: s_server was never cleared, so
+    // every null check in this file passed on a dangling pointer and the calls
+    // behind them went into a stack that no longer existed.
+    //
+    // Called by BLE_HR_Client, which owns the deinit because it owns the
+    // disconnect that has to precede it.
+    s_server = nullptr;
+    s_advertising = false;
+    s_paused = false;
+    s_connected = false;
+}
+
 void BLE_TBT_PauseAdvertising() {
     if (s_server == nullptr || !s_advertising) {
         return;

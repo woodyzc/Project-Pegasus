@@ -789,8 +789,10 @@ void PageSettings::onViewLoad() {
     lv_obj_t *shutdown_row = lv_label_create(hr_card);
     lv_obj_set_style_text_font(shutdown_row, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(shutdown_row, lv_color_hex(COLOR_CAPTION), 0);
-    lv_label_set_text_fmt(shutdown_row, "Last disconnect on restart: %s",
-                          BLE_HR_LastShutdownText());
+    lv_label_set_text_fmt(shutdown_row, "Last disconnect on restart: %s\nSupervisor: %s",
+                          BLE_HR_LastShutdownText(), BLE_HR_LastParkText());
+    lv_label_set_long_mode(shutdown_row, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(shutdown_row, LV_PCT(100));
 
     s_hrlink_value = lv_label_create(hr_card);
     lv_obj_set_style_text_font(s_hrlink_value, &lv_font_montserrat_12, 0);

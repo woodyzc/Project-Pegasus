@@ -295,6 +295,17 @@ These were each discovered the slow way. They are not optional trivia.
   the connect that must be alone. Registration has the *opposite* constraint
   (see `BLE_TBT_Receiver.h`), which is why `BLE_TBT_Start()` and
   `BLE_TBT_StartAdvertising()` are separate calls straddling `BLE_HR_Start()`.
+- **Stop the heart-rate supervisor before deinitialising NimBLE.** `BleHrTask`
+  runs forever and calls into the stack on every pass, and `BLE_HR_Shutdown()`
+  used to call `NimBLEDevice::deinit(true)` straight into it — deleting every
+  client and server while the task still held pointers to them. The window was
+  wide open rather than narrow, because the disconnect immediately above the
+  deinit is exactly what wakes the task to try reconnecting. `s_client` and
+  `s_server` were both left dangling too, so every null check afterwards passed
+  on a corpse. The fix is cooperative parking (`vTaskDelete` is not safe — the
+  task may hold NimBLE's mutex), bounded so the Restart button cannot hang, and
+  the settings page reports whether the park actually happened. Reachable from
+  the Restart button, from deep-sleep entry, and from any `esp_restart()`.
 - **Never hand a static object to NimBLE's `setCallbacks`.** `NimBLEServer::
   setCallbacks(cb)` defaults its second argument, `deleteCallbacks`, to **true**,
   and `~NimBLEServer` then runs `delete` on whatever it was given. Every

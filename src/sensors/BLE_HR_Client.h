@@ -72,6 +72,17 @@ void BLE_HR_Shutdown();
 // whether a peer refusing to advertise afterwards is our fault or its own.
 const char *BLE_HR_LastShutdownText();
 
+// Whether the supervisor task stopped entering NimBLE before the stack was
+// deleted, and how long it took. Within this boot only -- unlike the shutdown
+// result it is not persisted, because it describes the shutdown now in
+// progress rather than the last one.
+//
+// "TIMED OUT" means the task was still inside a connect or a scan when the
+// wait ran out and the stack was released under it anyway. That is the old
+// behaviour, and it is the thing worth seeing: it is a use-after-free that
+// leaves no other trace.
+const char *BLE_HR_LastParkText();
+
 // Parses a Heart Rate Measurement (0x2A37) notification and publishes the BPM
 // to the DataCenter. Bit 0 of the flags byte selects the value format:
 // 0 => uint8 BPM, 1 => uint16 little-endian BPM.

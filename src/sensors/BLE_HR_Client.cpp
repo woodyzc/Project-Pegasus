@@ -48,6 +48,17 @@ constexpr uint16_t kScanWindowMs = 30;
 // several connection intervals at the slow end of what a watch negotiates.
 constexpr uint32_t kShutdownDisconnectMs = 1500;
 
+// How long the shutdown waits for the supervisor task to park itself before
+// tearing the stack down anyway.
+//
+// The task normally sits in vTaskDelay and parks within a tick, so this is
+// almost never spent. It is sized for the case it exists to survive: the task
+// inside a connect attempt, which can hold it for kConnectTimeoutMs. Waiting
+// the full 5s would make the Restart button feel broken, so this stops short
+// and proceeds -- which is no worse than the behaviour it replaces, where the
+// stack was torn down under the task every single time.
+constexpr uint32_t kShutdownParkMs = 2500;
+
 // Direct connects to the stored address to tolerate before throwing the
 // address away and scanning again. A peer that has simply wandered out of
 // range comes back at the same address, so a rescan on the first failure
@@ -127,6 +138,26 @@ void RecordShutdown(int code, uint32_t elapsed_ms) {
 // on it measured local bookkeeping and reported "clean in 0ms" while the
 // terminate never reached the watch.
 volatile bool s_disconnect_event = false;
+
+// ---- Stopping the supervisor before the stack goes ----
+//
+// BleHrTask runs forever and calls into NimBLE on every pass. BLE_HR_Shutdown
+// used to call NimBLEDevice::deinit(true) straight into that, which deletes
+// every client and server while the task still holds pointers to them -- and
+// the window was not a narrow one, because the disconnect immediately above
+// the deinit is exactly what wakes the task up to try reconnecting.
+//
+// Cooperative rather than vTaskDelete: the task may be inside NimBLE holding
+// its mutex, and deleting it there would leave the stack locked forever.
+volatile bool s_shutdown_requested = false;
+volatile bool s_task_parked = false;
+
+// How long the task took to park, and whether it did. On the settings page
+// beside the disconnect result, because a park that times out means the stack
+// was torn down under a live task after all -- the exact thing this exists to
+// prevent, and otherwise completely invisible.
+uint32_t s_last_park_ms = 0;
+bool s_last_park_ok = false;
 
 class ClientCallbacks : public NimBLEClientCallbacks {
     void onDisconnect(NimBLEClient *client, int reason) override {
@@ -255,6 +286,17 @@ void BleHrTask(void *pvParameters) {
     uint32_t backoff_ms = kBackoffStartMs;
 
     for (;;) {
+        // Checked before anything touches NimBLE, so that once the flag is up
+        // this task never enters the stack again. Parking forever rather than
+        // deleting itself: the caller is about to restart or deep sleep, and a
+        // task suspended in its own loop holds no NimBLE mutex.
+        if (s_shutdown_requested) {
+            s_task_parked = true;
+            for (;;) {
+                vTaskDelay(portMAX_DELAY);
+            }
+        }
+
         if (s_connected) {
             // A connected link is never dropped for going quiet.
             //
@@ -394,6 +436,46 @@ void BLE_HR_Start() {
                             kTaskCore);
 }
 
+namespace {
+
+// Asks BleHrTask to stop entering NimBLE, and waits a bounded time for it to
+// say it has. Cuts a discovery scan short on the way, since that is the one
+// thing that would otherwise hold the task for fifteen seconds.
+void ParkSupervisor() {
+    s_shutdown_requested = true;
+
+    // A scan in progress blocks the task inside getResults() for the rest of
+    // kDiscoveryScanMs. Stopping it is safe when none is running.
+    NimBLEScan *scan = NimBLEDevice::getScan();
+    if (scan != nullptr) {
+        scan->stop();
+    }
+
+    const uint32_t started = millis();
+    while (!s_task_parked && (millis() - started) < kShutdownParkMs) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    s_last_park_ok = s_task_parked;
+    s_last_park_ms = millis() - started;
+}
+
+// Deletes the stack and forgets every pointer into it.
+//
+// The nulling is not tidiness. deinit(true) destroys the client and the
+// server, and both were left dangling -- s_client because only ResetClient()
+// ever cleared it, s_server because nothing ever did. Anything that ran
+// afterwards and checked them for null found a non-null corpse.
+void ReleaseStack() {
+    NimBLEDevice::deinit(true);
+    s_client = nullptr;
+    s_connected = false;
+    s_have_peer = false;
+    BLE_TBT_NoteStackReleased();
+    vTaskDelay(pdMS_TO_TICKS(50));
+}
+
+} // namespace
+
 void BLE_HR_Shutdown() {
     // Say goodbye before the chip restarts.
     //
@@ -426,8 +508,19 @@ void BLE_HR_Shutdown() {
     // can be answered rather than guessed at. "clean in NNNms" means the
     // goodbye reached the peer and the fault is the peer's; "TIMED OUT" means
     // kShutdownDisconnectMs is too short and this end is at fault.
+    // ---- Stop the supervisor before anything else ----
+    // First, and before the disconnect below rather than after it, because the
+    // disconnect is what would otherwise send the task straight into a
+    // reconnect attempt on a stack that is about to be deleted.
+    ParkSupervisor();
+
     if (s_client == nullptr || !s_client->isConnected()) {
         RecordShutdown(1, 0);
+        // Still tear the stack down, and still forget the pointers. The old
+        // code returned here, which was survivable before a restart but leaves
+        // the deep-sleep path inconsistent with the connected one for no
+        // reason -- PrepareForSleep() comes through here too.
+        ReleaseStack();
         return;
     }
 
@@ -454,8 +547,7 @@ void BLE_HR_Shutdown() {
     // second half of the bug: it stopped the controller while the terminate
     // was still queued, so the watch never learned the link was gone and
     // therefore never resumed advertising.
-    NimBLEDevice::deinit(true);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    ReleaseStack();
 }
 
 bool BLE_HR_IsConnected() {
@@ -472,6 +564,16 @@ const char *BLE_HR_LastShutdownText() {
                  return text;
         default: return "not run";
     }
+}
+
+const char *BLE_HR_LastParkText() {
+    static char text[32];
+    if (s_last_park_ms == 0 && !s_last_park_ok) {
+        return "not run";
+    }
+    snprintf(text, sizeof(text), "%s in %ums", s_last_park_ok ? "parked" : "TIMED OUT",
+             (unsigned)s_last_park_ms);
+    return text;
 }
 
 const char *BLE_HR_StatusText() {
