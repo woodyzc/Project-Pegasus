@@ -228,6 +228,24 @@ void RefreshNavSelection() {
         return;
     }
 
+    // ---- What is actually true, gathered once ----
+    //
+    // ⚠️ GpxTrack_PointCount() is how many points are LOADED, not how many
+    // files are on the card, and the two are wildly different things here.
+    // main.cpp only calls GpxTrack_LoadFirstAvailable() when the boot mode was
+    // already GPX -- so after switching TBT to GPX nothing has ever been
+    // loaded, and a point count of zero means "we never looked", not "the card
+    // is empty". This page read it as the latter and told riders with a card
+    // full of routes that it could not find any. GpxTrack_ScanFiles() is the
+    // question that was meant, and is what Page_Map has always asked.
+    //
+    // Scanning touches the filesystem, which is why it is done here rather
+    // than left in the chain below: this function runs on a page load and on a
+    // mode button press, both rare, and nothing puts it on a timer.
+    const bool card_up = GpxTrack_CardMounted();
+    const size_t points_loaded = GpxTrack_PointCount();
+    const size_t files_on_card = (card_up && points_loaded == 0) ? GpxTrack_ScanFiles() : 0;
+
     // Decided on its own, before the note is written, and deliberately not
     // folded into the chain below. The chain picks which of seven things to
     // say; this asks one question -- would restarting change anything -- and
@@ -235,9 +253,16 @@ void RefreshNavSelection() {
     // branch for "GPX selected but no card" fires ahead of the one for "mode
     // changed" and would have hidden the button on a note that ends with the
     // word "restart".
+    //
+    // The last term is the case above: routes are sitting on the card and a
+    // restart is the only thing that will load one. Deliberately NOT shown
+    // when the card has no .gpx at all -- restarting cannot conjure a file,
+    // and a button that changes nothing is worse than no button.
     const bool mode_change_pending = (current != s_nav_mode_at_load);
-    const bool card_would_be_remounted = (current == NAV_MODE_GPX && !GpxTrack_CardMounted());
-    ShowNavRestart(mode_change_pending || card_would_be_remounted);
+    const bool card_would_be_remounted = (current == NAV_MODE_GPX && !card_up);
+    const bool route_waiting_to_load =
+        (current == NAV_MODE_GPX && card_up && points_loaded == 0 && files_on_card > 0);
+    ShowNavRestart(mode_change_pending || card_would_be_remounted || route_waiting_to_load);
 
     // First, because it explains a setting the rider did not choose. The
     // reporting for this used to live in the heart-rate card, which the ANT+
@@ -252,18 +277,26 @@ void RefreshNavSelection() {
         // the road.
         lv_label_set_text(s_nav_note, "Not built yet: no navigation will be shown in this mode.");
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
-    } else if (current == NAV_MODE_GPX && !GpxTrack_CardMounted()) {
+    } else if (current == NAV_MODE_GPX && !card_up) {
         // The one failure a rider can actually fix, and it is silent
         // otherwise: GPX with no card shows an empty map and no explanation.
         lv_label_set_text(s_nav_note, "No SD card. Insert one with a .gpx in its root "
                                       "folder, then restart.");
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
-    } else if (current == NAV_MODE_GPX && GpxTrack_PointCount() == 0) {
+    } else if (current == NAV_MODE_GPX && points_loaded == 0 && files_on_card > 0) {
+        // Routes are there; this boot simply never looked, because it came up
+        // in TBT. Not a fault, so not red -- it is a step left to take, which
+        // is the same thing the restart button below is saying.
+        lv_label_set_text_fmt(s_nav_note,
+                              "%u route%s on the card, none loaded yet. Restart to load one.",
+                              (unsigned)files_on_card, files_on_card == 1 ? "" : "s");
+        lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_ACCENT), 0);
+    } else if (current == NAV_MODE_GPX && points_loaded == 0) {
         lv_label_set_text(s_nav_note, "Card mounted, but no .gpx found in its root folder.");
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
     } else if (current == NAV_MODE_GPX && current == s_nav_mode_at_load) {
         lv_label_set_text_fmt(s_nav_note, "Active: %s, %u points.", GpxTrack_LoadedName(),
-                              (unsigned)GpxTrack_PointCount());
+                              (unsigned)points_loaded);
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_CAPTION), 0);
     } else if (current != s_nav_mode_at_load) {
         lv_label_set_text(s_nav_note, "Saved. Restart to apply.");
