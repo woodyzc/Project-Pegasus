@@ -344,10 +344,26 @@ that is the **only** thing that recovers what it costs. Measured on this board:
 
 | | with it | without it |
 |---|---|---|
-| Static RAM | 140,224 B (42.8%) | 119,388 B (36.4%) |
-| Flash | 1,657,877 B (25.3%) | 1,238,549 B (18.9%) |
+| Static RAM | 140,532 B (42.9%) | 119,688 B (36.5%) |
+| Flash | 1,896,837 B (28.9%) | 1,477,585 B (22.5%) |
 
-410KB of flash and 20KB of static RAM, essentially all of it the WiFi stack.
+419KB of flash and 20.4KB of static RAM, essentially all of it the WiFi stack.
+(Measured 2026-09-16. An earlier table here read 1,657,877 B of flash; the
+233KB since is the boot splash, the number fonts and the turn icons, none of
+which are WiFi's doing. Re-measure rather than trusting these — the ratio has
+held, the absolutes have not.)
+
+**The radio is off unless the rider starts it.** `FileServer_Start()` has
+exactly one caller, the modal behind the settings button, and nothing in
+`setup()` touches WiFi. What the table costs is paid at link time regardless:
+code in the image, and buffers reserved in BSS before `main` runs — the 64KB
+`work_mem_int` among them, which is most of that 20KB static-RAM difference.
+
+Where the flash actually goes, for whenever it does get tight: **254KB of font
+glyph bitmaps** across nine faces (the largest single one is 63.8KB) and
+**150KB of `splash_map`**, which is an uncompressed 240x320 RGB565 frame. Those
+two are 21% of the image between them and are the first places to look —
+before, say, giving up the file server.
 A *runtime* switch would recover none of it: that expense is code linked into
 the image and buffers reserved at link time, and the radio itself is already
 only started when the button is pressed, so there is no idle cost left to
