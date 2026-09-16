@@ -193,6 +193,25 @@ These were each discovered the slow way. They are not optional trivia.
   uses exponential backoff, so a wake landing mid-backoff would more likely
   have shown "--" — but if a disconnect counter is ever wanted, that is what
   would close the gap.
+- **Recording is a deliberate act, and that trade runs both ways.** Ride
+  logging used to arm itself on the first valid fix and never stop, so the
+  device wrote the drive to the start, the walk from the car and the next
+  morning's train as rides. It now starts *only* from "Start new ride", and
+  "Finish ride" or an hour without movement disarms it again.
+
+  The danger moved rather than disappeared: forgetting to start loses a whole
+  ride, where forgetting to finish only left a file to delete. What makes that
+  trap sharp is that nothing else on the dashboard betrays it — `Trip` and
+  `RideStats` subscribe to GPS directly and never consult the log, so the
+  odometer climbs, the speed moves and the averages fill in exactly as on a
+  recorded ride. The TRIP cell's caption is the whole defence: `TRIP` while
+  recording, amber `TRIP - OFF` while stopped and disarmed, red
+  `NOT RECORDING` while *moving* and disarmed. Do not quietly demote it.
+
+  An earlier attempt closed the file on the timeout but left recording armed.
+  That does not work — movement simply opened a new file, so a forgotten
+  device produced one clean ride followed by a string of junk ones. Closing
+  without disarming splits the problem up; it does not solve it.
 - **An inhibitor that blocks sleep does not block blanking.** `IdlePolicy_Stage()`
   returns BLANK *before* it consults `on_usb`, `recording` or `sleep_enabled` —
   those three only decide whether it goes further. So "never sleeps on USB" has

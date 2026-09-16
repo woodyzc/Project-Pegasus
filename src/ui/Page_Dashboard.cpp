@@ -39,6 +39,8 @@ constexpr uint32_t COLOR_BG = 0x101820;      // screen background
 constexpr uint32_t COLOR_CAPTION = 0x93A4B8; // small all-caps labels
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;   // primary readouts
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
+constexpr uint32_t COLOR_WARN = 0xFFD166;    // armed-but-idle states
+constexpr uint32_t COLOR_DANGER = 0xFF6B6B;  // moving and not recording
 
 // Turn-by-turn computed on board from the cached route rather than received
 // live from the phone. Colour rather than a word or an icon: the navigation
@@ -113,6 +115,36 @@ const uint32_t ZONE_COLORS[HR_ZONE_COUNT] = {
 lv_obj_t *s_speed_label = nullptr;
 lv_obj_t *s_speed_unit_label = nullptr;
 lv_obj_t *s_trip_label = nullptr;
+
+// ---- "You are riding and nothing is being written" ----
+//
+// Recording only starts by hand now (RideLog.h), which closed the hole where
+// the device recorded the drive to the start and the train home -- but it
+// opened a worse one in the other direction. Forgetting to press start loses a
+// whole ride, where forgetting to finish only left a file to delete.
+//
+// What makes that trap dangerous is that nothing else on this screen betrays
+// it: Trip and RideStats subscribe to GPS directly and never consult the log,
+// so the odometer climbs, the speed moves and the averages fill in exactly as
+// they would on a recorded ride. Two hours later the card is empty.
+//
+// So the TRIP caption carries the state, in the cell whose figure the rider is
+// already watching, and it escalates: nothing while recording, amber while
+// stopped and disarmed, red while MOVING and disarmed. Red is the one that
+// matters and it is deliberately loud.
+lv_obj_t *s_trip_caption = nullptr;
+
+// The last publish that showed the rider moving. Updated only inside the
+// publish branch, never from the cached speed: a fix that drops away stops
+// updating this, and the red state clears itself half a minute later rather
+// than sticking on a stale reading forever.
+uint32_t s_last_moving_ms = 0;
+
+// Movement, and then some. Traffic lights and a fix's own wander would
+// otherwise flip the caption between amber and red every few seconds, which
+// on the cell next to the speed is worse than either state alone.
+constexpr float REC_MOVING_KMH = 3.6f; // 1.0 m/s, the same line PowerManager draws
+constexpr uint32_t REC_MOVING_HOLD_MS = 30000;
 lv_obj_t *s_trip_unit_label = nullptr;
 lv_obj_t *s_clock_label = nullptr;
 lv_obj_t *s_clock_caption = nullptr;
@@ -774,6 +806,33 @@ void RenderClock() {
     }
 }
 
+// Three states, escalating. See s_trip_caption for why this lives on the TRIP
+// cell rather than anywhere more obviously its own.
+void RenderRecordingState() {
+    if (s_trip_caption == nullptr) {
+        return;
+    }
+
+    if (RideLog_IsRecording()) {
+        lv_label_set_text(s_trip_caption, "TRIP");
+        lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(COLOR_CAPTION), 0);
+        return;
+    }
+
+    // Disarmed. Whether that is worth shouting about depends entirely on
+    // whether the rider is going anywhere.
+    const bool moving_recently =
+        s_last_moving_ms != 0 && lv_tick_elaps(s_last_moving_ms) < REC_MOVING_HOLD_MS;
+
+    if (moving_recently) {
+        lv_label_set_text(s_trip_caption, "NOT RECORDING");
+        lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(COLOR_DANGER), 0);
+    } else {
+        lv_label_set_text(s_trip_caption, "TRIP - OFF");
+        lv_obj_set_style_text_color(s_trip_caption, lv_color_hex(COLOR_WARN), 0);
+    }
+}
+
 void RenderSpeedAndTrip() {
     if (s_has_speed) {
         char speed[12];
@@ -864,6 +923,11 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         // over the bike reading it.
         RenderSpeedAndTrip();
         RenderHeartRateStats();
+        // On the same one-second tick as the averages, and for the same
+        // reason: nothing publishes while the rider is stopped, so a state
+        // drawn only on a GPS publish would freeze in whichever colour it
+        // happened to be wearing when they pulled over.
+        RenderRecordingState();
         const bool fix_is_drawing =
             s_clock_from_fix_ms != 0 && lv_tick_elaps(s_clock_from_fix_ms) < 3000;
         if (!fix_is_drawing) {
@@ -877,6 +941,13 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         if (DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps))) {
             s_last_speed_kmh = gps.speed * 3.6f;
             s_has_speed = true;
+
+            // Only here, inside the publish branch, so a lost fix lets the
+            // hold expire instead of pinning the caption red on a reading
+            // that stopped being true minutes ago.
+            if (gps.fix_valid && s_last_speed_kmh >= REC_MOVING_KMH) {
+                s_last_moving_ms = lv_tick_get();
+            }
 
             // Distance is no longer accumulated here. Trip owns it and reads
             // the same GPS topic directly, so the odometer keeps counting
@@ -1783,7 +1854,7 @@ void PageDashboard::onViewLoad() {
     // 28pt against the 32 opposite: near enough that the four cells read as one
     // grid, small enough that "188.4" fits a column narrowed to give the ride
     // averages room to be legible.
-    lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, SEC_W, CELL_H, "TRIP");
+    lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, SEC_W, CELL_H, "TRIP", &s_trip_caption);
     s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_28);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
 
@@ -2034,6 +2105,7 @@ void PageDashboard::onViewUnload() {
     s_speed_label = nullptr;
     s_speed_unit_label = nullptr;
     s_trip_label = nullptr;
+    s_trip_caption = nullptr;
     s_clock_label = nullptr;
     s_clock_caption = nullptr;
     s_active_tz = nullptr;

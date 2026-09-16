@@ -35,28 +35,29 @@ constexpr uint32_t FLUSH_INTERVAL_MS = 10000;
 
 // ---- Ending a ride nobody ended ----
 //
-// Recording starts by itself on the first valid fix and, until this existed,
-// never stopped. Ride home, drop the bike computer in a bag, and it went on
-// writing: the GPX picked up the walk to the door, the drive to the shops and
-// the train the next morning, all as one ride. It also held deep sleep off
-// the whole time, because a device that sleeps mid-ride loses the ride.
+// The safety net under the rider's own "finish ride". Recording only ever
+// starts by hand now, but nothing makes them stop it, and a device left
+// recording holds deep sleep off for as long as it lasts.
 //
-// So: this long with no movement and the ride is over. The file is closed
-// properly and the next time the rider actually moves, a NEW ride begins --
-// s_failed stays clear precisely so that can happen.
+// This long with no movement and the ride is over: the file is closed and
+// recording is DISARMED, so moving again does not quietly start a new one.
+// That is the whole reason it closes the hole -- a device in a bag stays
+// silent through the drive home and the next morning's train whether or not
+// deep sleep is available, which matters because deep sleep ships switched
+// off and its wake source has never been proven.
 //
-// The number is a trade with no right answer, and both directions are real.
-// Too short splits one ride into two files across a long lunch. Too long is
-// the behaviour this replaces. Fifteen minutes sits above any traffic light,
-// any puncture and most café stops, and below the point where a forgotten
-// device has written anything much. Raise it if rides here keep getting cut
-// in half; it is meant to be tuned.
-constexpr uint32_t AUTO_END_AFTER_MS = 15u * 60u * 1000u;
+// An hour, not the fifteen minutes this started at. The number only has to
+// cover "the rider forgot", because "the rider is done" is a button now, and
+// the cost of being wrong is asymmetric: too short silently stops recording
+// on a rider who is still out, and the twenty extra minutes of running cost
+// about 17mAh. Long lunches, punctures and waiting for company all fit under
+// an hour; almost nothing that is genuinely still a ride does not.
+//
+// The residual risk is a stop longer than this -- the rider rides on and the
+// rest is not written. That is what the dashboard's REC indicator and the
+// "not recording" nudge exist to catch (Page_Dashboard).
+constexpr uint32_t AUTO_END_AFTER_MS = 60u * 60u * 1000u;
 
-// Below this the rider is stopped, not riding. Same threshold PowerManager
-// uses to decide the screen should stay awake, and for the same reason: it
-// has to sit above the wander a stationary receiver reports, or a parked bike
-// looks like it is creeping along and the ride never ends.
 constexpr float AUTO_END_MOVING_MPS = 1.0f;
 
 typedef struct {
@@ -85,6 +86,7 @@ typedef struct {
 typedef enum {
     RIDELOG_CMD_NONE = 0, // an ordinary trackpoint
     RIDELOG_CMD_NEW_RIDE,
+    RIDELOG_CMD_FINISH,
 } RideLogCommand_t;
 
 QueueHandle_t s_queue = nullptr;
@@ -101,6 +103,25 @@ volatile bool s_recording = false;
 // false, so a device in a bag stops updating this and the ride ends on its
 // own. That is exactly the scenario this whole mechanism exists for.
 volatile uint32_t s_last_motion_ms = 0;
+
+// ---- Recording is a deliberate act ----
+//
+// False at boot, and nothing but the rider's own "start ride" sets it true.
+// Before this, the first valid fix opened a file, which meant the device
+// recorded the drive to the trailhead, the walk from the car, and -- because
+// nothing ever stopped it -- the train the following morning, all as rides.
+//
+// Owned by the writer task exactly like s_recording. The UI never writes it:
+// RideLog_StartNewRide() and RideLog_FinishRide() post commands into the same
+// queue the points travel through, so a press and a trackpoint already in
+// flight resolve in the order they were issued. Writing it directly from the
+// LVGL thread would break the one ordering guarantee this file has.
+//
+// volatile for the same reason s_recording is: the dashboard reads it through
+// RideLog_IsArmed() once a second inside a loop that does not otherwise touch
+// this translation unit, and a compiler is entitled to hoist that read out
+// and never look again.
+volatile bool s_armed = false;
 
 // How many rides have been closed by the timeout since boot. On the panel,
 // because an auto-end is otherwise silent -- the rider would find out at the
@@ -269,11 +290,28 @@ void CloseRide() {
 void StartNewRide() {
     CloseRide();
 
+    // The only thing that ever arms recording. Nothing else -- not a fix, not
+    // movement, not a reboot -- puts the device back into a state where it
+    // writes to the card.
+    s_armed = true;
+
     // A deliberate gesture is the one moment a card that refused us earlier is
     // worth another attempt. Without this, one failed open early in the day
     // would leave the rider unable to record anything again until they power
     // cycle, and nothing on the panel would explain why.
     s_failed = false;
+}
+
+// The rider says the ride is over. Closes the file and, unlike every other
+// path that closes one, leaves recording disarmed: movement will not restart
+// it, so the drive home and the next morning's commute are not written.
+//
+// Deliberately does NOT clear s_failed. A card that refused the last open is
+// still refusing; the gesture that deserves a retry is starting a ride, not
+// ending one.
+void FinishRide() {
+    CloseRide();
+    s_armed = false;
 }
 
 // Reads the file back through GpxParse -- the same parser that loads routes
@@ -293,8 +331,12 @@ void WriterTask(void *pv) {
                 StartNewRide();
                 continue;
             }
+            if (point.command == RIDELOG_CMD_FINISH) {
+                FinishRide();
+                continue;
+            }
 
-            if (!s_failed && !s_recording) {
+            if (!s_failed && s_armed && !s_recording) {
                 if (!OpenFile(point, "Pegasus ride")) {
                     // Giving up for this power-on rather than retrying. A card
                     // that would not take the file is a steady state, not a
@@ -346,15 +388,17 @@ void WriterTask(void *pv) {
             //
             // The footer is already written after every point, so what it
             // closes is a complete document.
-            CloseRide();
+            // The same close the rider's own "finish ride" takes, disarm and
+            // all. Leaving it armed was the earlier design and it did not
+            // work: movement simply opened a new file, so a forgotten device
+            // produced a clean ride followed by a string of junk ones instead
+            // of one long junk ride. Closing without disarming splits the
+            // problem up; it does not solve it.
+            FinishRide();
             s_auto_end_count++;
 
-            // s_failed is deliberately NOT set. The next time the rider moves,
-            // OnGpsPublished queues a point, the open path above runs and a
-            // fresh ride begins -- which is the whole point of ending this
-            // one. (CloseRide() has already cleared s_has_last, so that first
-            // point is kept rather than dropped for sitting close to the last
-            // point of the previous ride.)
+            // s_failed is deliberately NOT set: the card is fine, the rider
+            // simply stopped. Pressing "start ride" must still work.
         }
     }
 }
@@ -489,6 +533,24 @@ bool RideLog_StartNewRide() {
     // all. A full queue means the writer is badly behind, which the caller
     // reports rather than waits out.
     return xQueueSend(s_queue, &cmd, 0) == pdTRUE;
+}
+
+bool RideLog_FinishRide() {
+    if (s_queue == nullptr) {
+        return false;
+    }
+
+    RideLogPoint_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.command = RIDELOG_CMD_FINISH;
+    // Through the queue for the same reason the command above is: a trackpoint
+    // published a millisecond before the press must land in the file before it
+    // closes, not after.
+    return xQueueSend(s_queue, &cmd, 0) == pdTRUE;
+}
+
+bool RideLog_IsArmed() {
+    return s_armed;
 }
 
 uint32_t RideLog_AutoEndCount() {

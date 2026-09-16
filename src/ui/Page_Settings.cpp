@@ -158,6 +158,38 @@ void OnStartNewRideClicked(lv_event_t *e) {
 }
 
 
+void OnFinishRideClicked(lv_event_t *e) {
+    (void)e;
+    // Snapshot first, for the same reason the start handler does it: this is
+    // the last instant the figures exist as a ride.
+    RideSummary_t ending;
+    RideSummary_Capture(&ending);
+
+    const bool stopped = RideLog_FinishRide();
+
+    if (stopped) {
+        lv_label_set_text(s_trip_status,
+                          "Ride finished. Nothing is being recorded until you "
+                          "start another.");
+        lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_OK), 0);
+    } else {
+        // The queue was full, which means the writer is badly behind. Saying
+        // so matters more here than anywhere else: the rider believes they
+        // have stopped recording and they have not.
+        lv_label_set_text(s_trip_status,
+                          "Could not finish the ride - the card writer is busy. "
+                          "Still recording; try again.");
+        lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_DANGER), 0);
+    }
+
+    // Deliberately leaves the odometer and the averages alone. Finishing says
+    // the ride is over, not that it never happened -- the rider should still
+    // be able to read what it came to. "Start new ride" is what clears them.
+    if (!RideSummary_IsEmpty(&ending)) {
+        Overlay_RideSummary_Show(&ending, true);
+    }
+}
+
 void RefreshNavSelection() {
     const NavMode_t current = Settings_GetNavMode();
 
@@ -390,17 +422,23 @@ void InfoTimerCallback(lv_timer_t *timer) {
         if (RideLog_IsRecording()) {
             lv_label_set_text_fmt(s_ridelog_value, "Ride log: %s (%u pts)", RideLog_FileName(),
                                   (unsigned)RideLog_PointCount());
-        } else if (RideLog_AutoEndCount() > 0) {
-            // Not the same state as "waiting for fix", and saying so matters:
-            // a rider who stops for twenty minutes comes back to a device that
-            // is no longer recording, and the difference between "it gave up
-            // because you stopped" and "it never got a fix" is the difference
-            // between riding on and hunting for a fault.
-            lv_label_set_text_fmt(s_ridelog_value,
-                                  "Ride log: ended after 15 min still (%ux). Moving starts a new one.",
-                                  (unsigned)RideLog_AutoEndCount());
+        } else if (!RideLog_IsArmed()) {
+            // Disarmed is not "waiting for fix", and conflating them is how a
+            // rider spends a ride hunting for a GPS fault that was never
+            // there. Says which of the two ways it got here, because "I
+            // pressed finish" and "it gave up while I was at lunch" call for
+            // different reactions.
+            if (RideLog_AutoEndCount() > 0) {
+                lv_label_set_text_fmt(s_ridelog_value,
+                                      "Ride log: off - ended after an hour still (%ux). "
+                                      "Start a ride to record again.",
+                                      (unsigned)RideLog_AutoEndCount());
+            } else {
+                lv_label_set_text(s_ridelog_value,
+                                  "Ride log: off. Start a ride to record.");
+            }
         } else {
-            lv_label_set_text(s_ridelog_value, "Ride log: waiting for fix");
+            lv_label_set_text(s_ridelog_value, "Ride log: armed, waiting for fix");
         }
     }
 }
@@ -764,6 +802,26 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_text_font(reset_label, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(reset_label, lv_color_hex(COLOR_OK), 0);
     lv_obj_center(reset_label);
+
+    // The other half of the pair. Below rather than beside it: two buttons
+    // sharing a row on a 240px panel are two buttons a gloved thumb cannot
+    // tell apart, and one of this pair silently stops recording.
+    //
+    // Deliberately not a warning colour either. Finishing a ride is the
+    // ordinary end of one, done as often as starting, and nothing it does is
+    // destructive -- the file is closed complete and the summary is shown.
+    lv_obj_t *finish_btn = lv_btn_create(trip_card);
+    lv_obj_set_width(finish_btn, LV_PCT(100));
+    lv_obj_set_style_bg_color(finish_btn, lv_color_hex(0x14242E), 0);
+    lv_obj_set_style_bg_color(finish_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(finish_btn, 0, 0);
+    lv_obj_add_event_cb(finish_btn, OnFinishRideClicked, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *finish_label = lv_label_create(finish_btn);
+    lv_label_set_text(finish_label, LV_SYMBOL_STOP "  Finish ride");
+    lv_obj_set_style_text_font(finish_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(finish_label, lv_color_hex(COLOR_ACCENT), 0);
+    lv_obj_center(finish_label);
 
     lv_obj_t *summary_btn = lv_btn_create(trip_card);
     lv_obj_set_width(summary_btn, LV_PCT(100));
