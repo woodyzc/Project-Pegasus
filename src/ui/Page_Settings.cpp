@@ -631,41 +631,84 @@ void PageSettings::onViewLoad() {
     // holding controls that are touched on every single ride -- start
     // and finish -- where everything below it is set once and left.
     lv_obj_t *trip_card = MakeCard(body, "RIDE");
-    lv_obj_t *reset_btn = lv_btn_create(trip_card);
-    lv_obj_set_width(reset_btn, LV_PCT(100));
+    // ---- Start and finish, side by side and square ----
+    //
+    // 98px each. The card's inside is 204 wide -- 240 of panel, less the
+    // body's 8 a side, less the card's own 10 a side -- so two squares and an
+    // 8px gap is 98 + 8 + 98. The height follows from the width because they
+    // are square, not because 98 was wanted vertically.
+    //
+    // They were stacked and full-width before, on the reasoning that two
+    // buttons sharing a row are two a gloved thumb cannot tell apart. Square
+    // and side by side answers that better than stacking did: 98px is a far
+    // larger target than the 40-odd a full-width row gave, and left-vs-right
+    // is a distinction a thumb makes without looking, where upper-vs-lower on
+    // two identical bars is not.
+    //
+    // Colour still carries which is which -- green starts, blue finishes --
+    // and neither is a warning colour. Finishing a ride is the ordinary end of
+    // one, done as often as starting, and nothing it does is destructive: the
+    // file is closed complete and the summary is shown.
+    constexpr lv_coord_t RIDE_BTN = 98;
+
+    lv_obj_t *ride_row = lv_obj_create(trip_card);
+    lv_obj_remove_style_all(ride_row);
+    lv_obj_set_width(ride_row, LV_PCT(100));
+    lv_obj_set_height(ride_row, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(ride_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(ride_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ride_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t *reset_btn = lv_btn_create(ride_row);
+    lv_obj_set_size(reset_btn, RIDE_BTN, RIDE_BTN);
     // Green rather than the red it wore as "Reset trip distance". The gesture
     // is now something the rider does at the start of every ride, and a
     // warning colour on a routine action is a warning nobody reads.
     lv_obj_set_style_bg_color(reset_btn, lv_color_hex(0x16281E), 0);
     lv_obj_set_style_bg_color(reset_btn, lv_color_hex(COLOR_OK), LV_STATE_PRESSED);
     lv_obj_set_style_shadow_width(reset_btn, 0, 0);
+    lv_obj_set_style_pad_all(reset_btn, 0, 0);
+    // Icon over word rather than beside it: a square is the one shape where
+    // stacking them costs nothing, and it lets the glyph be large enough to
+    // recognise before the word is read.
+    lv_obj_set_flex_flow(reset_btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(reset_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(reset_btn, 6, 0);
     lv_obj_add_event_cb(reset_btn, OnStartNewRideClicked, LV_EVENT_CLICKED, nullptr);
 
+    lv_obj_t *reset_icon = lv_label_create(reset_btn);
+    lv_label_set_text(reset_icon, LV_SYMBOL_PLAY);
+    lv_obj_set_style_text_font(reset_icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(reset_icon, lv_color_hex(COLOR_OK), 0);
+
     lv_obj_t *reset_label = lv_label_create(reset_btn);
-    lv_label_set_text(reset_label, LV_SYMBOL_PLAY "  Start new ride");
+    lv_label_set_text(reset_label, "New ride");
     lv_obj_set_style_text_font(reset_label, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(reset_label, lv_color_hex(COLOR_OK), 0);
-    lv_obj_center(reset_label);
 
-    // The other half of the pair. Below rather than beside it: two buttons
-    // sharing a row on a 240px panel are two buttons a gloved thumb cannot
-    // tell apart, and one of this pair silently stops recording.
-    //
-    // Deliberately not a warning colour either. Finishing a ride is the
-    // ordinary end of one, done as often as starting, and nothing it does is
-    // destructive -- the file is closed complete and the summary is shown.
-    lv_obj_t *finish_btn = lv_btn_create(trip_card);
-    lv_obj_set_width(finish_btn, LV_PCT(100));
+    lv_obj_t *finish_btn = lv_btn_create(ride_row);
+    lv_obj_set_size(finish_btn, RIDE_BTN, RIDE_BTN);
     lv_obj_set_style_bg_color(finish_btn, lv_color_hex(0x14242E), 0);
     lv_obj_set_style_bg_color(finish_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
     lv_obj_set_style_shadow_width(finish_btn, 0, 0);
+    lv_obj_set_style_pad_all(finish_btn, 0, 0);
+    lv_obj_set_flex_flow(finish_btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(finish_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(finish_btn, 6, 0);
     lv_obj_add_event_cb(finish_btn, OnFinishRideClicked, LV_EVENT_CLICKED, nullptr);
 
+    lv_obj_t *finish_icon = lv_label_create(finish_btn);
+    lv_label_set_text(finish_icon, LV_SYMBOL_STOP);
+    lv_obj_set_style_text_font(finish_icon, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(finish_icon, lv_color_hex(COLOR_ACCENT), 0);
+
     lv_obj_t *finish_label = lv_label_create(finish_btn);
-    lv_label_set_text(finish_label, LV_SYMBOL_STOP "  Finish ride");
+    lv_label_set_text(finish_label, "Finish");
     lv_obj_set_style_text_font(finish_label, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(finish_label, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_center(finish_label);
 
     lv_obj_t *summary_btn = lv_btn_create(trip_card);
     lv_obj_set_width(summary_btn, LV_PCT(100));
