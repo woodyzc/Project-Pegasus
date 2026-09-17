@@ -73,9 +73,13 @@ void BLE_HR_Shutdown();
 const char *BLE_HR_LastShutdownText();
 
 // Whether the supervisor task stopped entering NimBLE before the stack was
-// deleted, and how long it took. Within this boot only -- unlike the shutdown
-// result it is not persisted, because it describes the shutdown now in
-// progress rather than the last one.
+// deleted, and how long it took, carried across the reboot in NVS beside the
+// disconnect result.
+//
+// It has to be persisted, and that is not an optimisation. Parking happens at
+// shutdown, which is the instant before a reboot, so a value kept in RAM is
+// wiped by the very event it reports on -- the first version was boot-local
+// and could read nothing but "not run" forever.
 //
 // "TIMED OUT" means the task was still inside a connect or a scan when the
 // wait ran out and the stack was released under it anyway. That is the old

@@ -117,6 +117,14 @@ volatile int s_failed_connects = 0;
 constexpr char kNvsNamespace[] = "pegasus";
 constexpr char kNvsShutdownCode[] = "ble_sd_code";
 constexpr char kNvsShutdownMs[] = "ble_sd_ms";
+// The park result has to be persisted for the same reason the shutdown result
+// is, and it is not an optimisation: parking happens at shutdown, which is the
+// instant before a reboot, so a value kept only in RAM is wiped by the very
+// event it describes. Left as a boot-local static it could never read anything
+// but "not run" -- which is exactly what it did, on the first board it was
+// asked.
+constexpr char kNvsParkOk[] = "ble_pk_ok";
+constexpr char kNvsParkMs[] = "ble_pk_ms";
 int s_last_shutdown_code = 0;
 uint32_t s_last_shutdown_ms = 0;
 
@@ -127,6 +135,21 @@ void RecordShutdown(int code, uint32_t elapsed_ms) {
     }
     prefs.putInt(kNvsShutdownCode, code);
     prefs.putUInt(kNvsShutdownMs, elapsed_ms);
+    prefs.end();
+}
+
+// Written as soon as the park finishes rather than at the end of the shutdown,
+// because the paths out of BLE_HR_Shutdown() are not all the same and this
+// must survive every one of them.
+void RecordPark(bool ok, uint32_t elapsed_ms) {
+    Preferences prefs;
+    if (!prefs.begin(kNvsNamespace, false)) {
+        return;
+    }
+    // 1 or 2 rather than a bool, so "never written" is distinguishable from
+    // "written, and it timed out".
+    prefs.putUChar(kNvsParkOk, ok ? 2 : 1);
+    prefs.putUInt(kNvsParkMs, elapsed_ms);
     prefs.end();
 }
 
@@ -158,6 +181,8 @@ volatile bool s_task_parked = false;
 // prevent, and otherwise completely invisible.
 uint32_t s_last_park_ms = 0;
 bool s_last_park_ok = false;
+// 0 = never written, 1 = timed out, 2 = parked. Restored from NVS at init.
+uint8_t s_last_park_code = 0;
 
 class ClientCallbacks : public NimBLEClientCallbacks {
     void onDisconnect(NimBLEClient *client, int reason) override {
@@ -408,7 +433,10 @@ void BLE_HR_Init() {
         if (prefs.begin(kNvsNamespace, false)) {
             s_last_shutdown_code = prefs.getInt(kNvsShutdownCode, 0);
             s_last_shutdown_ms = prefs.getUInt(kNvsShutdownMs, 0);
+            s_last_park_code = prefs.getUChar(kNvsParkOk, 0);
+            s_last_park_ms = prefs.getUInt(kNvsParkMs, 0);
             prefs.putInt(kNvsShutdownCode, 0);
+            prefs.putUChar(kNvsParkOk, 0);
             prefs.end();
         }
     }
@@ -457,6 +485,7 @@ void ParkSupervisor() {
     }
     s_last_park_ok = s_task_parked;
     s_last_park_ms = millis() - started;
+    RecordPark(s_last_park_ok, s_last_park_ms);
 }
 
 // Deletes the stack and forgets every pointer into it.
@@ -568,10 +597,10 @@ const char *BLE_HR_LastShutdownText() {
 
 const char *BLE_HR_LastParkText() {
     static char text[32];
-    if (s_last_park_ms == 0 && !s_last_park_ok) {
+    if (s_last_park_code == 0) {
         return "not run";
     }
-    snprintf(text, sizeof(text), "%s in %ums", s_last_park_ok ? "parked" : "TIMED OUT",
+    snprintf(text, sizeof(text), "%s in %ums", s_last_park_code == 2 ? "parked" : "TIMED OUT",
              (unsigned)s_last_park_ms);
     return text;
 }
