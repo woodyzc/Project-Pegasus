@@ -255,6 +255,14 @@ These were each discovered the slow way. They are not optional trivia.
   a first fix), a finished ride sleeps after five minutes, and a device that
   has recorded nothing waits thirty — because it has been told nothing and may
   be waiting on a rider who has not started yet.
+- **`PrepareForSleep()` unmounts the card without closing the ride file, and
+  gets away with it only because of the sleep gate.** `SD_MMC.end()` runs with
+  the writer task still alive and nothing closing anything — safe today purely
+  because deep sleep requires `!RideLog_IsArmed()`, and disarmed means
+  `CloseRide()` has already run. Loosen that gate and this becomes an unmount
+  under an open file, with no compile error and no obvious symptom beyond a
+  truncated GPX. Either keep the gate or make the sleep path close the log the
+  way the restart path does.
 - **An inhibitor that blocks sleep does not block blanking.** `IdlePolicy_Stage()`
   returns BLANK *before* it consults ride state or `sleep_enabled` — those
   only decide whether it goes further. So "never sleeps on USB" has
