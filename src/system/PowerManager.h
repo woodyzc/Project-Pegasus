@@ -15,20 +15,28 @@
 // and the wake source.
 //
 // ---------------------------------------------------------------------------
-// Deep sleep is off by default, and that is not timidity
+// Deep sleep works, and waking from it works
 // ---------------------------------------------------------------------------
-// Waking depends on the FT6336G pulling its interrupt line low when it is
-// touched, and on that line still meaning something after the ESP32 has let
-// every non-RTC pin go. Neither has ever been tested on this board, and there
-// is no BAT button here to fall back on -- the target board has one, this one
-// does not (CLAUDE.md section 2).
+// Verified 2026-09-17: the device slept overnight, a touch woke it, and the
+// settings page read "Last reset: Deep sleep". That single line proves the
+// whole chain -- the FT6336G pulls its interrupt line low when touched, that
+// line still means something after the ESP32 has let every non-RTC pin go
+// (which is what the gpio_hold_en on TOUCH_RST_PIN in EnterSleep is for, and
+// it had only ever been reasoned about), and setup() brings everything back:
+// the card remounted, the PSRAM buffers reallocated, the pages rebuilt.
 //
-// The failure mode is mild, which is why shipping it behind a switch is
-// reasonable rather than reckless: a wake source that does not work leaves a
-// device that looks switched off, and a power cycle brings it back. It is not
-// a brick. But it is a nasty surprise on a ride, so the rider opts in.
+// It stays behind a switch anyway, and that is now a choice about development
+// rather than about risk: a sleeping board's USB-Serial-JTAG is powered down
+// with the rest of the digital domain, so the port disappears and it cannot be
+// flashed or have its coredump read until something wakes it. On a bench where
+// the board is reflashed twenty times a day that is a nuisance; on a bike it
+// is the entire point.
 //
-// Dimming and blanking have no such risk and are always on.
+// There is no BAT button here to fall back on -- the target board has one,
+// this one does not (CLAUDE.md section 2) -- so touch is the only way back.
+// That is now a tested statement rather than a hopeful one.
+//
+// Dimming and blanking carry no such consideration and are always on.
 // ---------------------------------------------------------------------------
 
 // The thresholds, exposed so the settings page can count down to the last one

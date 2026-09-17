@@ -99,8 +99,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     task: it changes the backlight and puts a widget on screen, and LVGL here
     has no lock, so `PowerManager` runs on an LVGL timer instead
     (`src/system/PowerManager.h`). The decision logic is pure and host-tested in
-    `src/system/IdlePolicy.h`; deep sleep is opt-in because the wake source has
-    never been proven. IMU-based motion detection is still absent, because the
+    `src/system/IdlePolicy.h`. Deep sleep and its touch wake are **proven** —
+    2026-09-17, slept overnight, woke on a touch, "Last reset: Deep sleep". It
+    stays opt-in for a bench reason rather than a risk one: a sleeping board's
+    USB-Serial-JTAG is powered down with the rest of the digital domain, so the
+    port disappears and it cannot be flashed until something wakes it. IMU-based motion detection is still absent, because the
     board on the bench has no IMU.
 - **Core 1 (UI & Life Cycle Core)**:
   - Task 1: LVGL rendering loop (`lv_timer_handler()`).
@@ -255,6 +258,17 @@ These were each discovered the slow way. They are not optional trivia.
   a first fix), a finished ride sleeps after five minutes, and a device that
   has recorded nothing waits thirty — because it has been told nothing and may
   be waiting on a rider who has not started yet.
+- **Deep sleep and its wake source work.** Verified 2026-09-17: the board
+  slept overnight on USB, a touch woke it, and the panel read `Last reset:
+  Deep sleep (boot 8)` with the card remounted and the PSRAM buffers back.
+  That one line proves the whole chain, including the `gpio_hold_en` on
+  `TOUCH_RST_PIN` in `EnterSleep()` — without it the ESP32 releases every
+  non-RTC pin on the way down, resets the touch controller, and nothing is left
+  to pull the interrupt line. That hold had only ever been reasoned about.
+
+  It also proves the USB gate really was dead weight: the board was plugged in
+  the whole time and slept anyway, which is exactly what removing that gate was
+  meant to allow.
 - **`PrepareForSleep()` unmounts the card without closing the ride file, and
   gets away with it only because of the sleep gate.** `SD_MMC.end()` runs with
   the writer task still alive and nothing closing anything — safe today purely

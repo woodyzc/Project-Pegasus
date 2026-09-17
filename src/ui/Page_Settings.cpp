@@ -1101,7 +1101,8 @@ void PageSettings::onViewLoad() {
     // The two stages that always happen are described rather than offered:
     // dimming and blanking carry no risk, and nothing is gained by letting the
     // rider switch off the single biggest saving on the board. Only the last
-    // step, which depends on an untested wake source, is a choice.
+    // step is a choice for a different reason: it works, but a sleeping board
+    // cannot be flashed until something wakes it.
     lv_obj_t *power_card = MakeCard(body, "POWER");
 
     lv_obj_t *power_row = lv_obj_create(power_card);
@@ -1128,10 +1129,11 @@ void PageSettings::onViewLoad() {
     lv_obj_t *power_hint = lv_label_create(power_card);
     lv_label_set_text(power_hint,
                       "Screen dims after 1 min and goes dark after 3, always.\n"
-                      "Deep sleep follows at 5 min, and only a touch wakes it. That "
-                      "wake has never been tested here: if it fails, the board looks "
-                      "switched off until you unplug it.\n"
-                      "Never sleeps on USB, mid-ride, or during file transfer.");
+                      "Deep sleep follows once a ride has finished, and only a touch "
+                      "wakes it. Tested: the board slept overnight and a touch brought "
+                      "it back.\n"
+                      "Never sleeps mid-ride or during file transfer. Waits 30 min "
+                      "instead of 5 if no ride has been recorded.");
     lv_obj_set_style_text_font(power_hint, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(power_hint, lv_color_hex(COLOR_CAPTION), 0);
     lv_label_set_long_mode(power_hint, LV_LABEL_LONG_WRAP);
