@@ -474,5 +474,11 @@ tested.
 `build.gradle.kts` declares the SDK only inside `if (withMapbox)` — a default
 build cannot produce them. The app's own README had it right the whole time
 ("Compiles, but nothing calls it"), and the stale claim was the one quoted to
-the user as fact. What is outstanding is a **caller** for `MapboxRouteSource`,
-not a working build.
+the user as fact.
+
+Nor is a caller missing: `TbtService.ensureRouteSource()` calls
+`RouteSources.create()` and wires both `onRoutePlanned` (uploads the polyline)
+and `onInstruction` (sends each live turn). `RouteSources` is build-variant
+selected — `src/nomapbox` returns null, `src/mapbox` returns the real thing —
+so a default build has no source, not no caller. What is outstanding is an
+account with two tokens, and nothing else.
