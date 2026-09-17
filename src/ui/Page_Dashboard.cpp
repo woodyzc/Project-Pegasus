@@ -1174,6 +1174,12 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
             // Icon steps with the charge so the corner reads at a glance
             // without parsing the number.
+            // ⚠️ The charge icon is believed unreachable on this board.
+            // battery.on_usb is a 4500mV threshold on a reading of the PACK
+            // voltage, and a 1S charger terminates at 4.2V -- observed here as
+            // a plain battery icon at 95% with the cable in. Deep sleep used
+            // to hang off the same flag and was moved off it; this and the red
+            // low-battery suppression below are what still do.
             const char *icon = LV_SYMBOL_BATTERY_EMPTY;
             if (battery.on_usb) {
                 icon = LV_SYMBOL_CHARGE;

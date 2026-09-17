@@ -75,9 +75,14 @@ lv_obj_t *s_power_status = nullptr;
 //     only half a volt apart.
 //   * is `on usb` ever true? It is a threshold at 4500mV on this same reading,
 //     and a 1S charger terminates at 4.2V -- so if the ADC senses the pack
-//     rather than VBUS, that flag can never fire, and it is the only thing
-//     stopping the board deep-sleeping while plugged into the laptop that is
-//     flashing it. Read this with the cable in before trusting deep sleep.
+//     rather than VBUS, that flag can never fire. The dashboard's status bar
+//     agrees that it does not: plugged in, it shows a plain battery icon where
+//     on_usb would give it LV_SYMBOL_CHARGE.
+//
+//     It no longer gates deep sleep -- that moved to ride state, exactly
+//     because a flag that can never be true is not a gate -- so what is left
+//     riding on it is cosmetic: the charge icon, and suppressing the red
+//     low-battery colour while charging. Worth fixing, not worth hurrying.
 lv_obj_t *s_power_battery = nullptr;
 lv_obj_t *s_hrlink_value = nullptr;
 lv_obj_t *s_tbtlink_value = nullptr;
@@ -538,15 +543,15 @@ void RefreshPowerStatus() {
     }
     // The clock line goes on BOTH branches, and that is the whole point of it
     // being a separate line. It first went only on the "nothing is blocking
-    // sleep" branch, which is the branch almost nobody ever sees: deep sleep
-    // ships switched off and the board is usually on USB, so InhibitText()
-    // returns something nearly always and the diagnostic was invisible.
+    // sleep" branch, which was then the branch almost nobody ever saw --
+    // InhibitText() returned something nearly always, so the diagnostic was
+    // invisible on the one screen built to show it.
     //
-    // The two are about different things. Those inhibitors stop DEEP SLEEP.
-    // Dimming, blanking and the downclock that rides along with blanking
-    // happen regardless -- "Never sleeps on USB" does not mean "never
-    // blanks on USB". Reporting the clock only when sleep was possible tied
-    // it to a condition it has nothing to do with.
+    // The two are about different things, and that has not changed even though
+    // the inhibitors have. Those stop DEEP SLEEP; dimming, blanking and the
+    // downclock that rides along with blanking happen regardless. Reporting
+    // the clock only when sleep was possible tied it to a condition it has
+    // nothing to do with.
     const char *blocked = PowerManager_InhibitText();
     if (blocked[0] != '\0') {
         lv_label_set_text_fmt(s_power_status, "Screen: %s @ %uMHz (idled %ux).\nWill not sleep: %s.",
@@ -850,9 +855,10 @@ void PageSettings::onViewLoad() {
 
     s_trip_status = lv_label_create(trip_card);
     lv_label_set_text(s_trip_status,
-                      "Press at the start of a ride. Clears the odometer and the "
-                      "averages, starts a new file on the card, and reports what "
-                      "the last ride came to.");
+                      "New ride clears the odometer and the averages; the next fix "
+                      "opens a file on the card.\n"
+                      "Finish closes it and stops recording until you start another. "
+                      "An hour without moving does the same.");
     lv_obj_set_style_text_font(s_trip_status, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_CAPTION), 0);
     lv_label_set_long_mode(s_trip_status, LV_LABEL_LONG_WRAP);

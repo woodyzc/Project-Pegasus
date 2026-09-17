@@ -169,14 +169,29 @@ void Settings_Init() {
 
     // ---- Reset diagnostics ----
     // Read before anything else can restart us. A genuine power-on starts the
-    // count again, so pulling the USB lead is how you clear it; every other
-    // reason means the previous run ended without being asked to, and the
-    // count is what separates one bad boot from a loop.
+    // count again, so pulling the USB lead is how you clear it; the count is
+    // what separates one bad boot from a loop.
+    //
+    // ⚠️ A deep-sleep wake does NOT count, and that exception is the whole
+    // reason this is not a one-liner. The rule used to be "anything but a
+    // power-on means the previous run ended without being asked to" -- which
+    // was true right up until deep sleep started working, because until then
+    // nothing ever ended a run deliberately. Now a rider who sleeps the device
+    // every night would add a tick every night, and a real reboot loop would
+    // be invisible against that background. Counting only the endings nobody
+    // asked for is what makes the number mean anything.
     const esp_reset_reason_t reason = esp_reset_reason();
     s_reset_text = ResetReasonText(reason, &s_reset_abnormal);
 
     if (s_ready) {
-        s_boot_count = (reason == ESP_RST_POWERON) ? 1 : s_prefs.getUInt(KEY_BOOT_COUNT, 0) + 1;
+        if (reason == ESP_RST_POWERON) {
+            s_boot_count = 1;
+        } else if (reason == ESP_RST_DEEPSLEEP) {
+            // Carried, not raised: the previous run ended exactly as asked.
+            s_boot_count = s_prefs.getUInt(KEY_BOOT_COUNT, 1);
+        } else {
+            s_boot_count = s_prefs.getUInt(KEY_BOOT_COUNT, 0) + 1;
+        }
         s_prefs.putUInt(KEY_BOOT_COUNT, s_boot_count);
     } else {
         s_boot_count = 1;
