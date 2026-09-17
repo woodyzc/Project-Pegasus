@@ -462,8 +462,17 @@ explains the split. Google Maps notifications work and are verified on a real
 route, but Maps ships the arrow as a bitmap and a notification carries no
 geometry at all, so that path can drive the live display and can never supply
 the offline fallback. The Mapbox Navigation SDK plans the route, so it yields
-structured maneuvers and the polyline together -- but it is **opt-in and has
-never been compiled here**, because Mapbox serves it from a repository that
-refuses anonymous access and needs an account with two separate tokens. Build
-it with `-PwithMapbox=true` and without `--offline`. Everything that did not
-need the SDK is outside it and unit tested.
+structured maneuvers and the polyline together -- but it is **opt-in**, because
+Mapbox serves it from a repository that refuses anonymous access and needs an
+account with two separate tokens. Build it with `-PwithMapbox=true` and without
+`--offline`. Everything that did not need the SDK is outside it and unit
+tested.
+
+⚠️ It **has** been compiled, whatever this paragraph used to say.
+`phone/android/app/build/intermediates/merged_native_libs/debug/` holds
+`libmapbox-common.so` and `libmapbox-maps.so` dated 2026-09-12, and
+`build.gradle.kts` declares the SDK only inside `if (withMapbox)` — a default
+build cannot produce them. The app's own README had it right the whole time
+("Compiles, but nothing calls it"), and the stale claim was the one quoted to
+the user as fact. What is outstanding is a **caller** for `MapboxRouteSource`,
+not a working build.
