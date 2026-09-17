@@ -140,6 +140,43 @@ const uint32_t ZONE_COLORS[HR_ZONE_COUNT] = {
     0xBF5AF2, // 5  maximum          purple
 };
 
+// ---- The same five zones, twice, because the cell went white ----
+//
+// HEART RATE is the one cell on this panel with a light background, and the
+// saturated zone colours above are chosen for the opposite: they are meant to
+// be read on 0x101820 in sunlight. On white, zone 3's 0xFFD60A is very nearly
+// invisible and zone 2's green is not much better.
+//
+// So the zone identity survives -- still blue, green, yellow, red, purple, in
+// that order -- and only the lightness moves. A rider who has learnt "yellow
+// is zone 3" from the bar at the bottom of the screen reads the same yellow in
+// this cell; it is simply a yellow that exists on white.
+//
+// Everything still drawn on the dark ground keeps the originals: the zone bar,
+// and the second page's heart-rate figures.
+const uint32_t ZONE_COLORS_ON_WHITE[HR_ZONE_COUNT] = {
+    0x0A5FC4, // 1  low intensity    blue
+    0x1B8C3A, // 2  weight control   green
+    0x8A6D00, // 3  aerobic          yellow, taken right down -- nothing lighter reads
+    0xC4160C, // 4  anaerobic        red
+    0x7B2FAE, // 5  maximum          purple
+};
+
+// The ink for everything in the white cell that is not a zone figure: the
+// caption, the unit, the AVG and MAX words, and the live figure before any
+// beat has arrived. COLOR_VALUE is white and would be invisible there.
+constexpr uint32_t COLOR_HR_CELL_BG = 0xF2F5F7;
+constexpr uint32_t COLOR_HR_CELL_INK = 0x101820;
+
+// The zone the live reading is in, or -1 for none.
+//
+// Kept as an index rather than read back off the label, because the second
+// page used to copy the colour out of s_hr_label with
+// lv_obj_get_style_text_color() -- which worked only while both cells shared a
+// background. Now they do not, and that copy would put this cell's
+// dark-on-white ink onto the dark page.
+int s_hr_zone = -1;
+
 lv_obj_t *s_speed_label = nullptr;
 lv_obj_t *s_speed_unit_label = nullptr;
 lv_obj_t *s_trip_label = nullptr;
@@ -451,9 +488,12 @@ constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
 // Setting a text colour on a container rather than a label is harmless; it is
 // a style property like any other, and LVGL simply inherits it downward.
 //
-// Only safe for cells whose text colours are static. HEART RATE recolours its
-// figure by zone on every update and would overwrite this on the next tick;
-// TRIP does the same from RenderRecordingState. Both are excluded above.
+// Whatever a cell recolours at runtime wins on the next tick, so this is only
+// a way to set the things that are NEVER recoloured -- captions, units, the
+// words beside a figure. TRIP is excluded for that reason: RenderRecordingState
+// owns every colour in it. HEART RATE does use this, because the three figures
+// it recolours by zone are exactly the three it wants left to the zone palette,
+// and the caption and unit are not among them.
 void TintCellText(lv_obj_t *obj, lv_color_t colour) {
     const uint32_t count = lv_obj_get_child_cnt(obj);
     for (uint32_t i = 0; i < count; i++) {
@@ -658,8 +698,9 @@ void ClearHeartRateZone() {
     if (s_zone_marker != nullptr) {
         lv_obj_add_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN);
     }
+    s_hr_zone = -1;
     if (s_hr_label != nullptr) {
-        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(COLOR_VALUE), 0);
+        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(COLOR_HR_CELL_INK), 0);
     }
 }
 
@@ -671,8 +712,9 @@ void UpdateHeartRateZone(uint8_t bpm) {
     // The number takes its zone's colour too. The bar is 8px at the very
     // bottom of the panel; the bpm figure is the thing already being looked at,
     // so colouring it means the zone registers without the eye travelling.
+    s_hr_zone = zone;
     if (s_hr_label != nullptr) {
-        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(ZONE_COLORS[zone]), 0);
+        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(ZONE_COLORS_ON_WHITE[zone]), 0);
     }
 
     // The lit segment is the readout: colour and position carry the zone at a
@@ -998,9 +1040,9 @@ void RenderHeartRateStats() {
     const uint8_t rest = Settings_GetHrRestBpm();
     const uint8_t ceiling = Settings_GetHrMaxBpm();
     lv_obj_set_style_text_color(
-        s_hr_avg_label, lv_color_hex(ZONE_COLORS[HrZone_Index(avg, rest, ceiling)]), 0);
+        s_hr_avg_label, lv_color_hex(ZONE_COLORS_ON_WHITE[HrZone_Index(avg, rest, ceiling)]), 0);
     lv_obj_set_style_text_color(
-        s_hr_max_label, lv_color_hex(ZONE_COLORS[HrZone_Index(max, rest, ceiling)]), 0);
+        s_hr_max_label, lv_color_hex(ZONE_COLORS_ON_WHITE[HrZone_Index(max, rest, ceiling)]), 0);
 }
 
 // The only place in this file allowed to touch LVGL objects: an lv_timer
@@ -1482,9 +1524,13 @@ void RenderPage2() {
                           (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
 
     if (s_hr_label != nullptr) {
+        // The text is copied, the colour is not. This page is dark, so it
+        // takes the saturated original for whatever zone the live reading is
+        // in -- copying the pixel colour out of the other cell would drag its
+        // dark-on-white ink onto a dark background.
         lv_label_set_text(s_p2_hr, lv_label_get_text(s_hr_label));
-        lv_obj_set_style_text_color(s_p2_hr, lv_obj_get_style_text_color(s_hr_label, LV_PART_MAIN),
-                                    0);
+        lv_obj_set_style_text_color(
+            s_p2_hr, lv_color_hex(s_hr_zone >= 0 ? ZONE_COLORS[s_hr_zone] : COLOR_VALUE), 0);
     }
 
     // The short form here, the full one on the ride summary: that panel has
@@ -1941,6 +1987,14 @@ void PageDashboard::onViewLoad() {
     s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_40);
     MakeUnit(hr_cell, "bpm");
     MakeSecondary(hr_cell, &s_hr_avg_label, &s_hr_max_label);
+    // The one light cell on the panel. TintCellText is safe here for a reason
+    // it is not safe elsewhere: the three figures inside ARE recoloured every
+    // update, and that is wanted -- they take a zone colour from
+    // ZONE_COLORS_ON_WHITE. What this pass is for is everything that is not a
+    // figure -- the caption, the unit, the AVG and MAX words -- which are the
+    // panel's quiet grey everywhere else and would be unreadable here.
+    lv_obj_set_style_bg_color(hr_cell, lv_color_hex(COLOR_HR_CELL_BG), 0);
+    TintCellText(hr_cell, lv_color_hex(COLOR_HR_CELL_INK));
 
     // 28pt against the 32 opposite: near enough that the four cells read as one
     // grid, small enough that "188.4" fits a column narrowed to give the ride
