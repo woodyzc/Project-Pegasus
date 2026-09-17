@@ -230,6 +230,18 @@ These were each discovered the slow way. They are not optional trivia.
   explicitly on the way out, or the cell stays inverted for the rest of the
   boot. Do not quietly demote it.
 
+  **A restart does not end a ride.** The armed flag is persisted, so recording
+  resumes on the next fix — in a new file, because appending would mean reading
+  the GPX back and stripping its footer, on a card, at boot. Before that, a
+  reboot mid-ride silently stopped recording and the only way to resume,
+  pressing "new ride", reset the odometer with it — which `Trip` persists to
+  NVS precisely so a restart does not lose it. `RideLog_Shutdown()` closes the
+  file first, through the writer queue rather than by touching it, because the
+  file belongs to that task. Note the auto-end timeout therefore keys on
+  *armed* rather than *recording*: a device armed somewhere with no signal
+  opens no file, and a check on recording would leave it armed for ever now
+  that a reboot no longer clears the flag.
+
   An earlier attempt closed the file on the timeout but left recording armed.
   That does not work — movement simply opened a new file, so a forgotten
   device produced one clean ride followed by a string of junk ones. Closing

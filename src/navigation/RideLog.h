@@ -127,3 +127,17 @@ bool RideLog_HasRecorded();
 // RideLog_AutoEndCount().
 bool RideLog_FinishRide();
 
+// Closes the open ride file before the chip restarts. Registered automatically
+// as an ESP-IDF shutdown handler by RideLog_Init().
+//
+// Deliberately does NOT disarm: a restart is not the rider saying they are
+// done. The armed flag is persisted, so recording resumes by itself on the
+// next fix -- in a NEW file, because appending would mean reading the GPX back
+// and stripping its footer, on a card, at boot. Two files for one ride is an
+// annoyance a laptop fixes; a corrupted ride is not.
+//
+// Goes through the writer queue rather than touching the file, because the
+// file belongs to that task. Closing it from here would be the same race that
+// once let NimBLE be deinitialised under its own supervisor.
+void RideLog_Shutdown();
+

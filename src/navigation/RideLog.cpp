@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <stdarg.h>
+#include <Preferences.h>
 #include <SD_MMC.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -58,6 +59,33 @@ constexpr uint32_t FLUSH_INTERVAL_MS = 10000;
 // "not recording" nudge exist to catch (Page_Dashboard).
 constexpr uint32_t AUTO_END_AFTER_MS = 60u * 60u * 1000u;
 
+// ---- Carrying the armed flag across a restart ----
+//
+// Without this a reboot mid-ride silently stopped recording, and the only way
+// to resume -- pressing "new ride" -- reset the odometer with it. Trip is
+// persisted in NVS precisely so a restart does not lose the distance, and
+// throwing it away was the one path back. So the flag is persisted too, and
+// the ride simply continues.
+//
+// The track does NOT continue into the same file: appending would mean reading
+// the GPX back and stripping its footer, on a card, at boot. Two files for one
+// ride is an annoyance a laptop fixes in a minute; a corrupted ride is not.
+constexpr char NVS_NAMESPACE[] = "pegasus";
+constexpr char KEY_ARMED[] = "rl_armed";
+
+// How long RideLog_Shutdown() waits for the writer task to close the file.
+// The task is blocked on the queue the command arrives through, so this is
+// almost never spent; it covers a write already in flight to a slow card.
+constexpr uint32_t SHUTDOWN_CLOSE_MS = 1000;
+
+void PersistArmed(bool armed) {
+    Preferences prefs;
+    if (prefs.begin(NVS_NAMESPACE, false)) {
+        prefs.putUChar(KEY_ARMED, armed ? 1 : 0);
+        prefs.end();
+    }
+}
+
 constexpr float AUTO_END_MOVING_MPS = 1.0f;
 
 typedef struct {
@@ -87,6 +115,7 @@ typedef enum {
     RIDELOG_CMD_NONE = 0, // an ordinary trackpoint
     RIDELOG_CMD_NEW_RIDE,
     RIDELOG_CMD_FINISH,
+    RIDELOG_CMD_SHUTDOWN,
 } RideLogCommand_t;
 
 QueueHandle_t s_queue = nullptr;
@@ -131,6 +160,15 @@ volatile bool s_armed = false;
 // device that has been told nothing and should not vanish on someone who has
 // not started yet.
 volatile bool s_has_recorded = false;
+
+// ---- Closing the file before the chip restarts ----
+//
+// The file belongs to the writer task, so the shutdown handler must not touch
+// it directly -- that is the same race that let NimBLE be deinitialised under
+// its own supervisor. The command goes through the queue instead, which also
+// buys the ordering for free: every point already queued is written before the
+// close, rather than being lost to it.
+volatile bool s_shutdown_done = false;
 
 // How many rides have been closed by the timeout since boot. On the panel,
 // because an auto-end is otherwise silent -- the rider would find out at the
@@ -300,9 +338,17 @@ void StartNewRide() {
     CloseRide();
 
     // The only thing that ever arms recording. Nothing else -- not a fix, not
-    // movement, not a reboot -- puts the device back into a state where it
-    // writes to the card.
+    // movement -- puts the device back into a state where it writes to the
+    // card. A reboot is the exception, and only because the flag is restored
+    // from NVS rather than set afresh.
     s_armed = true;
+    PersistArmed(true);
+
+    // The hour starts here, not at the first fix. Otherwise an armed device
+    // that never sees a satellite has no clock running at all, and with the
+    // flag now surviving restarts it would stay armed for ever -- holding deep
+    // sleep off with it.
+    s_last_motion_ms = millis();
 
     // A deliberate gesture is the one moment a card that refused us earlier is
     // worth another attempt. Without this, one failed open early in the day
@@ -321,6 +367,7 @@ void StartNewRide() {
 void FinishRide() {
     CloseRide();
     s_armed = false;
+    PersistArmed(false);
 }
 
 // Reads the file back through GpxParse -- the same parser that loads routes
@@ -343,6 +390,16 @@ void WriterTask(void *pv) {
             if (point.command == RIDELOG_CMD_FINISH) {
                 FinishRide();
                 continue;
+            }
+            if (point.command == RIDELOG_CMD_SHUTDOWN) {
+                // Close, but do NOT disarm. A restart is not the rider saying
+                // they are done, and the armed flag is what carries the ride
+                // across it.
+                CloseRide();
+                s_shutdown_done = true;
+                for (;;) {
+                    vTaskDelay(portMAX_DELAY);
+                }
             }
 
             if (!s_failed && s_armed && !s_recording) {
@@ -389,7 +446,11 @@ void WriterTask(void *pv) {
         //
         // Unsigned subtraction, so the 49-day millis() wrap gives a small
         // number rather than instantly ending the ride.
-        if (s_recording && (millis() - s_last_motion_ms) >= AUTO_END_AFTER_MS) {
+        // s_armed, not s_recording. A device armed in a car park that never
+        // gets a fix opens no file, so a check on s_recording never fired --
+        // survivable while a reboot cleared the flag, and eternal now that one
+        // does not.
+        if (s_armed && (millis() - s_last_motion_ms) >= AUTO_END_AFTER_MS) {
             // The same close the rider's own "new ride" gesture uses. It
             // flushes, closes, and clears the name and point count as well --
             // which matters, because the settings page reads those, and a
@@ -519,6 +580,27 @@ void RideLog_Init() {
         return;
     }
 
+    // Restored before the task starts, so the first point after a reboot is
+    // written rather than dropped. s_has_recorded stays false on purpose: the
+    // previous boot's file is closed and finished, and what matters here is
+    // only whether a new one should be opened.
+    {
+        Preferences prefs;
+        if (prefs.begin(NVS_NAMESPACE, false)) {
+            s_armed = prefs.getUChar(KEY_ARMED, 0) != 0;
+            prefs.end();
+        }
+    }
+    // Whether it was restored or not, the hour starts now. A device that was
+    // armed when the power went and then sat on a bench must still time out.
+    s_last_motion_ms = millis();
+
+    // Close the file before the chip restarts. Deep sleep already flushed and
+    // unmounted through PowerManager; a restart did neither, so up to a
+    // flush interval of track was lost every time -- and CLAUDE.md section 7
+    // asks for exactly this.
+    esp_register_shutdown_handler(RideLog_Shutdown);
+
     // Core 0 with the other background work, at a priority below the GPS
     // reader: a slow card must never delay parsing the fixes themselves.
     // Back to 4KB now the SD self-test is gone. It ran at 4KB for most of this
@@ -543,6 +625,30 @@ bool RideLog_StartNewRide() {
     // all. A full queue means the writer is badly behind, which the caller
     // reports rather than waits out.
     return xQueueSend(s_queue, &cmd, 0) == pdTRUE;
+}
+
+void RideLog_Shutdown() {
+    if (s_queue == nullptr) {
+        return;
+    }
+
+    RideLogPoint_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.command = RIDELOG_CMD_SHUTDOWN;
+    if (xQueueSend(s_queue, &cmd, 0) != pdTRUE) {
+        // A full queue means the writer is far behind. Nothing useful is left
+        // to try: blocking here would delay the restart for a card that is
+        // already not keeping up.
+        return;
+    }
+
+    // Bounded, like the BLE park. The writer sits blocked on this very queue,
+    // so it normally answers within a tick; the wait exists for the case where
+    // it is mid-write to a slow card.
+    const uint32_t deadline = millis() + SHUTDOWN_CLOSE_MS;
+    while (!s_shutdown_done && (int32_t)(millis() - deadline) < 0) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
 }
 
 bool RideLog_FinishRide() {
