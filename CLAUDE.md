@@ -272,6 +272,16 @@ These were each discovered the slow way. They are not optional trivia.
   misbehaves when a heart-rate peer is actually in range, which makes it look
   like flaky hardware: with no watch nearby nothing connects and the identical
   code registers fine.
+- **The UI is live long before `setup()` finishes.** `LvglTask_Start()` comes
+  early on purpose — the radios after it block for fifteen seconds and the
+  dashboard should be drawn and refreshing meanwhile — but the consequence is
+  that a rider can reach any page and press anything during those seconds.
+  Ride logging, the odometer and the ride stats were initialised at the *end*
+  of `setup()`, so "new ride" in that window cleared the odometer and then
+  found no queue to start a log in, and the ride buttons drew from an armed
+  flag NVS had not been read into yet — appearing the wrong way round and
+  swapping a second later. Anything a page can touch must be initialised
+  before `LvglTask_Start()`, not merely before it is needed.
 - **PageManager caches a page, so `onViewLoad()` reads the world once.**
   `IsCached` defaults true, so a page built during `setup()` keeps whatever was
   true at `Push()` for the life of the boot — it is *not* rebuilt when the

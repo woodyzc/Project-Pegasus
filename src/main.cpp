@@ -140,6 +140,30 @@ void setup() {
         }
     }
 
+    // ---- The ride, before any of it can be looked at ----
+    //
+    // These used to sit at the very end of setup(), after the radios. That put
+    // them roughly fifteen seconds after LvglTask_Start() -- because
+    // BLE_HR_Start() blocks for that long -- and the UI is fully interactive
+    // the moment that task exists. A rider who reached the settings page in
+    // those seconds and pressed "new ride" got the odometer cleared and the
+    // ride log refusing to start, because RideLog's queue did not exist yet.
+    // The same gap made the ride buttons draw from an armed flag that had not
+    // been restored from NVS, so they appeared the wrong way round after a
+    // restart and swapped a second later.
+    //
+    // None of the three needs a radio. They need DataCenter and, for the log,
+    // a mounted card -- both of which are already true here.
+    //
+    // Both read GPS through DataCenter, so they are independent of which page
+    // the rider happens to be looking at.
+    Trip_Init();
+    // Beside the odometer and for the same reason: both accumulate from
+    // DataCenter rather than from a redraw, so both keep counting while the
+    // rider is looking at the map or the settings page.
+    RideStats_Init();
+    RideLog_Init();
+
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);
     s_page_manager.Push(PAGE_NAME_DASHBOARD);
 
@@ -220,15 +244,6 @@ void setup() {
     // Got through radio bring-up: clear the flag so the next boot honours the
     // user's choice instead of falling back to GPX.
     Settings_NoteRadioBringUpOk();
-
-    // Both read GPS through DataCenter, so they are independent of which page
-    // the rider happens to be looking at.
-    Trip_Init();
-    // Beside the odometer and for the same reason: both accumulate from
-    // DataCenter rather than from a redraw, so both keep counting while the
-    // rider is looking at the map or the settings page.
-    RideStats_Init();
-    RideLog_Init();
 
     // TODO(Phase 1 Task 1.3+): remaining Core 0 tasks publishing into
     // DataCenter (GPS_Info, Sensor/IMU) -- Page_Dashboard is already
