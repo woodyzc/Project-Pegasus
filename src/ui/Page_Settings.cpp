@@ -145,9 +145,14 @@ void OnTestAlertClicked(lv_event_t *e) {
             snprintf(alert.name, sizeof(alert.name), "Test message");
             break;
         default:
+            // Chinese on purpose: this is the only way to check src/ui/CjkFont.c
+            // actually draws on the panel without waiting for someone to send a
+            // message. If these come out as empty boxes, the font is the
+            // problem and not the phone.
             alert.kind = ALERT_KIND_CHAT;
             alert.count = 4;
-            snprintf(alert.name, sizeof(alert.name), "Test group chat");
+            snprintf(alert.name, sizeof(alert.name),
+                     "\xE5\x91\xA8\xE6\x9C\xAB\xE9\xAA\x91\xE8\xA1\x8C\xE7\xBE\xA4");
             break;
     }
     next++;
@@ -1213,8 +1218,8 @@ void PageSettings::onViewLoad() {
     lv_label_set_text(alert_hint,
                       "Calls, texts and WeChat from the phone appear over the\n"
                       "speed and heart-rate cells, never over a turn.\n"
-                      "Each press cycles call, text, chat. Names are shown;\n"
-                      "message text is not sent. Tap a banner to clear it.");
+                      "Each press cycles call, text, Chinese chat. Names are\n"
+                      "shown; message text is not sent. Tap a banner to clear.");
     lv_obj_set_style_text_font(alert_hint, &lv_font_montserrat_10, 0);
     lv_obj_set_style_text_color(alert_hint, lv_color_hex(COLOR_CAPTION), 0);
     lv_label_set_long_mode(alert_hint, LV_LABEL_LONG_WRAP);
