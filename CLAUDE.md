@@ -530,6 +530,27 @@ A Kotlin app that scrapes Google Maps' navigation notification and writes
 turn-by-turn frames to the head unit over BLE — Maps exposes no API, so the
 notification is the only route without root. See its own README.
 
+⚠️ **Holding a permission is not the same as being allowed to claim its
+foreground-service type.** `location`, `camera` and `microphone` are
+while-in-use types, and API 34 refuses to start one from the background
+however many permissions are granted — `validateForegroundServiceType` throws
+`SecurityException`, which kills the process. `MapsNotificationListener.
+onListenerConnected()` starts the service from exactly that state, because the
+system binds the listener after a reboot before the user has opened anything.
+So the automatic start crash-looped the app it existed to rescue, and Android
+answered with a thirty-minute restart backoff: a phone that rebooted mid-ride
+had no link, no position and no alerts until someone opened the app by hand.
+
+There is no API for "may I claim this type right now", so `TbtService` attempts
+the full type set and falls back to `connectedDevice` alone, which is not a
+while-in-use type and is always permitted. **The fallback must not throw** —
+`startForegroundService` has already promised a `startForeground` within five
+seconds. It is also not silent: without the type Android delivers no location
+updates to a backgrounded app, with no error and no callback, which reads
+exactly like a receiver that has never got a fix. The service says "Bluetooth
+only; open the app to send position" instead, and opening the app restarts it
+from the foreground where the type is granted.
+
 It also forwards calls, texts and WeChat messages as alerts, from the same
 notification stream — notification access is one grant, so a second listener
 service would need its own. `AlertClassifier` and `AlertThrottle` hold every
