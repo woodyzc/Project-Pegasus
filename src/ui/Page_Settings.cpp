@@ -31,6 +31,8 @@ constexpr uint32_t COLOR_ACCENT = 0x61DAFB;
 constexpr uint32_t COLOR_PANEL = 0x18232E;
 constexpr uint32_t COLOR_DANGER = 0xFF6B6B;
 constexpr uint32_t COLOR_OK = 0x7CE38B;
+// Amber: something the rider can put right, unlike COLOR_DANGER.
+constexpr uint32_t COLOR_WARN = 0xFFD166;
 
 // ---- The ride pair, which is one control in two halves ----
 //
@@ -241,10 +243,23 @@ void OnStartNewRideClicked(lv_event_t *e) {
                           "New ride. Odometer and averages cleared; the next fix "
                           "starts a new file.");
         lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_OK), 0);
+    } else if (!GpxTrack_CardMounted()) {
+        // Far and away the likeliest reason, and the old message never said
+        // it: RideLog_Init() creates no queue without a card, so the press
+        // cannot reach the writer at all. "Did not restart" sent a rider
+        // looking for a software fault when the card was simply in a reader
+        // on their desk.
+        lv_label_set_text_fmt(s_trip_status,
+                              "Odometer and averages cleared. No ride will be recorded: %s.",
+                              GpxTrack_MountStatus());
+        lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_WARN), 0);
     } else {
+        // Card present and the send still failed, which means the writer queue
+        // is full -- a card that has stopped keeping up. Red, because unlike
+        // the case above there is nothing obvious to put right.
         lv_label_set_text(s_trip_status,
                           "Odometer and averages cleared, but the ride log did not "
-                          "restart.");
+                          "restart. The card writer is not keeping up.");
         lv_obj_set_style_text_color(s_trip_status, lv_color_hex(COLOR_DANGER), 0);
     }
 
