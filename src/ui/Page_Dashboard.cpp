@@ -381,6 +381,27 @@ volatile bool s_tbt_dirty = false;
 float s_last_speed_kmh = 0.0f;
 bool s_has_speed = false;
 
+// When the last VALID fix arrived, and how long a speed outlives it.
+//
+// Heart rate ages out after five seconds and a turn after thirty; position did
+// not age out at all, which made it the one reading on this panel that could
+// lie indefinitely. Close the phone app mid-ride and the speed stayed at
+// whatever it last was -- 25 km/h on a stationary bike, or the far more
+// convincing 0.0, which is indistinguishable from having stopped.
+//
+// Five seconds, the same as heart rate. Both sources publish at 1Hz, so five
+// is five missed fixes and no ambiguity; and at 25 km/h a five-second-old
+// speed is already 35 metres out of date, which is as stale as a speed is
+// worth showing.
+//
+// ⚠️ Stamped only on a VALID fix, not on any publish. GPS_Reader publishes
+// without one -- num_sv climbing is how "module present, still acquiring" is
+// told from "no module" -- so a receiver in a tunnel goes on publishing at 1Hz
+// while knowing nothing, and a check on publishes alone would take that for a
+// live position for as long as the tunnel lasted.
+uint32_t s_gps_last_ms = 0;
+constexpr uint32_t GPS_STALE_MS = 5000;
+
 // The grade, kept as a number rather than only as the string the first page
 // draws. Both pages show it and they format it differently -- one appends the
 // per-cent sign to the figure, the other puts it on the caption row -- so
@@ -979,6 +1000,11 @@ void RenderSpeedAndTrip() {
         char speed[12];
         FormatMetric(Settings_SpeedFromKmh(s_last_speed_kmh), speed, sizeof(speed));
         lv_label_set_text(s_speed_label, speed);
+    } else {
+        // Written, not skipped. Leaving the label alone kept the last number
+        // on screen for ever, which is how a speed outlived the fix it came
+        // from -- and 0.0 left behind reads exactly like a rider who stopped.
+        lv_label_set_text(s_speed_label, "--");
     }
     lv_label_set_text(s_speed_unit_label, Settings_SpeedUnitLabel());
     // Two decimals until three digits are needed, then one. At 40px "123.45"
@@ -1062,6 +1088,26 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         // while the rider is stopped -- so a block redrawn only on a GPS or
         // heart-rate publish would freeze exactly when someone is standing
         // over the bike reading it.
+        // Before the renders below, so nothing draws from a fix that has just
+        // expired. Position was the only reading here that never aged out.
+        if (s_has_speed && s_gps_last_ms != 0 &&
+            lv_tick_elaps(s_gps_last_ms) > GPS_STALE_MS) {
+            s_has_speed = false;
+            s_gps_last_ms = 0;
+
+            // The marker goes with it. MapView hides it for an invalid fix
+            // already, so handing it one is all this needs -- and hiding it is
+            // right: the trail stays, which is where the rider has been, while
+            // the arrow claiming where they ARE does not outlive its evidence.
+            if (s_nav_is_map) {
+                GPS_Info_t stale;
+                memset(&stale, 0, sizeof(stale));
+                stale.fix_valid = false;
+                MapView_SetPosition(&s_map_view, &stale);
+                RoadView_Refresh();
+            }
+        }
+
         RenderSpeedAndTrip();
         RenderHeartRateStats();
         // On the same one-second tick as the averages, and for the same
@@ -1080,8 +1126,14 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_gps_dirty = false;
         GPS_Info_t gps;
         if (DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps))) {
-            s_last_speed_kmh = gps.speed * 3.6f;
-            s_has_speed = true;
+            // Both gated on the fix, not on the publish arriving. A receiver
+            // that has lost its fix still publishes, and its speed field is
+            // meaningless once it has.
+            if (gps.fix_valid) {
+                s_last_speed_kmh = gps.speed * 3.6f;
+                s_has_speed = true;
+                s_gps_last_ms = lv_tick_get();
+            }
 
             // Only here, inside the publish branch, so a lost fix lets the
             // hold expire instead of pinning the caption red on a reading

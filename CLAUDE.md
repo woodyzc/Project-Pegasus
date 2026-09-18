@@ -337,6 +337,20 @@ These were each discovered the slow way. They are not optional trivia.
   flag NVS had not been read into yet — appearing the wrong way round and
   swapping a second later. Anything a page can touch must be initialised
   before `LvglTask_Start()`, not merely before it is needed.
+- **Every live reading on the dashboard must age out, position included.**
+  Heart rate goes to `--` after 5s and a turn is dropped after 30s, but the
+  position had no expiry at all — so closing the phone app mid-ride left the
+  speed frozen at whatever it last was and the map's arrow still claiming to
+  know where the rider is. `0.0` is the worst case of it, being
+  indistinguishable from having stopped.
+  - Stamp the freshness on a **valid fix**, never on a publish. `GPS_Reader`
+    publishes without one on purpose — a climbing `num_sv` is how "module
+    present, still acquiring" is told from "no module" — so a receiver in a
+    tunnel keeps publishing at 1Hz while knowing nothing, and a check on
+    publishes alone reads that as a live position for as long as the tunnel.
+  - Blank the label rather than skipping the write. `if (have) set(...)` with
+    no `else` leaves the last value on screen for ever, which is exactly how
+    this one survived so long.
 - **PageManager caches a page, so `onViewLoad()` reads the world once.**
   `IsCached` defaults true, so a page built during `setup()` keeps whatever was
   true at `Push()` for the life of the boot — it is *not* rebuilt when the
