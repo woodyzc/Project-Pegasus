@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
@@ -33,6 +34,7 @@ import androidx.core.content.ContextCompat
 class TbtService : Service() {
 
     companion object {
+        private const val TAG = "PegasusService"
         private const val CHANNEL_ID = "pegasus_tbt_link"
         private const val NOTIFICATION_ID = 1
 
@@ -180,7 +182,31 @@ class TbtService : Service() {
      * Silent when permission is missing. The rider may grant it later and this
      * is called on every connect, so nothing needs to watch for that.
      */
+    /**
+     * Whether this service actually holds the location foreground-service
+     * type, as opposed to merely holding the permission for it. API 34 grants
+     * the two separately and only the first one lets location run.
+     */
+    private var locationTypeHeld = false
+
     private fun ensureLocation() {
+        // Without the location foreground-service type, Android delivers no
+        // updates to a backgrounded app -- silently, with no error and no
+        // callback. Starting the source anyway would look like a receiver
+        // that has never got a fix, which is the single most confusing state
+        // this project has, so say so instead.
+        //
+        // Self-healing: opening the app starts this service again from the
+        // foreground, where the type is granted, and that pass starts
+        // location properly.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            !locationTypeHeld && hasLocationPermission()
+        ) {
+            status = "Bluetooth only; open the app to send position"
+            notifyStatus(status)
+            return
+        }
+
         val source = locationSource ?: LocationSource(applicationContext).also {
             locationSource = it
         }
@@ -235,11 +261,42 @@ class TbtService : Service() {
             // refusal on API 34, it is a SecurityException -- so declaring
             // both unconditionally would mean that denying location crashes
             // the Bluetooth link, which does not need location at all.
-            var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            val connectedDevice = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            var types = connectedDevice
             if (hasLocationPermission()) {
                 types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             }
-            startForeground(NOTIFICATION_ID, notification, types)
+
+            // ---- Holding the location type is not ours to decide ----
+            // Permission is necessary and NOT sufficient. Location is a
+            // while-in-use type, and API 34 refuses to let one start from the
+            // background however many permissions are held -- with a
+            // SecurityException out of validateForegroundServiceType, which
+            // kills the process.
+            //
+            // That is not a hypothetical. This service is started from
+            // MapsNotificationListener.onListenerConnected(), which the system
+            // calls when it binds the listener after a reboot or a reinstall,
+            // and the app is in the background by definition at that moment.
+            // The crash-loop that follows is answered by Android with a
+            // thirty-minute restart backoff, so a phone that reboots in a car
+            // park has no link, no position and no alerts until someone opens
+            // the app by hand -- which is exactly what that automatic start
+            // exists to avoid.
+            //
+            // There is no API for "may I claim this type right now". Attempt
+            // and fall back is the documented shape, and the fallback must
+            // succeed: startForegroundService has already promised Android a
+            // startForeground within five seconds, and connectedDevice is not
+            // a while-in-use type, so it is always allowed.
+            try {
+                startForeground(NOTIFICATION_ID, notification, types)
+                locationTypeHeld = types != connectedDevice
+            } catch (e: Exception) {
+                startForeground(NOTIFICATION_ID, notification, connectedDevice)
+                locationTypeHeld = false
+                Log.w(TAG, "location foreground type refused, Bluetooth only: ${e.message}")
+            }
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }

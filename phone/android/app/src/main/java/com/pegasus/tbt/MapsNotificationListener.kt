@@ -260,6 +260,13 @@ class MapsNotificationListener : NotificationListenerService() {
      * where it can be tested without a phone.
      */
     private fun handleAlert(sbn: StatusBarNotification) {
+        // Our own foreground-service notification, which is posted and
+        // updated on every status change. It could never classify as an alert
+        // -- it is ongoing, and this package is in no allowlist -- but it is
+        // the single most frequent thing arriving here, so it would dominate
+        // both the seen counter and the log that counter exists to explain.
+        if (sbn.packageName == applicationContext.packageName) return
+
         val notification = sbn.notification ?: return
         alertsSeen++
 
@@ -268,7 +275,22 @@ class MapsNotificationListener : NotificationListenerService() {
             category = notification.category,
             flags = notification.flags,
             title = readTitle(notification),
-        ) ?: return
+        )
+
+        if (alert == null) {
+            // Logged, because silence is ambiguous in the one way that
+            // matters. "My phone rang and the head unit did nothing" has two
+            // very different causes -- the notification never reached this
+            // service, or it reached it and a rule turned it down -- and
+            // without this line they look identical from adb.
+            //
+            // The package only. A title is a person's name or a group's, and
+            // this fires for every notification the phone receives; putting
+            // that stream in the log would be a worse privacy leak than the
+            // message bodies this feature already refuses to send.
+            Log.d(TAG, "alert ignored from ${sbn.packageName}")
+            return
+        }
 
         val count = throttle.admit(alert.kind, alert.name, System.currentTimeMillis())
         if (count == null) {
