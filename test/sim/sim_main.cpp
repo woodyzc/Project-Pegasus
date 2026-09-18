@@ -429,6 +429,19 @@ int main(int argc, char **argv) {
 
         Sim_Publish(TOPIC_IMU_DATA, nullptr, 0);
 
+        // ---- The same ride, both pages, nothing changed between them ----
+        // Rendered as a pair because that is the only way to check the thing
+        // two photographs of the real panel caught: figures that appear on
+        // both pages must agree. They are separate labels fed by separate
+        // code, so agreement is a property to verify, not one to assume --
+        // average speed drifted apart exactly here, and the elevation figure
+        // was two different measurements wearing similar cells.
+        //
+        // Read them side by side: ELEVATION/GAIN against ASCENT, and the two
+        // TRIP figures.
+        snprintf(path, sizeof(path), "%s/06a-first-page-same-ride.ppm", out_dir);
+        Render(&page, path);
+
         Page_Dashboard_ShowSecondPageForTest(true);
         snprintf(path, sizeof(path), "%s/06-second-page.ppm", out_dir);
         Render(&page, path);

@@ -268,7 +268,7 @@ lv_obj_t *s_p2_avgspeed_unit = nullptr;
 lv_obj_t *s_p2_hr = nullptr;
 lv_obj_t *s_p2_avghr = nullptr;
 lv_obj_t *s_p2_ridetime = nullptr;
-lv_obj_t *s_p2_descent = nullptr;
+lv_obj_t *s_p2_ascent = nullptr;
 lv_obj_t *s_p2_incline = nullptr;
 // The second page's copy of TRIP, where the battery percentage used to be.
 // The battery is already in the status line on both pages, so the cell was
@@ -525,6 +525,35 @@ void TintCellText(lv_obj_t *obj, lv_color_t colour) {
         lv_obj_set_style_text_color(child, colour, 0);
         TintCellText(child, colour);
     }
+}
+
+// Background and ink together, because they are one decision.
+//
+// They were two. The cell is built light -- violet with near-black ink, like
+// the other colour-blocked cells -- and the grade reading then overwrote the
+// background with a dark fill and left the ink alone. Dark text on a dark
+// cell: the climb fill made it marginal and the flat fill made it invisible.
+//
+// It has never shown on this board, and that is the whole problem with it.
+// The line only runs when an IMU publishes, and the Hosyond has none, so the
+// cell keeps its build-time colours and looks right. It is the Waveshare --
+// the board with the QMI8658, the one waiting to be merged -- that would have
+// shown a blank cell on the first descent.
+//
+// The same trap CLAUDE.md records for the TRIP cell, which inverts and must
+// put every colour back explicitly on the way out. Here the two are set in
+// one place so neither can be changed without the other.
+void PaintElevationCell(bool climbing) {
+    if (s_incline_cell == nullptr) {
+        return;
+    }
+    // Climbing keeps its own fill, so the cue survives; it is dark, so the
+    // ink goes light. Otherwise the cell is the violet it was built as, and
+    // the ink is the dark that violet needs.
+    const uint32_t bg = climbing ? COLOR_CLIMB_FILL : COLOR_CELL_ELEVATION;
+    const uint32_t ink = climbing ? COLOR_VALUE : COLOR_BG;
+    lv_obj_set_style_bg_color(s_incline_cell, lv_color_hex(bg), 0);
+    TintCellText(s_incline_cell, lv_color_hex(ink));
 }
 
 lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
@@ -1415,8 +1444,7 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             s_grade_pct = grade;
             s_have_grade = true;
             lv_label_set_text_fmt(s_incline_label, "%+.1f%%", grade);
-            lv_obj_set_style_bg_color(
-                s_incline_cell, lv_color_hex(grade >= 3.0f ? COLOR_CLIMB_FILL : COLOR_CELL_BG), 0);
+            PaintElevationCell(grade >= 3.0f);
         }
     }
 
@@ -1619,7 +1647,15 @@ void RenderPage2() {
         lv_label_set_text(s_p2_ridetime, buf);
     }
 
-    lv_label_set_text_fmt(s_p2_descent, "%d", (int)(RideStats_DescentM() + 0.5f));
+    // The same climb page one shows as GAIN, from the same accumulator.
+    //
+    // This cell used to carry descent, which was not wrong but was easy to
+    // read wrong: two similar cells on two pages, one counting up and one
+    // counting down, and no screen showing both -- so "0m" here beside "4m"
+    // there looked like one figure disagreeing with itself rather than two
+    // different measurements. Climbing is the one riders actually talk about,
+    // so both pages now show it and they agree by construction.
+    lv_label_set_text_fmt(s_p2_ascent, "%d", (int)(RideStats_AscentM() + 0.5f));
 
     const uint8_t avg_bpm = RideStats_AvgBpm();
     if (avg_bpm > 0) {
@@ -2152,8 +2188,8 @@ void PageDashboard::onViewLoad() {
         // left, 32 on the right.
         s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "RIDE TIME", nullptr,
                                    nullptr, &lv_font_montserrat_40);
-        s_p2_descent = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "DESCENT", "m",
-                                  nullptr, &lv_font_montserrat_32);
+        s_p2_ascent = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "ASCENT", "m",
+                                 nullptr, &lv_font_montserrat_32);
         y += P2_SHORT_H;
 
         s_p2_incline = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "INCLINE", "%", nullptr,
@@ -2350,7 +2386,7 @@ void PageDashboard::onViewUnload() {
     s_p2_hr = nullptr;
     s_p2_avghr = nullptr;
     s_p2_ridetime = nullptr;
-    s_p2_descent = nullptr;
+    s_p2_ascent = nullptr;
     s_p2_incline = nullptr;
     s_p2_trip = nullptr;
     s_p2_trip_unit = nullptr;
