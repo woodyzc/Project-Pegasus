@@ -995,6 +995,22 @@ void RenderRecordingState() {
     PaintTripCell(s_p2_trip_cell, s_p2_trip_caption, s_p2_trip, s_p2_trip_unit, recording, moving);
 }
 
+// Whether this ride has any speed history at all.
+//
+// RideStatsCore_AvgSpeedKmh() returns 0.0f as its "nothing to average"
+// sentinel, and a panel that prints that verbatim is claiming an average of
+// zero -- a ride that went nowhere -- when the truth is a ride that has not
+// started. Both pages have to answer that the same way, so they ask here
+// rather than each testing it.
+//
+// Max is the thing tested, not the average: max is recorded from every
+// sample, gated on nothing, so it stays at exactly zero until a fix reports
+// some speed. The average is gated on the moving threshold and would still be
+// 0.0 after a slow crawl that never reached it.
+bool SpeedStatsUnknown() {
+    return RideStats_MaxSpeedKmh() <= 0.0f;
+}
+
 void RenderSpeedAndTrip() {
     if (s_has_speed) {
         char speed[12];
@@ -1018,18 +1034,14 @@ void RenderSpeedAndTrip() {
     }
 
     if (s_speed_avg_label != nullptr) {
-        const float max_kmh = RideStats_MaxSpeedKmh();
-        if (max_kmh <= 0.0f) {
-            // Dashes, not zeros, before anything has moved. Zero reads as a
-            // ride that went nowhere, where dashes read as one that has not
-            // started.
+        if (SpeedStatsUnknown()) {
             lv_label_set_text(s_speed_avg_label, "--");
             lv_label_set_text(s_speed_max_label, "--");
         } else {
             char avg[12];
             char max[12];
             FormatMetric(Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()), avg, sizeof(avg));
-            FormatMetric(Settings_SpeedFromKmh(max_kmh), max, sizeof(max));
+            FormatMetric(Settings_SpeedFromKmh(RideStats_MaxSpeedKmh()), max, sizeof(max));
             lv_label_set_text(s_speed_avg_label, avg);
             lv_label_set_text(s_speed_max_label, max);
         }
@@ -1578,8 +1590,17 @@ void RenderPage2() {
     }
     lv_label_set_text(s_p2_speed_unit, Settings_SpeedUnitLabel());
     lv_label_set_text(s_p2_avgspeed_unit, Settings_SpeedUnitLabel());
-    lv_label_set_text_fmt(s_p2_avgspeed, "%.1f",
-                          (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
+    // The one number on this page that was formatted a second time instead of
+    // being copied, and it drifted exactly the way the note above predicts:
+    // page one showed "--" before the first movement while this showed "0.0".
+    // Same ride, two answers, which teaches a rider that neither is worth
+    // reading.
+    if (SpeedStatsUnknown()) {
+        lv_label_set_text(s_p2_avgspeed, "--");
+    } else {
+        lv_label_set_text_fmt(s_p2_avgspeed, "%.1f",
+                              (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
+    }
 
     if (s_hr_label != nullptr) {
         // The text is copied, the colour is not. This page is dark, so it

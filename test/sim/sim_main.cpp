@@ -432,6 +432,27 @@ int main(int argc, char **argv) {
         Page_Dashboard_ShowSecondPageForTest(true);
         snprintf(path, sizeof(path), "%s/06-second-page.ppm", out_dir);
         Render(&page, path);
+
+        // ---- The same page before the ride has moved ----
+        // A ride armed but not yet under way, which is what a board sitting on
+        // a desk with the phone feeding it actually looks like -- and until a
+        // photograph of one turned up, the state no scene here covered.
+        //
+        // RideStatsCore_AvgSpeedKmh() returns 0.0f to mean "nothing to
+        // average", and this page printed that straight out as "0.0" while
+        // page one showed "--" for the same ride. Both must read "--".
+        //
+        // Max at zero rather than avg is what decides it: max is recorded from
+        // every sample with no threshold, so only a ride that has never seen
+        // any speed at all leaves it here.
+        g_sim.max_kmh = 0.0f;
+        g_sim.avg_kmh = 0.0f;
+        g_sim.moving_seconds = 0.0;
+        g_sim.gps.speed = 0.0f;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        snprintf(path, sizeof(path), "%s/06b-second-page-not-moved.ppm", out_dir);
+        Render(&page, path);
+
         Page_Dashboard_ShowSecondPageForTest(false);
     }
 
