@@ -41,8 +41,14 @@ bool Alert_ParseFrame(const uint8_t *data, size_t length, AlertFrame_t *out) {
 
     out->kind = (AlertKind_t)kind;
     out->count = count;
+    // Zeroed whole, not just terminated. Callers copy sizeof(name) rather
+    // than strlen -- BLE_TBT_Receiver does, into a struct it publishes on the
+    // data bus -- and terminating alone would leave the bytes past the NUL
+    // holding whatever was on the caller's stack, which then travels into
+    // shared state. Harmless while everything reads to the terminator, and
+    // not worth relying on.
+    memset(out->name, 0, sizeof(out->name));
     memcpy(out->name, data + ALERT_HEADER_LEN, name_len);
-    out->name[name_len] = '\0';
     return true;
 }
 

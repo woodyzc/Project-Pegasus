@@ -104,6 +104,19 @@ class AlertThrottleTest {
     }
 
     @Test
+    fun `a clock that steps backwards does not silence a conversation`() {
+        // The caller passes SystemClock.elapsedRealtime(), which cannot do
+        // this. The test exists because the consequence if anything ever
+        // changed that is invisible: not a crash, not a wrong banner, just a
+        // conversation that stops arriving and looks exactly like nobody
+        // having messaged.
+        val t = AlertThrottle(windowMs = 30_000)
+        assertEquals(1, t.admit(AlertFrame.KIND_CHAT, "group", 1_000_000))
+        // An NTP correction drags the clock back an hour.
+        assertEquals(1, t.admit(AlertFrame.KIND_CHAT, "group", 1_000_000 - 3_600_000))
+    }
+
+    @Test
     fun `a long ride through many conversations does not grow without bound`() {
         // Each name is seen once and never again. Nothing asserts on internal
         // state -- the point is that this completes and that the throttle

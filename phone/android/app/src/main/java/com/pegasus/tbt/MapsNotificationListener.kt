@@ -1,6 +1,7 @@
 package com.pegasus.tbt
 
 import android.app.Notification
+import android.os.SystemClock
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -292,7 +293,12 @@ class MapsNotificationListener : NotificationListenerService() {
             return
         }
 
-        val count = throttle.admit(alert.kind, alert.name, System.currentTimeMillis())
+        // elapsedRealtime, not currentTimeMillis: this measures an interval,
+        // and the wall clock moves. An NTP correction that steps it backwards
+        // makes every later alert from a conversation look like it arrived
+        // before the last one, which the throttle reads as "inside the
+        // window" -- silencing that conversation until the clock catches up.
+        val count = throttle.admit(alert.kind, alert.name, SystemClock.elapsedRealtime())
         if (count == null) {
             alertsFolded++
             return

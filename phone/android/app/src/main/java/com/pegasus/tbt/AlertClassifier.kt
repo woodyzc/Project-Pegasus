@@ -15,11 +15,13 @@ object AlertClassifier {
     /** What the head unit will be told. A null classification means silence. */
     data class Alert(val kind: Int, val name: String)
 
-    // Android's Notification.CATEGORY_* values, repeated as plain strings so
-    // this file stays free of Android imports. They are public API constants
-    // and their values are fixed.
+    // Android's Notification.CATEGORY_CALL, repeated as a plain string so
+    // this file stays free of Android imports. It is a public API constant
+    // and its value is fixed.
+    //
+    // CATEGORY_MESSAGE is deliberately absent: the allowlists below decide
+    // what counts as a message, so the category is never consulted for one.
     const val CATEGORY_CALL = "call"
-    const val CATEGORY_MESSAGE = "msg"
 
     const val FLAG_ONGOING_EVENT = 0x00000002
     const val FLAG_GROUP_SUMMARY = 0x00000200

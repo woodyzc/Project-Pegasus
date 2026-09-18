@@ -39,7 +39,12 @@ class AlertThrottle(
         val window = if (kind == AlertFrame.KIND_CALL) callWindowMs else windowMs
         val last = lastSentAtMs[key]
 
-        if (last != null && nowMs - last < window) {
+        // `nowMs > last` guards against a clock that steps backwards. The
+        // caller passes a monotonic one, so this should be unreachable -- but
+        // the failure if it ever is not would be a conversation silenced
+        // indefinitely rather than anything noisy, and that is the kind of
+        // bug nobody reports because it looks like nobody messaged.
+        if (last != null && nowMs >= last && nowMs - last < window) {
             if (kind != AlertFrame.KIND_CALL) {
                 suppressedSince[key] = (suppressedSince[key] ?: 0) + 1
             }

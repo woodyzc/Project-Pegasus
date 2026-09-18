@@ -161,7 +161,6 @@ class TbtService : Service() {
             ble.start()
         }
         ensureRouteSource()
-        ensureLocation()
     }
 
     /**
@@ -196,9 +195,9 @@ class TbtService : Service() {
         // that has never got a fix, which is the single most confusing state
         // this project has, so say so instead.
         //
-        // Self-healing: opening the app starts this service again from the
-        // foreground, where the type is granted, and that pass starts
-        // location properly.
+        // Recovered by onStartCommand calling this again on every start:
+        // opening the app starts the service from the foreground, where the
+        // type is granted, and that pass gets past this guard.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
             !locationTypeHeld && hasLocationPermission()
         ) {
@@ -323,6 +322,21 @@ class TbtService : Service() {
         }
 
         ensureLink()
+
+        // Deliberately NOT inside ensureLink(), which returns early once the
+        // link exists and therefore runs its body once per process.
+        //
+        // Whether location may run is decided above, in this method, on every
+        // start -- and the answer changes. A service first started from the
+        // background cannot hold the location type; the same service started
+        // again once the user opens the app can. Behind ensureLink() that
+        // second pass never happened, so a process that came up in the
+        // background stayed position-less for its whole life, which is
+        // precisely the recovery its comment claimed to provide.
+        //
+        // Safe to repeat: LocationSource.start() returns immediately if it is
+        // already listening.
+        ensureLocation()
 
         // Restart if Android reclaims us under memory pressure: a dropped link
         // mid-ride is the failure this service exists to prevent.
