@@ -248,11 +248,22 @@ These were each discovered the slow way. They are not optional trivia.
   "Finish ride" or an hour without movement disarms it again.
 
   The danger moved rather than disappeared: forgetting to start loses a whole
-  ride, where forgetting to finish only left a file to delete. What makes that
-  trap sharp is that nothing else on the dashboard betrays it — `Trip` and
-  `RideStats` subscribe to GPS directly and never consult the log, so the
-  odometer climbs, the speed moves and the averages fill in exactly as on a
-  recorded ride. The TRIP cell is the defence: it is *filled* when, and only
+  ride, where forgetting to finish only left a file to delete.
+
+  **`Trip`, `RideStats` and `Ascent` accumulate only while the ride is armed**,
+  and that was not always so. They subscribed to GPS directly and counted from
+  the moment a fix existed, which the phone-supplied position made visible
+  immediately: the TRIP cell sat amber saying nothing was being recorded with a
+  number climbing inside it, and "new ride" popped up a summary of a ride that
+  had never been started, because the distance quietly gathered beforehand made
+  `RideSummary_IsEmpty()` false. Armed rather than recording — a rider waiting
+  on their first fix is on their ride. `RideStats` treats disarmed exactly like
+  a dropped fix rather than merely skipping, so the first sample after starting
+  opens a fresh interval instead of charging the average for however long the
+  device sat on a desk.
+
+  SPEED is deliberately **not** gated: it is a live sensor reading, not a ride
+  statistic, and a rider pushing the bike wants to see it move. The TRIP cell is the defence: it is *filled* when, and only
   when, nothing is being written — amber stopped, red while moving — and looks
   like any other cell while recording. Filling the good state too was tried
   and dropped: a rider is recording for hours, and a block of colour held for
