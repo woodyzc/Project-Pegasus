@@ -92,6 +92,7 @@ float RideStats_AscentM() { return g_sim.ascent_m; }
 double RideStats_MovingSeconds() { return g_sim.moving_seconds; }
 uint32_t RideLog_PointCount() { return g_sim.log_points; }
 const char *RideLog_FileName() { return g_sim.log_file; }
+bool RideLog_IsRecording() { return g_sim.recording; }
 float RideStats_DescentM() { return 1890.0f; }
 void RideStats_Init() {}
 void RideStats_Reset() {}
@@ -117,6 +118,7 @@ const char *const TOPIC_HEART_RATE = "Sensor/HeartRate";
 const char *const TOPIC_IMU_DATA = "Sensor/IMU";
 const char *const TOPIC_BATTERY = "Sensor/Battery";
 const char *const TOPIC_NAV_TBT = "Nav/TBT";
+const char *const TOPIC_PHONE_ALERT = "Phone/Alert";
 
 Account::Account(const char *id, DataCenter_Callback_t callback, void *user_arg)
     : ID(id), Callback(callback), UserArg(user_arg) {}
@@ -169,6 +171,10 @@ bool DataCenter_Pull(const char *topic, void *out, uint32_t size) {
     if (strcmp(topic, TOPIC_NAV_TBT) == 0 && size == sizeof(TBT_Directive_t)) {
         memcpy(out, &g_sim.tbt, sizeof(TBT_Directive_t));
         return g_sim.have_tbt;
+    }
+    if (strcmp(topic, TOPIC_PHONE_ALERT) == 0 && size == sizeof(Alert_Info_t)) {
+        memcpy(out, &g_sim.alert, sizeof(Alert_Info_t));
+        return g_sim.have_alert;
     }
     if (strcmp(topic, TOPIC_BATTERY) == 0 && size == sizeof(Battery_t)) {
         memcpy(out, &g_sim.battery, sizeof(Battery_t));
@@ -280,3 +286,7 @@ uint32_t RoadView_LastCullUs() { return 0; }
 uint32_t RoadView_LastDrawOnlyUs() { return 0; }
 uint32_t RoadView_LastSegments() { return 0; }
 uint32_t RoadView_LastVisibleWays() { return 0; }
+
+// Overlay_Alert calls this when a CALL arrives, to wake the screen. There is
+// no backlight here, so it only has to link.
+void PowerManager_NoteActivity() {}

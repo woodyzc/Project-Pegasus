@@ -20,6 +20,9 @@ struct SimState {
     double moving_seconds = 0.0;
     uint32_t log_points = 0;
     const char *log_file = "";
+    // Whether a ride is being written. The TRIP cell inverts to amber or red
+    // when it is NOT, so this drives the loudest thing on the panel.
+    bool recording = true;
     bool track_up = false;
     bool have_imu = false;
     IMU_Data_t imu{};
@@ -34,6 +37,12 @@ struct SimState {
     GPS_Info_t gps{};
 
     Battery_t battery{};
+
+    // The phone alert banner, which draws on lv_layer_top() over whatever
+    // page is up -- so it is part of the dashboard's picture even though no
+    // page owns it.
+    bool have_alert = false;
+    Alert_Info_t alert{};
 
     // How many .gpx files the card appears to hold, for the route picker.
     size_t gpx_files = 0;

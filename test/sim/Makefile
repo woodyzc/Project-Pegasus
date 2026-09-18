@@ -38,15 +38,16 @@ LVGL_SRC := $(shell find $(LVGL)/src -name '*.c')
 # it draws from. Anything not listed here is stubbed in stubs.cpp.
 APP_CXX := $(SRC)/ui/Page_Dashboard.cpp $(SRC)/ui/TbtIcons.cpp \
            $(SRC)/ui/Page_Map.cpp $(SRC)/ui/MapView.cpp \
-           $(SRC)/ui/Overlay_RideSummary.cpp
+           $(SRC)/ui/Overlay_RideSummary.cpp $(SRC)/ui/Overlay_Alert.cpp
 APP_C   := $(SRC)/ui/NumFont.c $(SRC)/ui/NumFontBig.c $(SRC)/ui/NumFontAvg.c $(SRC)/system/HrZone.c $(SRC)/system/TimeZone.c \
            $(SRC)/system/RideSummary.c $(SRC)/navigation/MapHeading.c \
            $(SRC)/system/TimeSource.c $(SRC)/navigation/TbtParse.c \
-           $(SRC)/navigation/MapProject.c $(SRC)/navigation/TrackBuffer.c
+           $(SRC)/navigation/MapProject.c $(SRC)/navigation/TrackBuffer.c \
+           $(SRC)/system/AlertFrame.c $(SRC)/ui/CjkFont.c
 
 SIM_CXX := sim_main.cpp stubs.cpp
 
-.PHONY: all run png gallery clean
+.PHONY: all run png gallery fontproof clean
 
 all: run png
 
@@ -92,6 +93,21 @@ $(OUT)/dashsim: $(LVGL_OBJ) $(APP_C_OBJ) $(APP_CXX_OBJ) $(SIM_OBJ)
 	@mkdir -p $(OUT)
 	$(CXX) -o $@ $(SIM_OBJ) $(APP_CXX_OBJ) $(APP_C_OBJ) $(LVGL_OBJ) -lm
 
+# The CJK font, rendered through LVGL's real glyph blitter.
+#
+# gencjkfont.py packs those bitmaps by hand, and every way of getting that
+# wrong still compiles and links. This is the cheapest place to find out --
+# it needs no page, no stubs and no state, just the font and a screen.
+$(OUT)/fontproof: $(LVGL_OBJ) $(OUT)/simobj/fontproof.o $(OUT)/app/ui/CjkFont.o
+	@mkdir -p $(OUT)
+	$(CXX) -o $@ $(OUT)/simobj/fontproof.o $(OUT)/app/ui/CjkFont.o $(LVGL_OBJ) -lm
+
+fontproof: $(OUT)/fontproof
+	@mkdir -p $(OUT)
+	./$(OUT)/fontproof $(OUT)
+	@sips -s format png -z 640 480 $(OUT)/cjk-font-proof.ppm \
+	      --out $(OUT)/cjk-font-proof.png >/dev/null 2>&1 || true
+
 run: $(OUT)/dashsim
 	@mkdir -p $(OUT)
 	./$(OUT)/dashsim $(OUT)
@@ -99,6 +115,9 @@ run: $(OUT)/dashsim
 	@# invocation. Included here rather than left to be remembered: the
 	@# track-up frame was produced by hand once and would have rotted.
 	./$(OUT)/dashsim $(OUT) --route
+	@# The alert banner composites onto lv_layer_top(), so it needs the
+	@# dashboard underneath it to show what it does and does not cover.
+	./$(OUT)/dashsim $(OUT) --alert
 
 # sips ships with macOS, so no extra install for a viewable image.
 #

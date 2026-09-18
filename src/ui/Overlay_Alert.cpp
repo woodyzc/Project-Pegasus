@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "CjkFont.h"
 #include "../system/AlertFrame.h"
 #include "../system/DataCenter.h"
 #include "../system/PowerManager.h"
@@ -13,7 +14,6 @@ namespace {
 // Page_Dashboard's palette. Repeated rather than shared because this draws
 // over that layout and has to match it, and a header exporting the colours
 // would make every page depend on the dashboard's private styling.
-constexpr uint32_t COLOR_BG = 0x101820;
 constexpr uint32_t COLOR_CARD = 0x18222C;
 constexpr uint32_t COLOR_CAPTION = 0x93A4B8;
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;
@@ -56,6 +56,63 @@ lv_timer_t *s_expiry = nullptr;
 // the most recent publish forever, so this is the only thing separating a new
 // alert from one already shown and dismissed.
 uint32_t s_shown_seq = 0;
+
+// True if any byte is outside ASCII, which here means the name needs the one
+// font that can draw it. Checked on bytes rather than decoded codepoints
+// because that is the whole question -- Montserrat has 0x20-0x7F and nothing
+// else, so the first byte over 0x7F settles it.
+bool NeedsCjkFace(const char *name) {
+    for (const unsigned char *p = (const unsigned char *)name; *p != '\0'; p++) {
+        if (*p > 0x7F) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Trims `text` until it fits `max_w` x `max_h` in `font`, ending it with an
+// ellipsis if anything was removed. `text` must have room for three more
+// bytes than the longest name.
+//
+// The alternative was to reason about it: so many pixels per character, so
+// many characters per line, two lines. That works until a name mixes a wide
+// hanzi with narrow Latin, or the column changes width, and the failure is a
+// name whose bottom half is sliced off by the edge of the banner -- which
+// reads as a broken screen rather than as a long name. Asking LVGL to measure
+// the real string in the real font is exact, and costs microseconds on a path
+// that runs when the phone rings.
+void FitToBox(char *text, const lv_font_t *font, lv_coord_t max_w, lv_coord_t max_h) {
+    lv_point_t size;
+    lv_txt_get_size(&size, text, font, 0, 0, max_w, LV_TEXT_FLAG_NONE);
+    if (size.y <= max_h) {
+        return;
+    }
+
+    char original[ALERT_NAME_MAX + 1];
+    strncpy(original, text, sizeof(original) - 1);
+    original[sizeof(original) - 1] = '\0';
+
+    size_t len = strlen(original);
+    while (len > 0) {
+        // Back off one whole UTF-8 character: step over continuation bytes so
+        // a multi-byte character is never cut in half, which would leave a
+        // stray box on the end of the name.
+        do {
+            len--;
+        } while (len > 0 && ((unsigned char)original[len] & 0xC0) == 0x80);
+
+        // Three dots rather than U+2026: Montserrat is one of the two faces
+        // this runs against and does not have the single glyph.
+        memcpy(text, original, len);
+        memcpy(text + len, "...", 4); // copies the terminator too
+
+        lv_txt_get_size(&size, text, font, 0, 0, max_w, LV_TEXT_FLAG_NONE);
+        if (size.y <= max_h) {
+            return;
+        }
+    }
+    text[0] = '\0';
+}
 
 uint32_t AccentFor(uint8_t kind) {
     switch (kind) {
@@ -149,20 +206,42 @@ void Show(const Alert_Info_t &alert) {
     lv_obj_set_style_text_color(kind, lv_color_hex(accent), 0);
     lv_obj_set_style_text_letter_space(kind, 2, 0);
 
-    lv_obj_t *who = lv_label_create(column);
+    // ---- Which face can draw this name ----
+    // Montserrat for a Latin name, at two sizes -- a short one gets the
+    // larger. Anything with a byte over 0x7F has to use the CJK face or it
+    // draws nothing at all: that font is the only one in the image with a
+    // Chinese glyph in it, which is also why it is not simply used for
+    // everything. It costs 750KB, and Montserrat renders Latin better at
+    // these sizes.
+    //
     // An unnamed caller is the normal case for a number not in the address
-    // book, and the banner still has to say a call is happening. The em-dash
-    // placeholder keeps the layout from collapsing to one line.
-    lv_label_set_text(who, alert.name[0] != '\0' ? alert.name : "--");
-    // ---- Two sizes, so the longest legal name still fits the band ----
-    // At 24px a name wraps to about fourteen characters a line, and three
-    // lines overflow 120px -- the bottom of the name would be cut off, which
-    // looks like a broken screen rather than a long name. At 18px the full
-    // 48-byte maximum fits in three lines with room to spare. Short names,
-    // which is nearly all of them, keep the larger size.
-    const size_t name_len = strlen(alert.name);
-    lv_obj_set_style_text_font(
-        who, name_len > 14 ? &lv_font_montserrat_18 : &lv_font_montserrat_24, 0);
+    // book, and the banner still has to say a call is happening.
+    char name[ALERT_NAME_MAX + 4]; // room for the ellipsis FitToBox may add
+    if (alert.name[0] != '\0') {
+        strncpy(name, alert.name, ALERT_NAME_MAX);
+        name[ALERT_NAME_MAX] = '\0';
+    } else {
+        strcpy(name, "--");
+    }
+
+    const lv_font_t *face;
+    if (NeedsCjkFace(name)) {
+        face = &pegasus_font_cjk_20;
+    } else {
+        face = (strlen(name) > 14) ? &lv_font_montserrat_18 : &lv_font_montserrat_24;
+    }
+
+    // What is left of the banner once the kind label, the count line and the
+    // gaps between them have taken their share. Measured against the real
+    // font below rather than assumed to be some number of lines, because the
+    // three faces have three different line heights.
+    constexpr lv_coord_t NAME_MAX_H = BANNER_H - 56;
+    const lv_coord_t name_max_w = LV_HOR_RES - ACCENT_W - (2 * PAD);
+    FitToBox(name, face, name_max_w, NAME_MAX_H);
+
+    lv_obj_t *who = lv_label_create(column);
+    lv_label_set_text(who, name);
+    lv_obj_set_style_text_font(who, face, 0);
     lv_obj_set_style_text_color(who, lv_color_hex(COLOR_VALUE), 0);
     // Wraps to a second line rather than being cut, because the distinguishing
     // part of a group-chat name is often at the end of it.
