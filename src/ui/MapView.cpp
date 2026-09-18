@@ -182,6 +182,22 @@ void MapView_Redraw(MapView_t *view) {
         return;
     }
 
+    // First, and before any early return below.
+    //
+    // This used to sit at the bottom, on the reasoning that every zoom, pan,
+    // recentre and fix goes through this function -- which is true, and was
+    // not enough, because the guard below returns before reaching it. With no
+    // track loaded and nothing centred, a rider could zoom the route page,
+    // come back to the dashboard, and find their framing gone: the zoom had
+    // been applied to the view and never written to the shared camera, so the
+    // dashboard restored whatever was there before. Intermittent, because it
+    // depended entirely on whether a .gpx happened to be loaded.
+    //
+    // Nothing below this line touches the camera -- Redraw only reads it and
+    // writes pixels -- so the top is as current as the bottom and reachable
+    // from every path.
+    MapView_SaveCamera(view);
+
     if (!view->have_center || GpxTrack_PointCount() == 0) {
         lv_line_set_points(view->trail, view->points, 0);
         if (view->trail_done != nullptr) {
@@ -240,16 +256,11 @@ void MapView_Redraw(MapView_t *view) {
     lv_line_set_points(view->trail, view->points + ahead_from,
                        (uint16_t)(written - ahead_from));
 
-    // The camera is saved here, on every redraw, rather than when a page is
-    // torn down.
-    //
-    // Saving on teardown looked right and was not: PageManager runs the
-    // outgoing page's unload AFTER the incoming page's will-appear, so the
-    // dashboard restored a camera the route page had not saved yet and the map
-    // appeared to reset itself anyway. Every zoom, pan, recentre and fix goes
-    // through this function, so saving here is always current and depends on
-    // no ordering at all.
-    MapView_SaveCamera(view);
+    // The save is at the TOP of this function, not here -- see the note there.
+    // It is in Redraw at all, rather than at page teardown, because
+    // PageManager runs the outgoing page's unload AFTER the incoming page's
+    // will-appear: the dashboard would restore a camera the route page had not
+    // saved yet, and the map would appear to reset itself.
 }
 
 bool MapView_IsTrackUp(const MapView_t *view) {
@@ -378,46 +389,69 @@ void MapView_Recenter(MapView_t *view) {
 namespace {
 
 // Shared by every MapView_t, because it describes the map rather than a page.
-double s_cam_lat = 0.0;
-double s_cam_lon = 0.0;
+//
+// The scale and the centre are kept separately, and that separation is the
+// point: a zoom is meaningful on its own, a centre is not. Storing them
+// together meant a view with nothing centred saved neither, so a rider who
+// zoomed before the map had anything to centre on lost the zoom silently.
 double s_cam_mpp = 0.0;
 bool s_cam_zoom_locked = false;
 bool s_cam_pan_locked = false;
-bool s_cam_have = false;
+bool s_cam_have = false; // a scale has been saved
+
+double s_cam_lat = 0.0;
+double s_cam_lon = 0.0;
+bool s_cam_have_centre = false; // ...and a centre with it
 
 } // namespace
 
 void MapView_SaveCamera(const MapView_t *view) {
-    if (view == nullptr || !view->have_center) {
+    if (view == nullptr) {
         return;
     }
-    s_cam_lat = view->center_lat;
-    s_cam_lon = view->center_lon;
+    // Unconditional. The scale is what the rider set by hand and it survives
+    // whether or not anything is centred yet.
     s_cam_mpp = view->metres_per_pixel;
     s_cam_zoom_locked = view->zoom_locked;
     s_cam_pan_locked = view->pan_locked;
     s_cam_have = true;
+
+    if (view->have_center) {
+        s_cam_lat = view->center_lat;
+        s_cam_lon = view->center_lon;
+        s_cam_have_centre = true;
+    }
 }
 
 bool MapView_RestoreCamera(MapView_t *view) {
     if (view == nullptr || !s_cam_have || s_cam_mpp <= 0.0) {
         return false;
     }
-    view->center_lat = s_cam_lat;
-    view->center_lon = s_cam_lon;
     view->metres_per_pixel = s_cam_mpp;
-    view->have_center = true;
     // The locks travel too. A rider who panned away from their fix expects it
     // to stay panned when they come back, and one who never touched the map
     // expects it to keep following them.
     view->zoom_locked = s_cam_zoom_locked;
     view->pan_locked = s_cam_pan_locked;
+
+    if (s_cam_have_centre) {
+        view->center_lat = s_cam_lat;
+        view->center_lon = s_cam_lon;
+        view->have_center = true;
+    }
+
     MapView_Redraw(view);
-    return true;
+
+    // ⚠️ True only when a CENTRE came back, not merely a scale. Page_Map reads
+    // this to decide whether to fall back to MapView_FitTrack, and a scale
+    // with no centre still needs that framing -- FitTrack respects the zoom
+    // lock, so it will centre without undoing what the rider chose.
+    return s_cam_have_centre;
 }
 
 void MapView_ForgetCamera() {
     s_cam_have = false;
+    s_cam_have_centre = false;
 }
 
 bool MapView_IsManual(const MapView_t *view) {
