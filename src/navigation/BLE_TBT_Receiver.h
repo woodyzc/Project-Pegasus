@@ -66,6 +66,18 @@
 // steps aside for good once it has. See GpsSourceCallbacks in the .cpp.
 #define TBT_GPS_CHARACTERISTIC_UUID "a3c87505-8ed3-4bdf-8a39-a01bebede295"
 
+// ---- Calls, texts and chat messages, so the rider can leave the phone alone
+//
+// The phone writes an alert here and BLE_TBT_Receiver publishes it to
+// TOPIC_PHONE_ALERT, where Overlay_Alert draws it over the metric cells. Wire
+// format, and why it carries a name and no message body, are in
+// src/system/AlertFrame.h.
+//
+// Write-only and WRITE_NR: an alert the head unit missed is an alert the
+// rider finds on the phone later, which is the normal state of affairs
+// anyway. Nothing acknowledges it and nothing is stored.
+#define TBT_ALERT_CHARACTERISTIC_UUID "a3c87506-8ed3-4bdf-8a39-a01bebede295"
+
 // Brings up the GATT server and starts advertising, so the phone can find and
 // connect to the device. Preconditions: DataCenter_Init() has run, and NimBLE
 // is initialised (BLE_HR_Init() does this; call that first).

@@ -1,7 +1,10 @@
 #pragma once
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
+
+// For ALERT_NAME_MAX, which bounds Alert_Info_t below.
+#include "AlertFrame.h"
 
 // Cross-core Pub/Sub data bus, adapted from deps/X-TRACK's DataCenter/Account
 // design (see deps/X-TRACK/.../Utils/DataCenter/). X-TRACK's original runs on
@@ -140,6 +143,27 @@ typedef struct {
     uint32_t remaining_m;
 } TBT_Directive_t;
 
+// ---- One interruption from the phone: a call, a text, a chat message ----
+//
+// Carries WHO and nothing else -- no message body. The reasoning is in
+// src/system/AlertFrame.h, which also defines the wire format this is filled
+// from. Included rather than re-declared so the name length has exactly one
+// definition: this struct is the thing the panel draws, and a bound that
+// disagreed with the parser's would be a truncation nobody sees until a long
+// name arrives.
+typedef struct {
+    // Increments once per alert delivered, starting at 1. A zeroed struct
+    // therefore says "nothing has ever arrived", and the overlay can tell a
+    // fresh alert from the same one still sitting in the topic buffer --
+    // DataCenter_Pull always succeeds once a topic has data, so without this
+    // a poller has no way to ask "is this new?".
+    uint32_t seq;
+
+    uint8_t kind;  // an AlertKind_t value
+    uint8_t count; // messages coalesced into this one alert, >= 1
+    char name[ALERT_NAME_MAX + 1]; // NUL-terminated; may be empty
+} Alert_Info_t;
+
 // Well-known topic names (CLAUDE.md §4 examples: "Sensor/HeartRate", "GPS_Info").
 // Add new topics by extending the registration table in DataCenter.cpp.
 extern const char *const TOPIC_GPS_INFO;
@@ -147,6 +171,7 @@ extern const char *const TOPIC_HEART_RATE;
 extern const char *const TOPIC_IMU_DATA;
 extern const char *const TOPIC_BATTERY;
 extern const char *const TOPIC_NAV_TBT;
+extern const char *const TOPIC_PHONE_ALERT;
 
 // Called by a subscriber on every DataCenter_Publish() to that topic, with a
 // fresh copy of the published data (NOT a pointer into DataCenter's internal

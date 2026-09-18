@@ -20,6 +20,7 @@
 #include "system/Settings.h"
 #include "system/RideStats.h"
 #include "system/Trip.h"
+#include "ui/Overlay_Alert.h"
 #include "ui/Page_Dashboard.h"
 #include "ui/Page_Map.h"
 #include "ui/Page_Settings.h"
@@ -170,6 +171,13 @@ void setup() {
     // Before the LVGL task, because it creates an LVGL timer and LVGL here has
     // no lock: everything lv_* belongs to that task once it is running.
     PowerManager_Init();
+
+    // Same precondition, same reason: it creates LVGL objects from a timer,
+    // and that timer has to exist before the task that owns LVGL does.
+    //
+    // Independent of the radios below. If the phone never connects this costs
+    // one Pull every 250ms that finds nothing.
+    Overlay_Alert_Init();
 
     // Waits out whatever is left of the two seconds, then hands the screen
     // over. The first frame the LVGL task draws is the dashboard.

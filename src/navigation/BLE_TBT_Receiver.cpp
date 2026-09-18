@@ -3,6 +3,7 @@
 #include "../sensors/GpsFrame.h"
 #include "NavRoute.h"
 
+#include "../system/AlertFrame.h"
 #include "../system/ClockFrame.h"
 #include "../system/TimeSource.h"
 
@@ -268,6 +269,46 @@ class GpsCallbacks : public NimBLECharacteristicCallbacks {
 GpsCallbacks s_gps_callbacks;
 
 
+// ---- Phone alerts ----
+//
+// No arbitration and no state: unlike position, nothing else on this device
+// can produce a call. The one thing worth keeping is a counter, because
+// DataCenter_Pull hands back the last published value forever and the overlay
+// would otherwise have no way to tell a new alert from the one it already
+// showed.
+uint32_t s_alert_seq = 0;
+
+class AlertCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &conn_info) override {
+        (void)conn_info;
+        NimBLEAttValue value = characteristic->getValue();
+
+        AlertFrame_t frame;
+        if (!Alert_ParseFrame(value.data(), value.length(), &frame)) {
+            return;
+        }
+
+        Alert_Info_t info;
+        memset(&info, 0, sizeof(info));
+        // Pre-incremented, so the first alert of a boot is seq 1 and a zeroed
+        // struct keeps meaning "nothing has arrived". Wrapping after four
+        // billion alerts lands on 0 for exactly one of them, which costs that
+        // single banner and nothing else.
+        info.seq = ++s_alert_seq;
+        info.kind = (uint8_t)frame.kind;
+        info.count = frame.count;
+        // Bounded by the parser, which is why this is a plain copy: name is
+        // NUL-terminated within ALERT_NAME_MAX + 1 or Alert_ParseFrame refused
+        // the frame above.
+        memcpy(info.name, frame.name, sizeof(info.name));
+
+        DataCenter_Publish(TOPIC_PHONE_ALERT, &info);
+    }
+};
+
+AlertCallbacks s_alert_callbacks;
+
+
 const char *s_start_result = "not started";
 
 // Bring-up trace, written to NVS so it can be read back with esptool over the
@@ -390,6 +431,14 @@ void BLE_TBT_Start() {
         TBT_GPS_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     gps->setCallbacks(&s_gps_callbacks);
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
+
+    // Calls, texts and chat messages. WRITE_NR for the same reason as the fix
+    // above, with less at stake: a dropped alert is one the rider reads on the
+    // phone at the next stop, so paying a round trip per notification to
+    // guarantee delivery would buy very little.
+    NimBLECharacteristic *alert = service->createCharacteristic(
+        TBT_ALERT_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+    alert->setCallbacks(&s_alert_callbacks);
 
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(TBT_SERVICE_UUID);
