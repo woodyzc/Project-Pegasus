@@ -86,6 +86,7 @@ class BleLink(context: Context) {
     private var routeCharacteristic: BluetoothGattCharacteristic? = null
     private var statusCharacteristic: BluetoothGattCharacteristic? = null
     private var clockCharacteristic: BluetoothGattCharacteristic? = null
+    private var gpsCharacteristic: BluetoothGattCharacteristic? = null
     private var lastWriteAt = 0L
     private var lastFrame: ByteArray? = null
 
@@ -146,6 +147,7 @@ class BleLink(context: Context) {
         routeCharacteristic = null
         statusCharacteristic = null
         clockCharacteristic = null
+        gpsCharacteristic = null
         transfer = null
         isConnected = false
     }
@@ -337,6 +339,10 @@ class BleLink(context: Context) {
             routeCharacteristic = service.getCharacteristic(RouteFrame.ROUTE_CHARACTERISTIC_UUID)
             statusCharacteristic = service.getCharacteristic(RouteFrame.STATUS_CHARACTERISTIC_UUID)
             clockCharacteristic = service.getCharacteristic(ClockFrame.CHARACTERISTIC_UUID)
+            // Absent on firmware older than the position feature. Null is the
+            // whole handling: sendGps() returns and the head unit uses its own
+            // receiver, exactly as it did before this existed.
+            gpsCharacteristic = service.getCharacteristic(GpsFrame.CHARACTERISTIC_UUID)
 
             isConnected = true
             report(if (routeCharacteristic != null) "Ready" else "Ready (no route support)")
@@ -484,6 +490,37 @@ class BleLink(context: Context) {
      * is the opposite of a route chunk, where a lost write is a permanent
      * hole, and it is why this does not go through the route path's machinery.
      */
+    /**
+     * Lends the head unit this phone's position.
+     *
+     * Unacknowledged, like the clock and for a sharper version of the same
+     * reason: a fix is worthless a second after it is taken, and another is
+     * already on its way. Waiting for an ack would delay every fix to avoid
+     * losing the occasional one, which is the wrong trade for data that
+     * expires.
+     *
+     * Nothing here decides whether the head unit should listen. It ignores us
+     * outright once its own receiver has ever had a fix, so the phone can keep
+     * sending without knowing what hardware is at the other end.
+     */
+    fun sendGps(frame: ByteArray): Boolean {
+        val chr = gpsCharacteristic ?: return false
+        val g = gatt ?: return false
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(
+                chr, frame, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            ) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                chr.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                chr.value = frame
+                g.writeCharacteristic(chr)
+            }
+        }
+    }
+
     private fun sendClock() {
         val chr = clockCharacteristic ?: return
         val g = gatt ?: return

@@ -50,6 +50,16 @@ class TbtService : Service() {
         var routeSource: RouteSource? = null
             private set
 
+        /**
+         * This phone's own position, lent to a head unit whose receiver has
+         * never been fitted. Beside the others for the same reason: it must
+         * outlive any Activity, because a ride is spent with the phone in a
+         * pocket.
+         */
+        @Volatile
+        var locationSource: LocationSource? = null
+            private set
+
         private const val PREFS = "pegasus_tbt"
         private const val KEY_ENABLED = "link_enabled"
 
@@ -149,6 +159,7 @@ class TbtService : Service() {
             ble.start()
         }
         ensureRouteSource()
+        ensureLocation()
     }
 
     /**
@@ -158,6 +169,29 @@ class TbtService : Service() {
      * the Google Maps notification path does not need this and must keep
      * working without it.
      */
+    /**
+     * Starts lending the head unit this phone's position.
+     *
+     * Separate from ensureRouteSource() on purpose: routing is opt-in and
+     * unbuilt by default, while this must work on the build that actually
+     * ships. Tying them together would mean the head unit has no fix on
+     * exactly the configuration that works today.
+     *
+     * Silent when permission is missing. The rider may grant it later and this
+     * is called on every connect, so nothing needs to watch for that.
+     */
+    private fun ensureLocation() {
+        val source = locationSource ?: LocationSource(applicationContext).also {
+            locationSource = it
+        }
+        source.onFrame = { frame ->
+            // The head unit ignores this outright once its own receiver has
+            // had a fix, so there is nothing to arbitrate here.
+            link?.sendGps(frame)
+        }
+        source.start()
+    }
+
     private fun ensureRouteSource() {
         if (routeSource != null) return
         val source = RouteSources.create(applicationContext) ?: return
@@ -236,6 +270,12 @@ class TbtService : Service() {
         // is being torn down.
         routeSource?.stop()
         routeSource = null
+        // Before the link, and not optional: LocationManager keeps the GNSS
+        // running for as long as a listener is registered, and a service that
+        // died without removing it would leave the phone burning its battery
+        // on fixes with nowhere to go.
+        locationSource?.stop()
+        locationSource = null
         link?.stop()
         link = null
         status = "Stopped"
