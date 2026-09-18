@@ -11,7 +11,14 @@ import android.widget.TextView
 
 /**
  * Watches Google Maps' ongoing navigation notification and forwards each
- * maneuver to the head unit.
+ * maneuver to the head unit -- and, from the same stream, forwards calls,
+ * texts and chat messages as alerts.
+ *
+ * The two jobs share this class because they share the one scarce thing:
+ * notification access is a single grant the user makes in system settings,
+ * and a second listener service would need its own. Everything past the
+ * package check is separate, and the alert half's decisions live in
+ * AlertClassifier and AlertThrottle, which are pure and tested.
  *
  * This exists because Maps exposes no turn-by-turn API. It is therefore built
  * on a UI surface Google can change at any release, and it is the least
@@ -47,6 +54,30 @@ class MapsNotificationListener : NotificationListenerService() {
         // Maps itself is posting slowly and no amount of tuning here helps.
         @Volatile
         var seen: Int = 0
+            private set
+
+        /**
+         * Alerts, counted the same way and for the same reason: "my phone
+         * rang and nothing happened" has several causes that look identical
+         * from the saddle.
+         *   alertsSeen  - notifications from any app that reached us
+         *   alertsSent  - those that were classified, admitted and written
+         *   alertsFolded - those folded into a later banner by the throttle
+         */
+        @Volatile
+        var alertsSeen: Int = 0
+            private set
+
+        @Volatile
+        var alertsSent: Int = 0
+            private set
+
+        @Volatile
+        var alertsFolded: Int = 0
+            private set
+
+        @Volatile
+        var lastAlert: String = "none yet"
             private set
 
         @Volatile
@@ -110,6 +141,14 @@ class MapsNotificationListener : NotificationListenerService() {
             if (lastAtMs == 0L) -1f else (System.currentTimeMillis() - lastAtMs) / 1000f
     }
 
+    /**
+     * Per-service rather than per-notification, so a group chat is folded
+     * across the whole ride. It is reset only when the system destroys this
+     * listener, which is the right lifetime: a fold that survived a restart
+     * would report a count for messages the rider already saw.
+     */
+    private val throttle = AlertThrottle()
+
     override fun onListenerConnected() {
         Log.i(TAG, "Notification access granted")
         // The listener can be bound by the system before the user ever opens
@@ -124,11 +163,22 @@ class MapsNotificationListener : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
-        if (sbn.packageName != MAPS_PACKAGE) return
         // Stopped means stopped: the system keeps this listener bound whatever
         // the user does, so it has to check for itself rather than assume no
         // notifications will arrive.
+        //
+        // Checked before the package split, so it governs alerts as well as
+        // navigation. Stopping the service must silence the head unit
+        // completely, not just stop the turns.
         if (!TbtService.isEnabled(applicationContext)) return
+
+        if (sbn.packageName != MAPS_PACKAGE) {
+            // Everything that is not Maps: a call, a text, a chat message, or
+            // -- overwhelmingly -- nothing worth a rider's attention. This
+            // line used to be a bare `return`.
+            handleAlert(sbn)
+            return
+        }
 
         seen++
         lastAtMs = System.currentTimeMillis()
@@ -198,6 +248,46 @@ class MapsNotificationListener : NotificationListenerService() {
         lastSentIcon = -1
         lastSentStreet = ""
         TbtService.link?.send(TbtFrame.clearFrame(), force = true)
+    }
+
+    /**
+     * A notification from some app other than Maps, on its way to the head
+     * unit's banner -- or, far more often, to the floor.
+     *
+     * This method deliberately holds no rules. It reads four fields, asks
+     * AlertClassifier what they mean and AlertThrottle whether to send, and
+     * writes the frame. Everything that can be got wrong is in those two,
+     * where it can be tested without a phone.
+     */
+    private fun handleAlert(sbn: StatusBarNotification) {
+        val notification = sbn.notification ?: return
+        alertsSeen++
+
+        val alert = AlertClassifier.classify(
+            packageName = sbn.packageName,
+            category = notification.category,
+            flags = notification.flags,
+            title = readTitle(notification),
+        ) ?: return
+
+        val count = throttle.admit(alert.kind, alert.name, System.currentTimeMillis())
+        if (count == null) {
+            alertsFolded++
+            return
+        }
+
+        val sent = TbtService.link?.sendAlert(
+            AlertFrame.encode(alert.kind, count, alert.name)
+        ) ?: false
+        if (sent) alertsSent++
+
+        // The name is kept for the diagnostics screen even when the write
+        // failed. "Classified correctly but the head unit was not connected"
+        // and "never recognised it at all" are different problems and look
+        // the same from the saddle.
+        lastAlert = "kind=${alert.kind} count=$count name='${alert.name}' " +
+            "from=${sbn.packageName} ${if (sent) "sent" else "NOT sent"}"
+        Log.d(TAG, lastAlert)
     }
 
     private fun readTitle(n: Notification): String? =

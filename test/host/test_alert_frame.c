@@ -204,6 +204,40 @@ static void test_reserved_byte(void) {
     check(strcmp(a.name, "Alex") == 0, "and the rest is unaffected");
 }
 
+/* The exact bytes the phone's encoder produces.
+ *
+ * This array is duplicated, character for character, in the companion app's
+ * AlertFrameTest.kt. That duplication is the test: the two sides are separate
+ * codebases in separate languages built by separate toolchains, and the only
+ * thing keeping them agreeing about this frame is that both are pinned to the
+ * same twelve bytes. Move a field on either side and one of the two suites
+ * goes red.
+ *
+ * A WeChat group that said six things, named in Chinese. Chinese on purpose:
+ * a multi-byte name is where a length in characters rather than bytes would
+ * pass every ASCII test and fail here. */
+static void test_reference_frame_from_the_phone(void) {
+    printf("-- the frame the companion app actually sends --\n");
+    const uint8_t wire[] = {
+        0x41,                   /* magic 'A' */
+        0x01,                   /* version */
+        0x02,                   /* ALERT_KIND_CHAT */
+        0x06,                   /* name length, in BYTES */
+        0x06,                   /* count */
+        0x00,                   /* reserved */
+        0xE5, 0xBC, 0xA0,       /* U+5F20 */
+        0xE4, 0xB8, 0x89,       /* U+4E09 */
+    };
+
+    AlertFrame_t a;
+    check(sizeof(wire) == 12, "twelve bytes on the wire");
+    check(Alert_ParseFrame(wire, sizeof(wire), &a), "the firmware accepts it");
+    check(a.kind == ALERT_KIND_CHAT, "decoded as a chat message");
+    check(a.count == 6, "standing for six messages");
+    check(strlen(a.name) == 6, "six bytes of name");
+    check(memcmp(a.name, wire + ALERT_HEADER_LEN, 6) == 0, "name byte-for-byte");
+}
+
 int main(void) {
     test_well_formed();
     test_kinds();
@@ -214,6 +248,7 @@ int main(void) {
     test_length_mismatch();
     test_non_ascii_passes_through();
     test_reserved_byte();
+    test_reference_frame_from_the_phone();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

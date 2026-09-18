@@ -530,11 +530,20 @@ A Kotlin app that scrapes Google Maps' navigation notification and writes
 turn-by-turn frames to the head unit over BLE — Maps exposes no API, so the
 notification is the only route without root. See its own README.
 
-**`src/navigation/TbtParse.h` and `src/navigation/RouteParse.h` are the
-authorities on the two wire formats**; the app's `TbtFrame.kt` and
-`RouteFrame.kt` are encoders for them, and `TbtFrameTest` / `RouteFrameTest`
-pin each pair together byte for byte. Change one side and those tests should be
-what notices.
+It also forwards calls, texts and WeChat messages as alerts, from the same
+notification stream — notification access is one grant, so a second listener
+service would need its own. `AlertClassifier` and `AlertThrottle` hold every
+rule and are pure and unit-tested; `MapsNotificationListener` only reads fields
+and passes them on.
+
+**The firmware headers are the authorities on the wire formats**, and the app's
+`TbtFrame.kt`, `RouteFrame.kt` and `AlertFrame.kt` are encoders for
+`src/navigation/TbtParse.h`, `src/navigation/RouteParse.h` and
+`src/system/AlertFrame.h`. `TbtFrameTest`, `RouteFrameTest` and
+`AlertFrameTest` pin each pair together byte for byte — the alert frame is
+pinned hardest, because the same twelve-byte array is written out in both
+`AlertFrameTest.kt` and `test/host/test_alert_frame.c`. Change one side and one
+of those suites should be what notices.
 
 The app has two route sources at very different maturities, and the README
 explains the split. Google Maps notifications work and are verified on a real
