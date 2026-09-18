@@ -114,6 +114,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 5. Navigation Strategy
 
+> **Verified end to end on 2026-09-17**, and it unblocked most of the firmware
+> in one go. With the phone feeding fixes: SPEED left `--` for `0.0`, the clock
+> read `GNSS, -240 min` — EDT, *derived from the coordinates* through
+> `TimeZone.c`, which had never run on a real position — and the ride log
+> opened `/rides/2026-09-18_025422.gpx` by itself and wrote six points at
+> exactly 30-second spacing, heart rate included as `<gpxtpx:hr>`. Three BLE
+> characteristics ran concurrently on one link throughout.
+>
 > **The phone can supply the position fix.** The MAX-M10S has never been
 > fitted, so everything downstream of a position — speed, the odometer, the
 > ride log's whole lifecycle, the map, track-up, route snapping, onboard

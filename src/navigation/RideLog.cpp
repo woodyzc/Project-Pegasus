@@ -179,6 +179,11 @@ bool s_failed = false;
 char s_name[48] = "";
 volatile uint32_t s_points = 0;
 
+// Files thrown away for holding fewer than MIN_KEPT_POINTS. On the panel,
+// because a silent delete and a failed write look identical from outside, and
+// only one of them is fine.
+uint32_t s_discarded_count = 0;
+
 // Where the track points end and the footer begins. Every append seeks here
 // first, overwriting the previous footer.
 uint32_t s_body_end = 0;
@@ -320,11 +325,42 @@ bool AppendPoint(const RideLogPoint_t &point) {
     return WriteFooter();
 }
 
+// A track needs two points. One is a place, not a journey -- there is nothing
+// to draw, no distance, no duration, and nothing any tool will plot.
+//
+// Real files, not hypothetical ones: a session spent pressing "new ride" to
+// test the buttons left fourteen of these on the card, each a valid GPX
+// containing a single position, and the rider then has to tell them apart from
+// the ride they actually rode. Kept at 2 rather than something larger because
+// the question being answered is "is this a track at all", not "was this ride
+// worth keeping" -- a rider who starts, rolls ten metres and stops has a short
+// ride, and that is theirs to delete.
+constexpr uint32_t MIN_KEPT_POINTS = 2;
+
 void CloseRide() {
+    // Captured before the close: both are cleared below, and the decision to
+    // delete needs them.
+    const bool too_short = s_file && s_points < MIN_KEPT_POINTS;
+    char doomed[sizeof(s_name)];
+    doomed[0] = '\0';
+    if (too_short) {
+        strncpy(doomed, s_name, sizeof(doomed) - 1);
+        doomed[sizeof(doomed) - 1] = '\0';
+    }
+
     if (s_file) {
         s_file.flush();
         s_file.close();
     }
+
+    // After the close, never before: removing a file that is still open is
+    // undefined on FAT and the handle would go on referring to a directory
+    // entry that no longer exists.
+    if (doomed[0] != '\0') {
+        SD_MMC.remove(doomed);
+        s_discarded_count++;
+    }
+
     s_recording = false;
     s_name[0] = '\0';
     s_points = 0;
@@ -675,6 +711,10 @@ bool RideLog_HasRecorded() {
 
 uint32_t RideLog_AutoEndCount() {
     return s_auto_end_count;
+}
+
+uint32_t RideLog_DiscardedCount() {
+    return s_discarded_count;
 }
 
 bool RideLog_IsRecording() {

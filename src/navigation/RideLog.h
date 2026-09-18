@@ -95,6 +95,13 @@ uint32_t RideLog_PointCount();
 // anywhere saying why.
 uint32_t RideLog_AutoEndCount();
 
+// How many ride files have been deleted this boot for holding fewer than two
+// points. One point is a place, not a journey.
+//
+// Surfaced because a silent delete and a failed write look the same from
+// outside -- the file is not there either way -- and only one of them is fine.
+uint32_t RideLog_DiscardedCount();
+
 // ---- Recording only ever starts by hand ----
 //
 // RideLog_StartNewRide() is the only thing that arms recording; nothing else

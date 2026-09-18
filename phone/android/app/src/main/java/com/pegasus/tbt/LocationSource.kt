@@ -8,6 +8,7 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
 import android.os.Looper
+import android.util.Log
 import androidx.core.content.ContextCompat
 import java.util.Calendar
 import java.util.TimeZone
@@ -32,6 +33,22 @@ import java.util.TimeZone
  */
 class LocationSource(private val context: Context) {
 
+    companion object {
+        private const val TAG = "PegasusGps"
+
+        /**
+         * Log one fix in this many, after the first.
+         *
+         * Fixes arrive at 1Hz for the length of a ride, and logging every one
+         * would bury everything else in logcat within a minute. The first is
+         * always logged, because "did it ever start" is the question that
+         * actually gets asked.
+         */
+        private const val LOG_EVERY = 30
+    }
+
+    private var fixCount = 0L
+
     /** Called on the main looper with each fix, already encoded for the wire. */
     var onFrame: ((ByteArray) -> Unit)? = null
 
@@ -42,7 +59,22 @@ class LocationSource(private val context: Context) {
 
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
-            onFrame?.invoke(encode(location))
+            val frame = encode(location)
+            fixCount++
+            if (fixCount == 1L || fixCount % LOG_EVERY == 0L) {
+                Log.i(
+                    TAG,
+                    "fix #$fixCount lat=%.6f lon=%.6f spd=%.1fm/s alt=%.0f hdg=%.0f acc=%.0fm"
+                        .format(
+                            location.latitude, location.longitude,
+                            if (location.hasSpeed()) location.speed else 0f,
+                            if (location.hasAltitude()) location.altitude else 0.0,
+                            if (location.hasBearing()) location.bearing else 0f,
+                            if (location.hasAccuracy()) location.accuracy else -1f,
+                        ),
+                )
+            }
+            onFrame?.invoke(frame)
         }
 
         // Required on API < 30 or the platform throws on some OEM builds.
@@ -66,9 +98,28 @@ class LocationSource(private val context: Context) {
      */
     fun start() {
         if (listening) return
-        val lm = manager ?: return
-        if (!hasPermission()) return
-        if (!lm.allProviders.contains(LocationManager.GPS_PROVIDER)) return
+        val lm = manager
+        // Each refusal says which one it was. Silence here is the failure mode
+        // that wastes the most time: nothing appears on the head unit and
+        // there is no way to tell a missing permission from a provider that
+        // never produced a fix.
+        if (lm == null) {
+            Log.w(TAG, "no LocationManager")
+            return
+        }
+        if (!hasPermission()) {
+            Log.w(TAG, "ACCESS_FINE_LOCATION not granted -- nothing will be sent")
+            return
+        }
+        if (!lm.allProviders.contains(LocationManager.GPS_PROVIDER)) {
+            Log.w(TAG, "no GPS_PROVIDER on this device")
+            return
+        }
+        if (!lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            // Not a refusal: the rider may switch location on at any moment
+            // and the callback starts arriving without anything re-running.
+            Log.w(TAG, "GPS_PROVIDER is switched off -- fixes start when it is on")
+        }
 
         // 1000ms and 0m. The head unit's own receiver would give it 1Hz, the
         // ride log thins to five metres itself, and asking for a distance
@@ -84,15 +135,18 @@ class LocationSource(private val context: Context) {
                 Looper.getMainLooper(),
             )
             listening = true
-        } catch (_: SecurityException) {
-            // Permission revoked between the check and the call. Nothing to do
-            // but stay quiet; the head unit falls back to its own receiver.
+            Log.i(TAG, "listening on GPS_PROVIDER at 1Hz")
+        } catch (e: SecurityException) {
+            Log.w(TAG, "permission revoked between check and request: ${e.message}")
+            // Permission revoked between the check and the call. The head
+            // unit falls back to its own receiver.
         }
     }
 
     fun stop() {
         if (!listening) return
         listening = false
+        Log.i(TAG, "stopped after $fixCount fixes")
         try {
             manager?.removeUpdates(listener)
         } catch (_: SecurityException) {

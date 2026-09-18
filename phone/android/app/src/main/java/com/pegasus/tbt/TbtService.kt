@@ -184,10 +184,18 @@ class TbtService : Service() {
         val source = locationSource ?: LocationSource(applicationContext).also {
             locationSource = it
         }
+        var sent = 0L
+        var refused = 0L
         source.onFrame = { frame ->
             // The head unit ignores this outright once its own receiver has
             // had a fix, so there is nothing to arbitrate here.
-            link?.sendGps(frame)
+            if (link?.sendGps(frame) == true) sent++ else refused++
+            // A refusal is usually the GATT queue being busy, not the head
+            // unit saying no -- and a steady stream of them means the
+            // characteristic is absent, which is what old firmware looks like.
+            if ((sent + refused) % 30L == 0L) {
+                android.util.Log.i("PegasusGps", "sent=$sent refused=$refused")
+            }
         }
         source.start()
     }

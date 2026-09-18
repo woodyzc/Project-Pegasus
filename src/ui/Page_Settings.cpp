@@ -632,14 +632,23 @@ void InfoTimerCallback(lv_timer_t *timer) {
             // there. Says which of the two ways it got here, because "I
             // pressed finish" and "it gave up while I was at lunch" call for
             // different reactions.
+            // The discard count rides along with whichever message applies.
+            // It is only ever news when it is non-zero, and then it explains a
+            // file the rider expected to find and cannot.
+            char discarded[48];
+            discarded[0] = '\0';
+            if (RideLog_DiscardedCount() > 0) {
+                snprintf(discarded, sizeof(discarded), " %u too short to keep.",
+                         (unsigned)RideLog_DiscardedCount());
+            }
             if (RideLog_AutoEndCount() > 0) {
                 lv_label_set_text_fmt(s_ridelog_value,
                                       "Ride log: off - ended after an hour still (%ux). "
-                                      "Start a ride to record again.",
-                                      (unsigned)RideLog_AutoEndCount());
+                                      "Start a ride to record again.%s",
+                                      (unsigned)RideLog_AutoEndCount(), discarded);
             } else {
-                lv_label_set_text(s_ridelog_value,
-                                  "Ride log: off. Start a ride to record.");
+                lv_label_set_text_fmt(s_ridelog_value,
+                                      "Ride log: off. Start a ride to record.%s", discarded);
             }
         } else {
             lv_label_set_text(s_ridelog_value, "Ride log: armed, waiting for fix");
