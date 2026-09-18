@@ -127,6 +127,11 @@ void GpsTask(void *pv) {
             info.minute = pvt.minute;
             info.second = pvt.second;
 
+            // Says who it came from, so the phone-fix arbitration in
+            // BLE_TBT_Receiver can tell this apart from a position it
+            // republished itself. Both land on the same topic.
+            info.from_module = true;
+
             // Published even without a fix: the UI wants to distinguish "no
             // module" from "module present, still acquiring", and num_sv
             // climbing is the visible sign of the latter.

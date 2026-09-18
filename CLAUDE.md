@@ -113,6 +113,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - All inter-core communication and sensor updates must publish to `DataCenter` topics (e.g., `Sensor/HeartRate`, `GPS_Info`), never via direct cross-thread function calls.
 
 ## 5. Navigation Strategy
+
+> **The phone can supply the position fix.** The MAX-M10S has never been
+> fitted, so everything downstream of a position — speed, the odometer, the
+> ride log's whole lifecycle, the map, track-up, route snapping, onboard
+> turn-by-turn, ascent, the clock — was written, host-tested and never once run
+> against a real fix. `src/sensors/GpsFrame.h` is a fifth GATT characteristic
+> the phone writes a fix into, published to `TOPIC_GPS_INFO` exactly as the
+> receiver would.
+>
+> **The module wins, permanently, once it has ever had a valid fix.**
+> `GPS_Info_t.from_module` exists for that decision and nothing else: both
+> sources land on the same topic, so without it the head unit would take its
+> own republished phone fix as proof a receiver exists. The asymmetry against
+> the turn handover below is deliberate — a turn going stale is the phone
+> falling quiet, which is ordinary and reversible, but a receiver that had a
+> fix and lost it is in a tunnel, and there its own "no fix" is the truth.
+
 - **BLE Turn-by-Turn**: Accept turn arrows and distance metrics pushed over BLE from mobile app.
 - **Offline Breadcrumb Navigation**: Read `.gpx` files from SD card and render breadcrumb trails on LVGL canvas.
 - **Cached-route fallback**: the phone uploads the whole planned route once at

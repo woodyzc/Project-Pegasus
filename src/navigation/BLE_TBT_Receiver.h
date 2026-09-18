@@ -53,6 +53,19 @@
 // following a route still wants a clock, and ride files are named from it.
 #define TBT_CLOCK_CHARACTERISTIC_UUID "a3c87504-8ed3-4bdf-8a39-a01bebede295"
 
+// ---- Position, when the head unit has no receiver of its own ----
+//
+// The phone writes a fix here and BLE_TBT_Receiver publishes it to
+// TOPIC_GPS_INFO, exactly as the GNSS reader would. Wire format and the
+// reasoning for it are in src/sensors/GpsFrame.h.
+//
+// ⚠️ The real receiver wins whenever it has one. GPS_Reader publishes even
+// without a fix -- num_sv climbing is how "module present, still acquiring"
+// is told from "no module" -- so the arbitration cannot simply watch for
+// publishes. It asks whether the module has ever produced a VALID fix, and
+// steps aside for good once it has. See GpsSourceCallbacks in the .cpp.
+#define TBT_GPS_CHARACTERISTIC_UUID "a3c87505-8ed3-4bdf-8a39-a01bebede295"
+
 // Brings up the GATT server and starts advertising, so the phone can find and
 // connect to the device. Preconditions: DataCenter_Init() has run, and NimBLE
 // is initialised (BLE_HR_Init() does this; call that first).

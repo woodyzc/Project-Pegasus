@@ -28,6 +28,18 @@ typedef struct {
     bool fix_valid;
     uint8_t num_sv;   // satellites used in the solution
 
+    // True when this came from the MAX-M10S, false when the phone supplied it
+    // over BLE (src/sensors/GpsFrame.h).
+    //
+    // Not cosmetic: the arbitration between the two reads it. Both publish to
+    // this topic, so without it the head unit cannot tell its own receiver's
+    // first fix from a fix it republished on the phone's behalf -- and would
+    // conclude a module exists the moment the phone sent one.
+    //
+    // Consumers that only want a position can ignore it. It matters to whoever
+    // decides WHICH position to believe.
+    bool from_module;
+
     double lat;       // degrees
     double lon;       // degrees
     float speed;      // m/s
