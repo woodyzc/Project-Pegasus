@@ -109,65 +109,6 @@ lv_obj_t *s_nav_note = nullptr;
 lv_obj_t *s_nav_restart_btn = nullptr;
 NavMode_t s_nav_mode_at_load = NAV_MODE_TBT;
 
-// ---- Proving the alert banner without waiting for the phone ----
-//
-// Cycles through the three kinds rather than always firing a call, because
-// what needs checking by eye is the set: three accent colours, the two hold
-// times, and the second line that only appears when messages were coalesced.
-// One fixed sample would leave the other two untested until a real call
-// arrived on a ride, which is the worst place to discover the layout is wrong.
-//
-// It also earns its place permanently. "Did I grant the phone notification
-// access?" has no other answer on this device -- a banner that never appears
-// looks identical whether the permission is missing, the app is not running,
-// or nobody has messaged.
-void OnTestAlertClicked(lv_event_t *e) {
-    static uint8_t next = 0;
-
-    Alert_Info_t alert;
-    memset(&alert, 0, sizeof(alert));
-
-    // Sequence numbers from the far end of the range, so a test can never
-    // collide with the counter BLE_TBT_Receiver is incrementing from 1 and
-    // make a genuine alert look like one already shown.
-    static uint32_t test_seq = 0xF0000000u;
-    alert.seq = ++test_seq;
-
-    switch (next % 3) {
-        case 0:
-            alert.kind = ALERT_KIND_CALL;
-            alert.count = 1;
-            snprintf(alert.name, sizeof(alert.name), "Test caller");
-            break;
-        case 1:
-            alert.kind = ALERT_KIND_SMS;
-            alert.count = 1;
-            snprintf(alert.name, sizeof(alert.name), "Test message");
-            break;
-        default:
-            // Chinese on purpose: this is the only way to check src/ui/CjkFont.c
-            // actually draws on the panel without waiting for someone to send a
-            // message. If these come out as empty boxes, the font is the
-            // problem and not the phone.
-            alert.kind = ALERT_KIND_CHAT;
-            alert.count = 4;
-            snprintf(alert.name, sizeof(alert.name),
-                     "\xE5\x91\xA8\xE6\x9C\xAB\xE9\xAA\x91\xE8\xA1\x8C\xE7\xBE\xA4");
-            break;
-    }
-    next++;
-
-    DataCenter_Publish(TOPIC_PHONE_ALERT, &alert);
-
-    // The banner draws over the dashboard's metric cells, which are not on
-    // screen from here, so leaving is part of the test rather than a
-    // convenience -- staying would show nothing and read as a dead button.
-    PageSettings *self = (PageSettings *)lv_event_get_user_data(e);
-    if (self != nullptr && self->_Manager != nullptr) {
-        self->_Manager->Pop();
-    }
-}
-
 // One card per settings group, so the page scrolls as a tidy stack.
 lv_obj_t *MakeCard(lv_obj_t *parent, const char *caption) {
     lv_obj_t *card = lv_obj_create(parent);
@@ -1194,36 +1135,6 @@ void PageSettings::onViewLoad() {
     s_nav_restart_btn = MakeRestartButton(nav_card, LV_SYMBOL_POWER "  Restart to apply");
 
     RefreshNavSelection();
-
-    // ---- Notifications ----
-    // Beside navigation because it is the same link: the same GATT server,
-    // the same phone app, the same permission dialog. A rider who has one
-    // working has almost everything the other needs.
-    lv_obj_t *alert_card = MakeCard(body, "NOTIFICATIONS");
-
-    lv_obj_t *alert_btn = lv_btn_create(alert_card);
-    lv_obj_set_width(alert_btn, LV_PCT(100));
-    lv_obj_set_style_bg_color(alert_btn, lv_color_hex(0x14242E), 0);
-    lv_obj_set_style_bg_color(alert_btn, lv_color_hex(COLOR_ACCENT), LV_STATE_PRESSED);
-    lv_obj_set_style_shadow_width(alert_btn, 0, 0);
-    lv_obj_add_event_cb(alert_btn, OnTestAlertClicked, LV_EVENT_CLICKED, this);
-
-    lv_obj_t *alert_label = lv_label_create(alert_btn);
-    lv_label_set_text(alert_label, LV_SYMBOL_BELL "  Show a test alert");
-    lv_obj_set_style_text_font(alert_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(alert_label, lv_color_hex(COLOR_ACCENT), 0);
-    lv_obj_center(alert_label);
-
-    lv_obj_t *alert_hint = lv_label_create(alert_card);
-    lv_label_set_text(alert_hint,
-                      "Calls, texts and WeChat from the phone appear over the\n"
-                      "speed and heart-rate cells, never over a turn.\n"
-                      "Each press cycles call, text, Chinese chat. Names are\n"
-                      "shown; message text is not sent. Tap a banner to clear.");
-    lv_obj_set_style_text_font(alert_hint, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(alert_hint, lv_color_hex(COLOR_CAPTION), 0);
-    lv_label_set_long_mode(alert_hint, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(alert_hint, LV_PCT(100));
 
     // ---- Power ----
     // The two stages that always happen are described rather than offered:
