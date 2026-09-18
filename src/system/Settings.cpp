@@ -80,7 +80,13 @@ bool s_sleep_enabled = false;
 // Default on: the rider asked for it, and north-up costs a mental rotation at
 // every junction.
 bool s_track_up = true;
+// Kept, and kept false: nothing forces the navigation mode any more. The
+// accessor stays so the settings page compiles, and says so.
 bool s_nav_fell_back = false;
+
+// This boot came up after two unfinished radio bring-ups, so the GATT server
+// and its advertisement are held off. Not persisted -- see where it is set.
+bool s_radios_held_off = false;
 uint8_t s_hr_rest = DEFAULT_HR_REST;
 uint8_t s_hr_max = DEFAULT_HR_MAX;
 const char *s_reset_text = "?";
@@ -217,9 +223,24 @@ void Settings_Init() {
     // removed, because the fallback then moved the heart-rate source to BLE,
     // which was almost always already BLE and so invisible.
     if (s_ready && s_prefs.getUChar(KEY_RADIO_PENDING, 0) >= RADIO_PENDING_LIMIT) {
-        s_nav_fell_back = (s_nav_mode != NAV_MODE_GPX);
-        s_nav_mode = NAV_MODE_GPX;
-        s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
+        // Holds the GATT server and its advertisement off for THIS boot, and
+        // says nothing about the navigation mode.
+        //
+        // It used to force the mode to GPX, which worked only because GPX
+        // happened to start no radio -- a coincidence, and one that cost the
+        // whole phone-position feature the moment it was built, because a
+        // rider in GPX mode then had no GATT server for the phone to write a
+        // fix into and no advertisement for it to find. The two questions
+        // "what navigation do I show" and "do I touch the radio" were never
+        // the same question; they are now asked separately.
+        //
+        // One boot rather than persisted. The specific hangs section 8
+        // records have since been fixed -- the registration order, the paused
+        // advertisement, the parked supervisor -- so this is a net for an
+        // unknown future hazard rather than a known present one, and a net
+        // that permanently disables position is worse than one that retries.
+        // A hang that really does repeat will trip this again two boots later.
+        s_radios_held_off = true;
         s_prefs.putUChar(KEY_RADIO_PENDING, 0);
     }
 
@@ -239,6 +260,10 @@ void Settings_NoteRadioBringUpOk() {
     if (s_ready) {
         s_prefs.putUChar(KEY_RADIO_PENDING, 0);
     }
+}
+
+bool Settings_RadiosHeldOff() {
+    return s_radios_held_off;
 }
 
 bool Settings_DidNavModeFallBack() {

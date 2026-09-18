@@ -382,9 +382,14 @@ void RefreshNavSelection() {
     // reporting for this used to live in the heart-rate card, which the ANT+
     // removal deleted; without it the fallback moves the setting silently and
     // looks like the device forgetting what it was told.
-    if (Settings_DidNavModeFallBack() && current == s_nav_mode_at_load) {
-        lv_label_set_text(s_nav_note, "Forced to GPX: the previous boot did not finish "
-                                      "bringing up the radios.");
+    if (Settings_RadiosHeldOff()) {
+        // No longer a note about the mode. The watchdog stopped moving that
+        // setting when position stopped being tied to it -- what it holds off
+        // now is the GATT server, which is both the thing that hung and the
+        // thing the phone writes a position into.
+        lv_label_set_text(s_nav_note, "Radios held off this boot: the previous two did not "
+                                      "finish starting. No phone link, and no position from "
+                                      "it either. Restart to try again.");
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
     } else if (!Settings_NavModeIsImplemented(current)) {
         // Say so rather than let the rider discover an empty ROUTE panel on
@@ -618,7 +623,11 @@ void InfoTimerCallback(lv_timer_t *timer) {
     // the other half of that conversation.
     if (s_tbtlink_value != nullptr) {
         if (Settings_GetNavMode() != NAV_MODE_TBT) {
-            lv_label_set_text(s_tbtlink_value, "TBT: off (GPX mode)");
+            // The link is up in GPX mode too -- it carries the phone's
+            // position, which a breadcrumb has nothing to draw without. Only
+            // the turn DISPLAY is mode-dependent.
+            lv_label_set_text_fmt(s_tbtlink_value, "TBT: %s (turns hidden in GPX mode)",
+                                  BLE_TBT_IsConnected() ? "phone connected" : "advertising");
         } else if (BLE_TBT_IsConnected()) {
             lv_label_set_text(s_tbtlink_value, "TBT: phone connected");
         } else {

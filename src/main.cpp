@@ -221,7 +221,15 @@ void setup() {
     //
     // BLE_HR_Init() is safe to precede this -- it only configures the scan
     // parameters, it does not start scanning.
-    if (Settings_GetNavMode() == NAV_MODE_TBT) {
+    // ---- The server runs whatever the navigation mode is ----
+    // It carries the phone's position (src/sensors/GpsFrame.h) as well as
+    // turn-by-turn, and a head unit with no receiver of its own needs that in
+    // both modes -- GPX navigation is a breadcrumb drawn against a position,
+    // so without one it draws nothing at all.
+    //
+    // Held off only when the watchdog says the last two boots hung here.
+    const bool radios_ok = !Settings_RadiosHeldOff();
+    if (radios_ok) {
         BLE_TBT_Start();
     }
 
@@ -237,7 +245,7 @@ void setup() {
     // -- which the reset does not cancel -- then fires during the re-sync and
     // hits assert(0) in ble_hs_timer_exp. That is a library defect we cannot
     // patch, so the concurrency that provokes it is what has to go.
-    if (Settings_GetNavMode() == NAV_MODE_TBT) {
+    if (radios_ok) {
         BLE_TBT_StartAdvertising();
     }
 

@@ -85,11 +85,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     that is reasoning, not a measurement.
   - The parsing half is `src/sensors/BleHrParse.c`, host-tested with no NimBLE
     dependency.
-- **BLE Turn-by-Turn**: a NimBLE GATT server the phone writes into. Chosen in
-  Settings against offline GPX, and since both are init-time radio
-  configurations a change applies on restart. The NVS bring-up watchdog in
-  `Settings_Init()` guards this setting now — it used to guard the heart-rate
-  source — and falls back to GPX, which starts no radio at all.
+- **BLE Turn-by-Turn**: a NimBLE GATT server the phone writes into. The server
+  runs in **both** navigation modes, because it also carries the phone's
+  position (§5) and a head unit with no receiver of its own needs that either
+  way — a GPX breadcrumb is drawn against a position, so without one it draws
+  nothing at all. Only the *display* of turns is mode-dependent; a directive
+  arriving in GPX mode is published and ignored by `Page_Dashboard`.
+  - The NVS bring-up watchdog in `Settings_Init()` used to force the mode to
+    GPX, which worked only because GPX happened to start no radio. That
+    coincidence silently cost the whole position feature the moment it was
+    built. It now raises `Settings_RadiosHeldOff()` instead — one boot with no
+    GATT server and no advertisement, which is where every hang in §8 actually
+    lived — and leaves the navigation mode alone. **"What navigation do I show"
+    and "do I touch the radio" are separate questions; do not re-merge them.**
 
 ## 4. Software Architecture & FreeRTOS Core Rules
 - **Core 0 (Background Data Core)**:

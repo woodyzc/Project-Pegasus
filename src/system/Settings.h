@@ -47,8 +47,8 @@ bool Settings_NavModeIsImplemented(NavMode_t mode);
 // survive a reflash and leave the device looping with no reachable UI to undo
 // it. main.cpp counts up before touching the radios and clears the count once
 // setup() completes; after two consecutive boots that never finished, the mode
-// is forced to GPX -- which starts no radio at all and so cannot repeat the
-// hang.
+// holds the GATT server and its advertisement off for one boot -- which is
+// where every hang in section 8 lived, and so cannot repeat it.
 //
 // Two rather than one, because the heart-rate scan blocks for up to 15
 // seconds and a rider who unplugs during it would otherwise have their
@@ -62,7 +62,23 @@ bool Settings_NavModeIsImplemented(NavMode_t mode);
 void Settings_NoteRadioBringUpStart();
 void Settings_NoteRadioBringUpOk();
 
-// True when this boot fell back to GPX because the previous one didn't finish.
+// True when this boot is running with the GATT server and its advertisement
+// held off, because the previous two did not finish bringing the radio up.
+//
+// ⚠️ This is NOT the navigation mode. It used to be -- the watchdog forced
+// GPX, which worked only because GPX happened to start no radio. That
+// coincidence cost the phone-position feature outright: a rider in GPX mode
+// had no server for the phone to write a fix into and nothing advertising for
+// it to find, on a head unit with no receiver of its own. "What navigation do
+// I show" and "do I touch the radio" are separate questions now.
+//
+// Lasts one boot. The hangs section 8 records have since been fixed, so this
+// guards an unknown future hazard rather than a known present one, and a net
+// that permanently disables position is worse than one that retries.
+bool Settings_RadiosHeldOff();
+
+// Retained and always false: nothing forces the navigation mode any anymore.
+// Settings_RadiosHeldOff() is what the watchdog raises now.
 bool Settings_DidNavModeFallBack();
 
 // ---- Deep sleep ----
