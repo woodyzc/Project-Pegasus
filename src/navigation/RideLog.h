@@ -63,6 +63,18 @@ bool RideLog_StartNewRide();
 // Points written so far, for the settings page to show that it is working.
 uint32_t RideLog_PointCount();
 
+// Why nothing is being written, when the ride is armed and nothing is being
+// written. Returns nullptr when there is nothing wrong -- armed, no fix yet,
+// which is an ordinary state that needs no explanation.
+//
+// This exists because the panel used to answer that question with "waiting
+// for fix" unconditionally, and was wrong in the one case that matters. A
+// road test produced a screen counting 31km/h with the trip climbing and
+// turns updating -- a fix beyond any doubt -- while the log wrote nothing,
+// and the only thing on the device that could have explained it said to go
+// looking for a GPS fault.
+const char *RideLog_NotRecordingReason();
+
 // Ends the ride being recorded, so the next fix opens a new file.
 //
 // Recording starts by itself on the first fix and never stops, which means the

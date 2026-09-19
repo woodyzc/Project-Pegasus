@@ -721,6 +721,27 @@ bool RideLog_IsRecording() {
     return s_recording;
 }
 
+const char *RideLog_NotRecordingReason() {
+    if (s_recording || !s_armed) {
+        return nullptr; // writing, or not asked to
+    }
+
+    // Checked before s_failed, and it is the more useful answer even though
+    // the failure flag will be set too once a fix has arrived: the card is
+    // mounted exactly once, in setup(), so a card pushed in after the board
+    // came up is invisible for the whole power-on no matter how healthy it
+    // is. Nothing remounts it. That is the likely story behind almost every
+    // occurrence of this state, and unlike a genuinely bad card it is fixed
+    // in five seconds by the rider.
+    if (!GpxTrack_CardMounted()) {
+        return "no card was mounted at start-up - restart with it inserted";
+    }
+    if (s_failed) {
+        return "the card refused the ride file";
+    }
+    return nullptr; // armed, card fine, genuinely waiting for a first fix
+}
+
 const char *RideLog_FileName() {
     return s_name;
 }

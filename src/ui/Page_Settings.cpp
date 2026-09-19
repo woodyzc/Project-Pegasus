@@ -675,7 +675,16 @@ void InfoTimerCallback(lv_timer_t *timer) {
                                       "Ride log: off. Start a ride to record.%s", discarded);
             }
         } else {
-            lv_label_set_text(s_ridelog_value, "Ride log: armed, waiting for fix");
+            // Armed and not writing. Ordinarily that means the first fix has
+            // not arrived, and saying so is right -- but it is not the only
+            // way to get here, and this line used to claim it was.
+            const char *why = RideLog_NotRecordingReason();
+            if (why != nullptr) {
+                lv_label_set_text_fmt(s_ridelog_value,
+                                      "Ride log: ARMED BUT NOT RECORDING - %s.", why);
+            } else {
+                lv_label_set_text(s_ridelog_value, "Ride log: armed, waiting for fix");
+            }
         }
     }
 }
