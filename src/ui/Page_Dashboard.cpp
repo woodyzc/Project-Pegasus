@@ -1090,8 +1090,17 @@ void RenderHeartRateStats() {
     if (avg == 0) {
         lv_label_set_text(s_hr_avg_label, "--");
         lv_label_set_text(s_hr_max_label, "--");
-        lv_obj_set_style_text_color(s_hr_avg_label, lv_color_hex(COLOR_VALUE), 0);
-        lv_obj_set_style_text_color(s_hr_max_label, lv_color_hex(COLOR_VALUE), 0);
+        // COLOR_HR_CELL_INK, not COLOR_VALUE. This is the one light cell on
+        // the panel -- COLOR_HR_CELL_BG is 0xF2F5F7 -- so white ink here is
+        // white on white, and the dashes were drawn every time and seen none
+        // of them. A photograph of the panel on a road test is what finally
+        // showed it, because on a bench there is always a strap connected and
+        // this branch never runs.
+        //
+        // ClearHeartRateZone() had it right for the live figure beside these
+        // two, which is why that one was legible in the same frame.
+        lv_obj_set_style_text_color(s_hr_avg_label, lv_color_hex(COLOR_HR_CELL_INK), 0);
+        lv_obj_set_style_text_color(s_hr_max_label, lv_color_hex(COLOR_HR_CELL_INK), 0);
         return;
     }
 
