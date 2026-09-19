@@ -495,6 +495,19 @@ constexpr lv_coord_t SECONDARY_WORD_X = 4;
 constexpr lv_coord_t CELL_CAPTION_Y = 2;   // caption and unit baseline row
 constexpr lv_coord_t CELL_VALUE_Y = -1;    // value, up from the cell's bottom
 
+// Extra lift for the two cells drawn in pegasus_font_num_40r.
+//
+// gennumfont.py trims the line box to the ink -- no descender space, because
+// no glyph it emits has a descender -- so a label in that face is about this
+// much shorter than the same text in lv_font_montserrat_40. Aligned to the
+// cell's bottom like everything else, the digits therefore sat that much
+// lower and touched the rule under them.
+//
+// Measured off the render rather than computed: the two faces disagree about
+// their metrics in more than one way, and the only question that matters is
+// where the ink lands.
+constexpr lv_coord_t CELL_LIVE_FONT_LIFT = 8;
+
 // One bordered cell: caption at the top, value at the bottom. Cells bound
 // their contents, so a long value cannot drift into a neighbour -- which is
 // exactly how the clock ended up on top of the incline figure when these were
@@ -2112,7 +2125,9 @@ void PageDashboard::onViewLoad() {
     // in a 60px cell; horizontally "18.5" is about 77px and the ride block
     // starts at 90. 48 would fit neither.
     lv_obj_t *speed_cell = MakeCell(parent, COL1, ROW1, STATS_W, CELL_H, "SPEED");
-    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &lv_font_montserrat_40);
+    s_speed_label = MakeValueIn(speed_cell, "--", COLOR_VALUE, &pegasus_font_num_40r);
+    lv_obj_align(s_speed_label, LV_ALIGN_BOTTOM_LEFT, CELL_PAD,
+                 CELL_VALUE_Y - CELL_LIVE_FONT_LIFT);
     s_speed_unit_label = MakeUnit(speed_cell, Settings_SpeedUnitLabel());
     MakeSecondary(speed_cell, &s_speed_avg_label, &s_speed_max_label);
     // After every child exists, so nothing built above keeps the old grey.
@@ -2122,7 +2137,9 @@ void PageDashboard::onViewLoad() {
     TintCellText(speed_cell, lv_color_hex(COLOR_BG));
 
     lv_obj_t *hr_cell = MakeCell(parent, COL1, ROW2, STATS_W, CELL_H, "HEART RATE");
-    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &lv_font_montserrat_40);
+    s_hr_label = MakeValueIn(hr_cell, "--", COLOR_VALUE, &pegasus_font_num_40r);
+    lv_obj_align(s_hr_label, LV_ALIGN_BOTTOM_LEFT, CELL_PAD,
+                 CELL_VALUE_Y - CELL_LIVE_FONT_LIFT);
     MakeUnit(hr_cell, "bpm");
     MakeSecondary(hr_cell, &s_hr_avg_label, &s_hr_max_label);
     // The one light cell on the panel. TintCellText is safe here for a reason
