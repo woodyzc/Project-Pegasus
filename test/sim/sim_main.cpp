@@ -469,6 +469,43 @@ int main(int argc, char **argv) {
         Page_Dashboard_ShowSecondPageForTest(false);
     }
 
+    // ---- Scene 6c: the trip cell's three fills ----
+    // The loudest thing on the panel, and until now the simulator had never
+    // drawn two of its three states: every scene here records, so every trip
+    // cell ever rendered was amber. Green and red existed only in the code.
+    {
+        g_sim.trip_km = 12.40;
+        g_sim.have_gps = true;
+        g_sim.gps.fix_valid = true;
+        g_sim.gps.num_sv = 9;
+
+        // Green: nothing is being written, and nothing needs to be. Reached
+        // by standing still long enough for the thirty-second movement hold
+        // to lapse -- earlier scenes have been moving, and the cell is
+        // deliberately slow to calm down.
+        g_sim.recording = false;
+        g_sim.gps.speed = 0.0f;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        // Past the hold outright rather than rendering a throwaway frame:
+        // Render() writes whatever path it is handed and has no no-op mode.
+        g_sim.millis += 40000;
+        snprintf(path, sizeof(path), "%s/06c-trip-idle-green.ppm", out_dir);
+        Render(&page, path);
+
+        // Red: moving, and not one metre of it is being kept. The state the
+        // whole cell exists for.
+        g_sim.gps.speed = 24.0f / 3.6f;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        snprintf(path, sizeof(path), "%s/06d-trip-moving-unrecorded-red.ppm", out_dir);
+        Render(&page, path);
+
+        // Amber: writing. Put back so later scenes see what they expect.
+        g_sim.recording = true;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        snprintf(path, sizeof(path), "%s/06e-trip-recording-amber.ppm", out_dir);
+        Render(&page, path);
+    }
+
     // ---- Scene 7: the report a ride ends with ----
     // Every figure at its widest: a three-digit distance, a duration past an
     // hour, a four-digit climb and a filename that fills the line. The whole

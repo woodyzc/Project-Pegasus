@@ -39,7 +39,8 @@ constexpr uint32_t COLOR_BG = 0x101820;      // screen background
 constexpr uint32_t COLOR_CAPTION = 0x93A4B8; // small all-caps labels
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;   // primary readouts
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;  // units and incline
-constexpr uint32_t COLOR_WARN = 0xFFD166;    // not recording, stopped
+constexpr uint32_t COLOR_WARN = 0xFFD166;    // recording
+constexpr uint32_t COLOR_OK = 0x7CE38B;      // idle, and nothing to record
 constexpr uint32_t COLOR_DANGER = 0xFF6B6B;  // moving and not recording
 
 // ---- Cotopaxi-ish colour blocking, on exactly two cells ----
@@ -981,19 +982,30 @@ void PaintTripCell(lv_obj_t *cell, lv_obj_t *caption, lv_obj_t *value, lv_obj_t 
         return;
     }
 
+    // ---- Three states, three fills, read as a traffic light ----
+    // Green: nothing is being written and nothing needs to be.
+    // Amber: writing.
+    // Red:   moving, and not one metre of it is being kept.
+    //
+    // The cell used to be left unfilled while recording, on the argument that
+    // a colour held for hours stops being seen and that the panel's one loud
+    // gesture should be spent on the state that is wrong. That is still true
+    // of red, which is why red is the only one that means act now. What the
+    // old scheme could not do was answer "is it running?" at a glance without
+    // the rider first deciding whether an unfilled cell meant recording or
+    // meant a cell they had misread -- and an owner who rides with this every
+    // day asked for the positive confirmation instead.
     uint32_t bg;
-    lv_color_t ink;
     if (recording) {
-        // An ordinary cell again, exactly like its neighbours. Every colour is
-        // restored explicitly rather than left to whatever it was: this is the
-        // path back from the inverted look, and a value not put back here is a
-        // cell that stays dark-on-light for the rest of the boot.
-        bg = COLOR_CELL_BG;
-        ink = lv_color_hex(COLOR_VALUE);
+        bg = COLOR_WARN;
     } else {
-        bg = moving ? COLOR_DANGER : COLOR_WARN;
-        ink = lv_color_hex(COLOR_BG);
+        bg = moving ? COLOR_DANGER : COLOR_OK;
     }
+    // Every fill is light, so the ink is dark in all three. The cell is
+    // permanently inverted now rather than only sometimes, which removes the
+    // path that used to strand it dark-on-light: there is no longer a state
+    // that has to put COLOR_VALUE back.
+    const lv_color_t ink = lv_color_hex(COLOR_BG);
 
     lv_obj_set_style_bg_color(cell, lv_color_hex(bg), 0);
     if (value != nullptr) {
@@ -1002,7 +1014,9 @@ void PaintTripCell(lv_obj_t *cell, lv_obj_t *caption, lv_obj_t *value, lv_obj_t 
     // The caption and unit are the quiet grey everywhere else on the panel,
     // and that grey is illegible on amber -- so while filled they take the
     // same dark ink as the figure rather than keeping their usual colour.
-    const lv_color_t trim = recording ? lv_color_hex(COLOR_CAPTION) : ink;
+    // The quiet grey is illegible on all three fills, so the caption and unit
+    // take the same dark ink as the figure in every state.
+    const lv_color_t trim = ink;
     if (caption != nullptr) {
         lv_obj_set_style_text_color(caption, trim, 0);
     }
@@ -2125,7 +2139,7 @@ void PageDashboard::onViewLoad() {
     // averages room to be legible.
     lv_obj_t *trip_cell = MakeCell(parent, COL2, ROW1, SEC_W, CELL_H, "TRIP", &s_trip_caption);
     s_trip_cell = trip_cell;
-    s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_28);
+    s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_32);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
 
     // Both elevation readings, in the cell that used to hold only the grade.
@@ -2197,19 +2211,28 @@ void PageDashboard::onViewLoad() {
         // left, 32 on the right.
         s_p2_ridetime = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "RIDE TIME", nullptr,
                                    nullptr, &lv_font_montserrat_40);
+        // Nudged down from where MakeP2Cell leaves it. "6:26" has no
+        // descender and no decimal point, so its ink sits higher in the line
+        // box than the digits either side of it, and at the shared offset the
+        // row read as if this one figure had floated away from its baseline.
+        lv_obj_align(s_p2_ridetime, LV_ALIGN_BOTTOM_LEFT, P2_PAD, P2_VALUE_Y + 4);
         s_p2_ascent = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "ASCENT", "m",
                                  nullptr, &lv_font_montserrat_32);
         y += P2_SHORT_H;
 
-        s_p2_incline = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "INCLINE", "%", nullptr,
-                                  &lv_font_montserrat_40);
-        // 28 rather than the 32 its neighbours in this column use. The trip
-        // is the widest figure on the page -- "123.4" is five glyphs where a
-        // descent is four -- and this column is 90px. Same reasoning as the
-        // note above, one step further.
-        s_p2_trip = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "TRIP",
+        // Trip on the wide side, incline on the narrow one -- the swap of what
+        // this row used to be. Trip is the figure a rider actually looks for
+        // here and the widest one on the page ("148.7" is five glyphs), so it
+        // was the worst possible tenant of the 90px column: it had to drop to
+        // 28pt to fit. In 150px it takes 40pt like its neighbours.
+        //
+        // Incline pays for that, and can afford to. It is "-7.0" at most, four
+        // glyphs, and reads "--" on this board at all times for want of an IMU.
+        s_p2_trip = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_SHORT_H, "TRIP",
                                Settings_DistanceUnitLabel(), &s_p2_trip_unit,
-                               &lv_font_montserrat_28, &s_p2_trip_caption);
+                               &lv_font_montserrat_40, &s_p2_trip_caption);
+        s_p2_incline = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_SHORT_H, "INCLINE", "%",
+                                  nullptr, &lv_font_montserrat_32);
         s_p2_trip_cell = lv_obj_get_parent(s_p2_trip);
 
         // The same hairlines the first page draws, at the row boundaries.
