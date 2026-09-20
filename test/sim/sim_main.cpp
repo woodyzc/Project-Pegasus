@@ -126,6 +126,8 @@ static void RenderGallery(PageDashboard *page, const char *out_dir) {
     g_sim.ascent_m = 4988.0f; // four digits: the widest this cell must take
     g_sim.have_hr = true;
     g_sim.hr.bpm = 151;
+    g_sim.have_cadence = true;
+    g_sim.cadence.rpm = 88;
 
     for (size_t u = 0; u < sizeof(kUnits) / sizeof(kUnits[0]); u++) {
         g_sim.speed_unit = kUnits[u];
@@ -371,13 +373,36 @@ int main(int argc, char **argv) {
             12400);
     Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
     Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
-    // A steep climb, so the ELEVATION cell is rendered with its widest
-    // plausible grade rather than the "--" this board will always show.
+    g_sim.have_cadence = true;
+    g_sim.cadence.rpm = 92;
+    Sim_Publish(TOPIC_CADENCE, nullptr, 0);
+    // A grade, which only reaches the second page now that cadence has the
+    // first page's fourth cell. Kept because INCLINE is still rendered from
+    // it, and "--" is what this board shows for want of an IMU.
     g_sim.have_imu = true;
     g_sim.imu.pitch = 7.13f; // about +12.5%
     Sim_Publish(TOPIC_IMU_DATA, nullptr, 0);
     snprintf(path, sizeof(path), "%s/03-mid-ride.ppm", out_dir);
     Render(&page, path);
+
+    // ---- Scene 3a: the rider stops pedalling ----
+    // Zero rpm with the sensor still connected, which is a different state
+    // from no sensor at all and must not look like one. Scene 1 covers the
+    // dashes; this covers the nought.
+    g_sim.cadence.rpm = 0;
+    Sim_Publish(TOPIC_CADENCE, nullptr, 0);
+    snprintf(path, sizeof(path), "%s/03a-coasting.ppm", out_dir);
+    Render(&page, path);
+
+    // Three digits, which is the widest this cell has to hold: the tracker
+    // rejects anything past 250, so "250" is the worst case by construction
+    // rather than by hope.
+    g_sim.cadence.rpm = 250;
+    Sim_Publish(TOPIC_CADENCE, nullptr, 0);
+    snprintf(path, sizeof(path), "%s/03b-cadence-widest.ppm", out_dir);
+    Render(&page, path);
+    g_sim.cadence.rpm = 92;
+    Sim_Publish(TOPIC_CADENCE, nullptr, 0);
 
     // ---- Scene 4: a roundabout, close enough to act on ----
     SetTurn(TBT_ICON_ROUNDABOUT, 25, "A413 Wendover Road", 3, TBT_ICON_STRAIGHT, 800, 11000);
@@ -433,11 +458,14 @@ int main(int argc, char **argv) {
         g_sim.imu.pitch = -4.0f;
         g_sim.have_hr = true;
         g_sim.hr.bpm = 148;
+        g_sim.have_cadence = true;
+        g_sim.cadence.rpm = 84;
         g_sim.battery.percent = 41;
         g_sim.ascent_m = 2140.0f;
         Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
         Sim_Publish(TOPIC_BATTERY, nullptr, 0);
         Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
+        Sim_Publish(TOPIC_CADENCE, nullptr, 0);
 
         Sim_Publish(TOPIC_IMU_DATA, nullptr, 0);
 
@@ -449,8 +477,9 @@ int main(int argc, char **argv) {
         // average speed drifted apart exactly here, and the elevation figure
         // was two different measurements wearing similar cells.
         //
-        // Read them side by side: ELEVATION/GAIN against ASCENT, and the two
-        // TRIP figures.
+        // Read them side by side: the two TRIP figures, and the two CADENCE
+        // figures -- which are one label copied to another and must never
+        // disagree.
         snprintf(path, sizeof(path), "%s/06a-first-page-same-ride.ppm", out_dir);
         Render(&page, path);
 

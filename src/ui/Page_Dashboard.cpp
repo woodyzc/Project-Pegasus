@@ -45,7 +45,7 @@ constexpr uint32_t COLOR_DANGER = 0xFF6B6B;  // moving and not recording
 
 // ---- Cotopaxi-ish colour blocking, on exactly two cells ----
 //
-// Bright fills on SPEED and ELEVATION, and only those two. The other three
+// Bright fills on SPEED and CADENCE, and only those two. The other three
 // cells on this page have already spent their background or their text on
 // meaning, and decoration would be taking it back:
 //
@@ -59,6 +59,11 @@ constexpr uint32_t COLOR_DANGER = 0xFF6B6B;  // moving and not recording
 //              anything cool.
 //   NAV        uses amber, red and green for onboard / off-route / imminent.
 //
+// The violet came in with the elevation cell and stayed when cadence replaced
+// it, because the reason for two bright cells is compositional rather than
+// about either subject: one lit block on this grid reads as an alert, two read
+// as a design.
+//
 // Both colours are picked from the cool half of the wheel on purpose. The
 // alert language on this screen lives in the amber-to-coral arc (TRIP's
 // 0xFFD166 at about 42 degrees of hue, its 0xFF6B6B at about 0), so anything
@@ -69,7 +74,7 @@ constexpr uint32_t COLOR_DANGER = 0xFF6B6B;  // moving and not recording
 // Dark ink on both, for the same reason the TRIP fill uses it: these are light
 // colours and COLOR_BG is the only thing legible on them.
 constexpr uint32_t COLOR_CELL_SPEED = 0x2FC6B7;     // turquoise
-constexpr uint32_t COLOR_CELL_ELEVATION = 0xA88BFF; // violet
+constexpr uint32_t COLOR_CELL_CADENCE = 0xA88BFF;   // violet
 
 // Turn-by-turn computed on board from the cached route rather than received
 // live from the phone. Colour rather than a word or an icon: the navigation
@@ -112,10 +117,6 @@ constexpr lv_coord_t TBT_ARROW_DRAW_PX = TBT_ICON_PX;
 constexpr lv_coord_t TBT_TEXT_W = 240 - 2 * 6;
 constexpr uint32_t COLOR_CELL_BG = 0x141E27;
 constexpr uint32_t COLOR_CELL_BORDER = 0x24313D;
-// Filled behind the incline value on a real climb: the grade matters most
-// when it is large, and colour carries that faster than digits do.
-constexpr uint32_t COLOR_CLIMB_FILL = 0x3A2E12;
-
 // A turn older than this is treated as gone (phone closed, app backgrounded,
 // link dropped without a clean disconnect).
 constexpr uint32_t TBT_STALE_MS = 30000;
@@ -127,6 +128,16 @@ constexpr uint32_t TBT_STALE_MS = 30000;
 // and the last reading sat there looking live, which is worse than "--"
 // because a rider has no way to tell it is minutes old.
 constexpr uint32_t HR_STALE_MS = 5000;
+
+// Cadence gets the same five seconds, and the two thresholds mean the same
+// thing: the sensor has stopped talking, so the panel stops claiming to know.
+//
+// It is NOT how a coasting rider reaches zero. A connected sensor keeps
+// notifying while the crank stands still, and the tracker in BleCscParse.h
+// publishes a real 0 after three seconds of no crank movement -- so 0 and "--"
+// say different things here. Zero is "you are not pedalling"; dashes are "no
+// sensor". Collapsing them would make a flat battery look like a coast.
+constexpr uint32_t CADENCE_STALE_MS = 5000;
 
 // One colour per training zone: blue, green, yellow, red, purple. Saturated
 // rather than the pastels the rest of the panel uses, because this bar is read
@@ -232,23 +243,15 @@ lv_obj_t *s_clock_caption = nullptr;
 // Applying a TZ string calls tzset(), which is not free, so only redo it when
 // the zone actually changes -- which is almost never on a bike.
 const char *s_active_tz = nullptr;
-lv_obj_t *s_incline_label = nullptr;
 lv_obj_t *s_hr_label = nullptr;
+// Crank cadence. Live only -- there is no ride average for it anywhere, so
+// this label and the second page's are the same number, copied.
+lv_obj_t *s_cadence_label = nullptr;
 // Ride averages and peaks, beside the live value in the two tall cells.
 lv_obj_t *s_speed_avg_label = nullptr;
 lv_obj_t *s_speed_max_label = nullptr;
 lv_obj_t *s_hr_avg_label = nullptr;
 lv_obj_t *s_hr_max_label = nullptr;
-lv_obj_t *s_incline_cell = nullptr;
-// Total ascent, on the second line of the same cell.
-//
-// Both readings share one cell because they are the same subject and the grid
-// has only four. They are not the same kind of number, though, so neither gets
-// the cell's big-figure treatment: grade is instantaneous and ascent
-// accumulates, and one of them is always going to be "--" on a board without
-// an IMU. Two equal rows say that honestly; a big figure over a small one
-// would claim a ranking that changes with the hardware.
-lv_obj_t *s_ascent_label = nullptr;
 
 // ---- The second data page ----
 // One opaque container that covers the navigation region and the four metric
@@ -267,7 +270,7 @@ lv_obj_t *s_p2_speed_unit = nullptr;
 lv_obj_t *s_p2_avgspeed = nullptr;
 lv_obj_t *s_p2_avgspeed_unit = nullptr;
 lv_obj_t *s_p2_hr = nullptr;
-lv_obj_t *s_p2_avghr = nullptr;
+lv_obj_t *s_p2_cadence = nullptr;
 lv_obj_t *s_p2_ridetime = nullptr;
 lv_obj_t *s_p2_ascent = nullptr;
 lv_obj_t *s_p2_incline = nullptr;
@@ -353,6 +356,7 @@ uint8_t s_tbt_bar_icon = 0;
 char s_tbt_bar_street[TBT_STREET_NAME_MAX] = {0};
 uint32_t s_tbt_last_ms = 0;
 uint32_t s_hr_last_ms = 0;
+uint32_t s_cadence_last_ms = 0;
 lv_obj_t *s_battery_label = nullptr;
 lv_timer_t *s_refresh_timer = nullptr;
 
@@ -373,6 +377,7 @@ uint32_t s_clock_drawn_ms = 0;
 
 volatile bool s_gps_dirty = false;
 volatile bool s_hr_dirty = false;
+volatile bool s_cadence_dirty = false;
 volatile bool s_imu_dirty = false;
 volatile bool s_battery_dirty = false;
 volatile bool s_tbt_dirty = false;
@@ -428,6 +433,14 @@ void OnHeartRatePublished(const char *topic, const void *data, uint32_t size, vo
     (void)size;
     (void)user_arg;
     s_hr_dirty = true;
+}
+
+void OnCadencePublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
+    (void)topic;
+    (void)data;
+    (void)size;
+    (void)user_arg;
+    s_cadence_dirty = true;
 }
 
 void OnImuPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
@@ -526,35 +539,6 @@ void TintCellText(lv_obj_t *obj, lv_color_t colour) {
         lv_obj_set_style_text_color(child, colour, 0);
         TintCellText(child, colour);
     }
-}
-
-// Background and ink together, because they are one decision.
-//
-// They were two. The cell is built light -- violet with near-black ink, like
-// the other colour-blocked cells -- and the grade reading then overwrote the
-// background with a dark fill and left the ink alone. Dark text on a dark
-// cell: the climb fill made it marginal and the flat fill made it invisible.
-//
-// It has never shown on this board, and that is the whole problem with it.
-// The line only runs when an IMU publishes, and the Hosyond has none, so the
-// cell keeps its build-time colours and looks right. It is the Waveshare --
-// the board with the QMI8658, the one waiting to be merged -- that would have
-// shown a blank cell on the first descent.
-//
-// The same trap CLAUDE.md records for the TRIP cell, which inverts and must
-// put every colour back explicitly on the way out. Here the two are set in
-// one place so neither can be changed without the other.
-void PaintElevationCell(bool climbing) {
-    if (s_incline_cell == nullptr) {
-        return;
-    }
-    // Climbing keeps its own fill, so the cue survives; it is dark, so the
-    // ink goes light. Otherwise the cell is the violet it was built as, and
-    // the ink is the dark that violet needs.
-    const uint32_t bg = climbing ? COLOR_CLIMB_FILL : COLOR_CELL_ELEVATION;
-    const uint32_t ink = climbing ? COLOR_VALUE : COLOR_BG;
-    lv_obj_set_style_bg_color(s_incline_cell, lv_color_hex(bg), 0);
-    TintCellText(s_incline_cell, lv_color_hex(ink));
 }
 
 lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h,
@@ -697,31 +681,6 @@ void MakeSecondary(lv_obj_t *cell, lv_obj_t **out_avg, lv_obj_t **out_max) {
 
     *out_avg = MakeSecondaryRow(block, "AVG");
     *out_max = MakeSecondaryRow(block, "MAX");
-}
-
-// Two labelled rows filling a narrow cell, for the pair that shares one.
-//
-// The same word-then-figure language as the ride block above, but spanning the
-// whole cell instead of tucking beside a large figure -- there is no large
-// figure here. "NOW" and "GAIN" rather than "INCLINE" and "ASCENT" because at
-// 10pt the longer words leave the figures nowhere to go: "+12.5%" at 16pt is
-// most of what a 92px cell has after an inset.
-void MakeElevationBlock(lv_obj_t *cell, lv_coord_t width, lv_obj_t **out_now,
-                        lv_obj_t **out_gain) {
-    lv_obj_t *block = lv_obj_create(cell);
-    lv_obj_remove_style_all(block);
-    lv_obj_set_size(block, width - (2 * SECONDARY_INSET), 2 * SECONDARY_ROW_H);
-    lv_obj_clear_flag(block, LV_OBJ_FLAG_SCROLLABLE);
-    // Not clickable, for the reason MakeSecondary gives: lv_obj_create sets
-    // that flag and a transparent box that answers touches eats the taps meant
-    // for what is under it.
-    lv_obj_clear_flag(block, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_flex_flow(block, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(block, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
-    lv_obj_align(block, LV_ALIGN_BOTTOM_RIGHT, -SECONDARY_INSET, CELL_VALUE_Y);
-
-    *out_now = MakeSecondaryRow(block, "NOW", &lv_font_montserrat_14);
-    *out_gain = MakeSecondaryRow(block, "GAIN", &lv_font_montserrat_14);
 }
 
 // The unit sits on the caption row, at the opposite end of the cell: "SPEED"
@@ -1284,6 +1243,23 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_hr_last_ms = 0;
     }
 
+    if (s_cadence_dirty) {
+        s_cadence_dirty = false;
+        Cadence_t cadence;
+        if (DataCenter_Pull(TOPIC_CADENCE, &cadence, sizeof(cadence))) {
+            // Text only. The ink was set once when the cell was built and is
+            // dark, because the fill behind it is violet -- see the note
+            // there.
+            lv_label_set_text_fmt(s_cadence_label, "%u", (unsigned)cadence.rpm);
+            s_cadence_last_ms = lv_tick_get();
+        }
+    }
+
+    if (s_cadence_last_ms != 0 && lv_tick_elaps(s_cadence_last_ms) > CADENCE_STALE_MS) {
+        lv_label_set_text(s_cadence_label, "--");
+        s_cadence_last_ms = 0;
+    }
+
     if (s_battery_dirty) {
         s_battery_dirty = false;
         Battery_t battery;
@@ -1466,16 +1442,17 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             const float grade = tanf(imu.pitch * (float)M_PI / 180.0f) * 100.0f;
             s_grade_pct = grade;
             s_have_grade = true;
-            lv_label_set_text_fmt(s_incline_label, "%+.1f%%", grade);
-            PaintElevationCell(grade >= 3.0f);
+            // Stored, not drawn. Grade and ascent both live on the second page
+            // now that cadence has this page's fourth cell, and RenderPage2
+            // reads these two variables rather than being pushed to.
+            //
+            // The climb fill went with them. It set a dark background behind
+            // the grade on a real climb, and it had never once run: it needs
+            // an IMU publishing, and this board has none. Its replacement, if
+            // the Waveshare ever arrives, belongs on whichever cell shows the
+            // grade -- and must set background and ink in one place, which is
+            // the bug the old one was carrying unseen.
         }
-    }
-
-    // Metres only, and no decimal. Ascent is accurate to a few metres at best,
-    // so a tenth would be false precision, and feet would need a unit switch
-    // this cell has no room for.
-    if (s_ascent_label != nullptr) {
-        lv_label_set_text_fmt(s_ascent_label, "%dm", (int)(RideStats_AscentM() + 0.5f));
     }
 }
 
@@ -1491,6 +1468,7 @@ void OnMapClicked(lv_event_t *e) {
 // dashboard instance.
 Account s_gps_account("Page_Dashboard/GPS", OnGpsPublished);
 Account s_hr_account("Page_Dashboard/HeartRate", OnHeartRatePublished);
+Account s_cadence_account("Page_Dashboard/Cadence", OnCadencePublished);
 Account s_imu_account("Page_Dashboard/IMU", OnImuPublished);
 Account s_battery_account("Page_Dashboard/Battery", OnBatteryPublished);
 Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
@@ -1680,17 +1658,15 @@ void RenderPage2() {
     // so both pages now show it and they agree by construction.
     lv_label_set_text_fmt(s_p2_ascent, "%d", (int)(RideStats_AscentM() + 0.5f));
 
-    const uint8_t avg_bpm = RideStats_AvgBpm();
-    if (avg_bpm > 0) {
-        lv_label_set_text_fmt(s_p2_avghr, "%u", (unsigned)avg_bpm);
-        lv_obj_set_style_text_color(
-            s_p2_avghr,
-            lv_color_hex(ZONE_COLORS[HrZone_Index(avg_bpm, Settings_GetHrRestBpm(),
-                                                  Settings_GetHrMaxBpm())]),
-            0);
-    } else {
-        lv_label_set_text(s_p2_avghr, "--");
-        lv_obj_set_style_text_color(s_p2_avghr, lv_color_hex(COLOR_VALUE), 0);
+    // Copied from the first page's cell, like speed and heart rate above, and
+    // for the same reason: "--" for no sensor and 0 for a rider coasting are
+    // two rules that would drift apart the moment they were written twice.
+    //
+    // No colour is copied. This page is dark and the first page's cadence cell
+    // is violet with dark ink, so taking its colour would paint the figure
+    // very nearly the background.
+    if (s_cadence_label != nullptr) {
+        lv_label_set_text(s_p2_cadence, lv_label_get_text(s_cadence_label));
     }
 
     // "--" with no IMU, which is every day on this board: the per-cent sign
@@ -2156,14 +2132,23 @@ void PageDashboard::onViewLoad() {
     s_trip_label = MakeValueIn(trip_cell, "0.00", COLOR_VALUE, &lv_font_montserrat_32);
     s_trip_unit_label = MakeUnit(trip_cell, Settings_DistanceUnitLabel());
 
-    // Both elevation readings, in the cell that used to hold only the grade.
-    // No unit on the caption row: the two rows carry different units, so each
-    // figure spells out its own.
-    s_incline_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "ELEVATION");
-    MakeElevationBlock(s_incline_cell, SEC_W, &s_incline_label, &s_ascent_label);
-    lv_label_set_text(s_ascent_label, "0m");
-    lv_obj_set_style_bg_color(s_incline_cell, lv_color_hex(COLOR_CELL_ELEVATION), 0);
-    TintCellText(s_incline_cell, lv_color_hex(COLOR_BG));
+    // Cadence, in the cell that used to hold the two elevation readings.
+    //
+    // One big figure rather than the two small rows that were here, and the
+    // same anatomy and font as TRIP opposite: it is one number, it is at most
+    // three digits, and 32pt in this 92px column is what TRIP already proves
+    // fits. The elevation pair did not lose a home -- the second page carries
+    // both ASCENT and INCLINE, and this board has no IMU to produce a grade
+    // with anyway.
+    lv_obj_t *cadence_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "CADENCE");
+    s_cadence_label = MakeValueIn(cadence_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
+    MakeUnit(cadence_cell, "rpm");
+    lv_obj_set_style_bg_color(cadence_cell, lv_color_hex(COLOR_CELL_CADENCE), 0);
+    // Dark ink, and it stays dark: nothing recolours this figure per update,
+    // so the one pass here is the whole story. Writing COLOR_VALUE into it
+    // later would be white on violet, which is the trap this panel has now
+    // sprung three times.
+    TintCellText(cadence_cell, lv_color_hex(COLOR_BG));
 
     // ---- The second data page ----
     // Covers the navigation region and the four cells, leaving the status line
@@ -2216,8 +2201,16 @@ void PageDashboard::onViewLoad() {
 
         s_p2_hr = MakeP2Cell(s_page2, 0, y, P2_LIVE_W, P2_TALL_H, "HEART RATE", "bpm", nullptr,
                              live);
-        s_p2_avghr = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_TALL_H, "AVG", "bpm",
-                                nullptr, avg);
+        // Cadence, where the average heart rate was.
+        //
+        // The one cell in this column that is not a ride average, which is a
+        // deliberate exception rather than an oversight: there is no average
+        // cadence anywhere in this firmware to put here, and the live figure
+        // beside the live heart rate is the pairing a rider actually reads.
+        // The caption says CADENCE rather than AVG so the column does not
+        // quietly lie about what it holds.
+        s_p2_cadence = MakeP2Cell(s_page2, P2_LIVE_W, y, P2_AVG_W, P2_TALL_H, "CADENCE", "rpm",
+                                  nullptr, avg);
         y += P2_TALL_H;
 
         // The narrow column cannot hold a four-digit descent at 40pt, so the
@@ -2365,6 +2358,7 @@ void PageDashboard::onViewLoad() {
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
     DataCenter_Subscribe(TOPIC_HEART_RATE, &s_hr_account);
+    DataCenter_Subscribe(TOPIC_CADENCE, &s_cadence_account);
     DataCenter_Subscribe(TOPIC_IMU_DATA, &s_imu_account);
     DataCenter_Subscribe(TOPIC_BATTERY, &s_battery_account);
     DataCenter_Subscribe(TOPIC_NAV_TBT, &s_tbt_account);
@@ -2403,7 +2397,7 @@ void PageDashboard::onViewUnload() {
     s_clock_label = nullptr;
     s_clock_caption = nullptr;
     s_active_tz = nullptr;
-    s_incline_label = nullptr;
+    s_cadence_label = nullptr;
     s_hr_label = nullptr;
     s_speed_avg_label = nullptr;
     s_speed_max_label = nullptr;
@@ -2421,8 +2415,6 @@ void PageDashboard::onViewUnload() {
     s_route_then_label = nullptr;
     s_route_remaining_label = nullptr;
     s_trip_unit_label = nullptr;
-    s_incline_cell = nullptr;
-    s_ascent_label = nullptr;
     s_page2 = nullptr;
     s_on_page2 = false;
     s_p2_speed = nullptr;
@@ -2430,7 +2422,7 @@ void PageDashboard::onViewUnload() {
     s_p2_avgspeed = nullptr;
     s_p2_avgspeed_unit = nullptr;
     s_p2_hr = nullptr;
-    s_p2_avghr = nullptr;
+    s_p2_cadence = nullptr;
     s_p2_ridetime = nullptr;
     s_p2_ascent = nullptr;
     s_p2_incline = nullptr;

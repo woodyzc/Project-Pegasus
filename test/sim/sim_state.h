@@ -32,6 +32,11 @@ struct SimState {
 
     bool have_hr = false;
     HeartRate_t hr{};
+    // Cadence. have_cadence false is "no sensor" and draws dashes; a zero rpm
+    // with the flag set is a rider coasting, which is a different picture and
+    // one the renders below have to be able to show.
+    bool have_cadence = false;
+    Cadence_t cadence{};
 
     bool have_gps = false;
     GPS_Info_t gps{};

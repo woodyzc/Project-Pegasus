@@ -10,7 +10,9 @@
 #include "navigation/NavRoute.h"
 #include "navigation/RideLog.h"
 #include "navigation/RoadMap.h"
+#include "sensors/BLE_CSC_Client.h"
 #include "sensors/BLE_HR_Client.h"
+#include "sensors/BleRadioGate.h"
 #include "sensors/GPS_Reader.h"
 #include "system/DataCenter.h"
 #include "system/LvglTask.h"
@@ -215,7 +217,14 @@ void setup() {
     // a mode that hangs here is caught on the next boot (see Settings.h).
     Settings_NoteRadioBringUpStart();
 
+    // One mutex, shared by both sensor clients, so only one of them is ever
+    // asking the controller to open a link. Created before either.
+    BleRadioGate_Init();
+
     BLE_HR_Init();
+    // Configures scan parameters only, like BLE_HR_Init, so it is safe on this
+    // side of BLE_TBT_Start()'s GATT registration.
+    BLE_CSC_Init();
 
     // ---- This order is load-bearing. Do not swap these two. ----
     // Turn-by-turn shares the NimBLE stack the HR client brings up, and
@@ -248,6 +257,12 @@ void setup() {
     }
 
     BLE_HR_Start();
+
+    // After the heart rate, and it only starts a task -- no synchronous scan.
+    // Its first discovery therefore happens once setup() is already past the
+    // blocking part, and it waits on the same gate rather than racing for the
+    // radio.
+    BLE_CSC_Start();
 
     // Advertising goes last, and the split from BLE_TBT_Start() is the point.
     // Registration had to come before any connection existed; advertising has

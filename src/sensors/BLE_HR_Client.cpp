@@ -8,7 +8,9 @@
 #include <esp_system.h>
 
 #include "../system/DataCenter.h"
+#include "BLE_CSC_Client.h"
 #include "BleHrParse.h"
+#include "BleRadioGate.h"
 
 namespace {
 
@@ -242,6 +244,11 @@ bool ConnectAndSubscribe() {
     //
     // The window is the connect timeout at worst (5s), and it closes on every
     // path out of this function.
+    //
+    // The gate is the same rule extended to the second client. Cadence has its
+    // own supervisor on its own backoff, and two connects landing together is
+    // the identical load with no advertisement involved -- see BleRadioGate.h.
+    BleRadioGateHold gate;
     BLE_TBT_PauseAdvertising();
     struct ResumeAdvertising {
         ~ResumeAdvertising() { BLE_TBT_ResumeAdvertising(); }
@@ -349,7 +356,12 @@ void BleHrTask(void *pvParameters) {
             // the peer to be broadcasting inside
             // that window meant a watch woken a moment late would never be
             // found however long it broadcast afterwards.
-            if (DiscoverPeer() && ConnectAndSubscribe()) {
+            bool found;
+            {
+                BleRadioGateHold gate;
+                found = DiscoverPeer();
+            }
+            if (found && ConnectAndSubscribe()) {
                 backoff_ms = kBackoffStartMs;
                 continue;
             }
@@ -537,10 +549,17 @@ void BLE_HR_Shutdown() {
     // can be answered rather than guessed at. "clean in NNNms" means the
     // goodbye reached the peer and the fault is the peer's; "TIMED OUT" means
     // kShutdownDisconnectMs is too short and this end is at fault.
-    // ---- Stop the supervisor before anything else ----
+    // ---- Stop BOTH supervisors before anything else ----
     // First, and before the disconnect below rather than after it, because the
     // disconnect is what would otherwise send the task straight into a
     // reconnect attempt on a stack that is about to be deleted.
+    //
+    // The cadence supervisor is parked here rather than by its own module
+    // because this function owns the teardown: ReleaseStack() below runs
+    // NimBLEDevice::deinit(true), which destroys every client on the stack.
+    // A cadence task still holding a pointer to one is the exact bug §8
+    // records for the heart-rate task, one sensor along.
+    BLE_CSC_Park();
     ParkSupervisor();
 
     if (s_client == nullptr || !s_client->isConnected()) {

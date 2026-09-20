@@ -12,6 +12,7 @@
 #include "../navigation/RideLog.h"
 #include "Overlay_FileTransfer.h"
 #include "Overlay_RideSummary.h"
+#include "../sensors/BLE_CSC_Client.h"
 #include "../sensors/BLE_HR_Client.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
@@ -87,6 +88,7 @@ lv_obj_t *s_power_status = nullptr;
 //     low-battery colour while charging. Worth fixing, not worth hurrying.
 lv_obj_t *s_power_battery = nullptr;
 lv_obj_t *s_hrlink_value = nullptr;
+lv_obj_t *s_cadencelink_value = nullptr;
 lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
 lv_timer_t *s_info_timer = nullptr;
@@ -617,6 +619,9 @@ void InfoTimerCallback(lv_timer_t *timer) {
     if (s_hrlink_value != nullptr) {
         lv_label_set_text_fmt(s_hrlink_value, "Link: %s", BLE_HR_StatusText());
     }
+    if (s_cadencelink_value != nullptr) {
+        lv_label_set_text(s_cadencelink_value, BLE_CSC_StatusText());
+    }
 
     // The phone can only ever report that it did not find the head unit, which
     // is the same message whether the board is silent or the phone is. This is
@@ -938,6 +943,20 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_text_font(s_hrlink_value, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(s_hrlink_value, lv_color_hex(COLOR_VALUE), 0);
     lv_label_set_text(s_hrlink_value, "Link: --");
+
+    // The cadence sensor, in the same card and for the same reason the
+    // turn-by-turn link is here: one NimBLE stack, one radio, and three
+    // connections between them -- which is exactly what NimBLE is built for
+    // here, with nothing spare.
+    //
+    // This line is the only way to tell a sensor with a flat battery from one
+    // that speaks a service this firmware does not: both are simply never
+    // found, and "no sensor found" is what both look like. The serial log
+    // prints what WAS advertising, which is the other half of that answer.
+    s_cadencelink_value = lv_label_create(hr_card);
+    lv_obj_set_style_text_font(s_cadencelink_value, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_cadencelink_value, lv_color_hex(COLOR_VALUE), 0);
+    lv_label_set_text(s_cadencelink_value, "Cadence: --");
 
     // Sits in the heart-rate card because that is where the radio status
     // already lives, and both links share the one NimBLE stack.
@@ -1351,6 +1370,7 @@ void PageSettings::onViewUnload() {
     s_ride_finish_icon = nullptr;
     s_ride_finish_label = nullptr;
     s_hrlink_value = nullptr;
+    s_cadencelink_value = nullptr;
     s_tbtlink_value = nullptr;
     s_heap_value = nullptr;
     s_hr_rest_value = nullptr;

@@ -115,6 +115,7 @@ bool GpxTrack_CardMounted() { return false; }
 // does on the board.
 const char *const TOPIC_GPS_INFO = "GPS_Info";
 const char *const TOPIC_HEART_RATE = "Sensor/HeartRate";
+const char *const TOPIC_CADENCE = "Sensor/Cadence";
 const char *const TOPIC_IMU_DATA = "Sensor/IMU";
 const char *const TOPIC_BATTERY = "Sensor/Battery";
 const char *const TOPIC_NAV_TBT = "Nav/TBT";
@@ -187,6 +188,10 @@ bool DataCenter_Pull(const char *topic, void *out, uint32_t size) {
     if (strcmp(topic, TOPIC_HEART_RATE) == 0 && size == sizeof(HeartRate_t)) {
         memcpy(out, &g_sim.hr, sizeof(HeartRate_t));
         return g_sim.have_hr;
+    }
+    if (strcmp(topic, TOPIC_CADENCE) == 0 && size == sizeof(Cadence_t)) {
+        memcpy(out, &g_sim.cadence, sizeof(Cadence_t));
+        return g_sim.have_cadence;
     }
     if (strcmp(topic, TOPIC_GPS_INFO) == 0 && size == sizeof(GPS_Info_t)) {
         memcpy(out, &g_sim.gps, sizeof(GPS_Info_t));

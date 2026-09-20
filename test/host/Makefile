@@ -4,6 +4,10 @@
 # can are deliberately kept dependency-free and covered here:
 #   * test_ble_hr_parse - BLE 0x2A37 measurement parsing (compiles the real
 #                         src/sensors/BleHrParse.c)
+#   * test_csc_parse    - BLE 0x2A5B cadence parsing and the rpm tracker built
+#                         on it (compiles the real src/sensors/BleCscParse.c).
+#                         Both counters on that wire are 16-bit and
+#                         free-running, so every ride wraps them.
 #   * test_gps_frame    - the position fix the phone sends, standing in for a
 #                         GNSS module that has never been fitted (compiles the
 #                         real src/sensors/GpsFrame.c)
@@ -79,7 +83,7 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX) \
         test_idle_policy$(SUFFIX) test_ascent$(SUFFIX) \
         test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX) \
-        test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX)
+        test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX) test_csc_parse$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -108,6 +112,9 @@ test_ble_hr_parse$(SUFFIX): test_ble_hr_parse.c $(SENSORS)/BleHrParse.c
 
 test_gps_frame$(SUFFIX): test_gps_frame.c $(SENSORS)/GpsFrame.c
 	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
+
+test_csc_parse$(SUFFIX): test_csc_parse.c $(SENSORS)/BleCscParse.c
+	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC)
 
 # The name in this frame is printed straight onto the panel, so the suite is
 # mostly about lengths: the declared one and the delivered one are separate

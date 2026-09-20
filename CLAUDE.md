@@ -36,11 +36,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - *Power*: Retain micro-power RTC backup (~15μA) for <1s hot starts.
 - **IMU Sensor** *(target board only)*: Onboard QMI8658 6-axis IMU (I2C).
   - *Uses*: Motion detection, inclination/slope calculation, anti-theft alarm, fall detection, and Any-Motion wake-up triggers.
-  - `Page_Dashboard`'s ELEVATION cell carries both readings: `NOW` is grade
-    from `IMU_Data_t.pitch` and reads "--" until an IMU publishes, `GAIN` is
-    total ascent from `Ascent.h`. Two equal rows rather than one large figure
-    over a small one, because which of the pair matters depends on the board,
-    and a ranking baked into the layout would be wrong on one of them.
+  - Grade and ascent live on the dashboard's **second** page, as INCLINE and
+    ASCENT. They shared a two-row ELEVATION cell on the first page until
+    cadence took that cell on 2026-09-20; nothing was lost, and this board has
+    no IMU to produce a grade with anyway. The climb fill that used to colour
+    that cell went with it -- it had never once run, for the same reason.
+    Restoring it means setting background and ink in one place, which is the
+    bug the old one was carrying unseen.
 - **Power & Control**:
   - Onboard `BAT` Button (GPIO Interrupt) *(target board only)*: Soft-switch for manual Deep Sleep entry and wake-up.
   - Power Subsystem: Target ~200μA standby current in Deep Sleep (5–6 months standby on 1000mAh battery).
@@ -85,6 +87,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     that is reasoning, not a measurement.
   - The parsing half is `src/sensors/BleHrParse.c`, host-tested with no NimBLE
     dependency.
+- **BLE cadence (0x1816)**: a second client, for a crank sensor on the bike.
+  `src/sensors/BLE_CSC_Client.h` runs the link; `src/sensors/BleCscParse.h` is
+  the pure, host-tested half and carries the part that is easy to get wrong.
+  The wire has no rate on it -- two free-running 16-bit counters, revolutions
+  and a 1/1024s event time, both of which wrap on any real ride -- so the rpm
+  is computed from differences, and the arithmetic is the subject of
+  `test/host/test_csc_parse.c` rather than something checked by eye.
+  - **Zero and "--" say different things and must keep doing so.** A connected
+    sensor with a still crank publishes a real 0 after `CADENCE_IDLE_MS`; a
+    sensor that has gone away publishes nothing and the dashboard blanks the
+    cell five seconds later. A flat battery must not look like a rider
+    coasting. That is also why the supervisor republishes the current rpm once
+    a second even when nothing changed: a rider holding a steady cadence
+    produces no changes at all, and silence on that topic means "gone".
+  - **Three connections is the ceiling and all three are now spoken for** --
+    phone, heart rate, cadence -- against NimBLE's
+    `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` of 3. A fourth sensor needs that raised
+    and the RAM that comes with it.
+  - **`src/sensors/BleRadioGate.h` exists because a second client made "two
+    connects at once" reachable.** Bracketing one connect with
+    `BLE_TBT_PauseAdvertising()` was enough while there was one client; two
+    supervisors on independent backoffs will eventually initiate two links
+    together, which is the same controller load, with no advertisement
+    involved. Both clients take the gate across discovery and connect.
+  - **`BLE_HR_Shutdown()` parks the cadence supervisor too.** It owns the
+    teardown, and `NimBLEDevice::deinit(true)` destroys every client on the
+    stack -- including the one a running cadence task is holding a pointer to.
+
 - **BLE Turn-by-Turn**: a NimBLE GATT server the phone writes into. The server
   runs in **both** navigation modes, because it also carries the phone's
   position (§5) and a head unit with no receiver of its own needs that either

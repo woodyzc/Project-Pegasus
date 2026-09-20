@@ -65,6 +65,21 @@ typedef struct {
     uint8_t battery; // percent, 0-100 (0xFF = unknown; a 0x180D peer reports battery elsewhere)
 } HeartRate_t;
 
+// Crank cadence, already reduced to revolutions per minute.
+//
+// The wire carries two free-running 16-bit counters rather than a rate, and
+// turning those into an rpm needs history, a wrap-safe subtraction and an idle
+// timeout -- all of which live in src/sensors/BleCscParse.h, host-tested,
+// beside the decoder. What reaches this bus is the answer, so every consumer
+// gets the same one.
+//
+// Zero is a real reading and means the crank is not turning. "No sensor" and
+// "sensor gone quiet" are absences instead, and the dashboard ages the reading
+// out the way it does heart rate.
+typedef struct {
+    uint16_t rpm;
+} Cadence_t;
+
 typedef struct {
     float pitch;           // degrees
     bool motion_detected;  // Any-Motion wake trigger state
@@ -168,6 +183,7 @@ typedef struct {
 // Add new topics by extending the registration table in DataCenter.cpp.
 extern const char *const TOPIC_GPS_INFO;
 extern const char *const TOPIC_HEART_RATE;
+extern const char *const TOPIC_CADENCE;
 extern const char *const TOPIC_IMU_DATA;
 extern const char *const TOPIC_BATTERY;
 extern const char *const TOPIC_NAV_TBT;
