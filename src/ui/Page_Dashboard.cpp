@@ -1915,7 +1915,21 @@ void PageDashboard::onViewLoad() {
                               LV_FLEX_ALIGN_CENTER);
         // A deliberate gap between rows, now that the layout is not
         // manufacturing one.
-        lv_obj_set_style_pad_row(s_nav_content, 6, 0);
+        //
+        // 4 and not 6, and the four pixels matter. The column is 150px
+        // (NAV_H - STATUS_H - PAD) and the four rows are 88 + 6 + 15 + the
+        // street name's line box. At montserrat_24 that box is 27px, which
+        // makes 154 at a 6px gap -- so the block overflowed, and with nothing
+        // scrollable the overflow was simply clipped. What it cost was the
+        // bottom two rows of the street name's descenders: "Rockingham Road"
+        // drew its g with the tail cut off at its widest point.
+        //
+        // It hid for so long because every other name in the simulator is long
+        // enough that SetStreetName drops to montserrat_14, whose 16px box
+        // fits with room over. Only a short name -- which is to say most real
+        // ones -- keeps the big font and overflows. 04a-short-street-name is
+        // that case, added from the photograph that found it.
+        lv_obj_set_style_pad_row(s_nav_content, 4, 0);
 
         // ---- Row 1: the arrow, and the distance to it ----
         lv_obj_t *turn_row = lv_obj_create(s_nav_content);

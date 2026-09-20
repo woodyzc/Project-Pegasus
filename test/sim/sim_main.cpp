@@ -385,6 +385,18 @@ int main(int argc, char **argv) {
     snprintf(path, sizeof(path), "%s/04-roundabout-imminent.ppm", out_dir);
     Render(&page, path);
 
+    // ---- Scene 4a: a street name short enough to keep the biggest font ----
+    // Every other scene here uses a name long enough that SetStreetName drops
+    // to montserrat_14, whose line box is 16px -- and the four navigation rows
+    // happen to fit in that case. A short name keeps montserrat_24 at 27px,
+    // which is 4px more than the column has, and the overflow comes off the
+    // descenders. "Rockingham Road" is the exact name from the photograph that
+    // found it, and the only glyph that shows the bug is the g.
+    SetTurn(TBT_ICON_TURN_LEFT, 97, "Rockingham Road", 0, TBT_ICON_TURN_LEFT, 190, 2900);
+    Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
+    snprintf(path, sizeof(path), "%s/04a-short-street-name.ppm", out_dir);
+    Render(&page, path);
+
     // ---- Scene 5: the worst strings anything has to hold ----
     // A long street name, a three-digit trip, a distance in kilometres, and
     // the speed cell's real worst case: a three-digit live value sharing 150px
