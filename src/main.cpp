@@ -41,6 +41,12 @@ void setup() {
     lv_init();
     DataCenter_Init();
 
+    // Straight after the bus and before GPS_Init(), because this is what
+    // stamps a fix as having arrived. A publish landing before the
+    // subscription is a fix nothing timed, and the onboard fallback would
+    // treat it as fresh for ever.
+    NavRoute_Init();
+
     Display_Init();
     Touch_Init();
     Battery_Init();

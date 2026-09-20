@@ -42,6 +42,15 @@
 extern "C" {
 #endif
 
+// Subscribes to the position topic. Call once from setup(), after
+// DataCenter_Init() and before anything can publish a fix.
+//
+// Without it NavRoute_Tick cannot tell a fix that just arrived from one that
+// arrived an hour ago -- DataCenter_Pull hands out the last published value
+// for ever -- and the onboard fallback navigates from a frozen position long
+// after the phone has gone. See the staleness note in NavRoute_Tick.
+void NavRoute_Init();
+
 // Frees any stored route and resets the assembly state. Safe to call at any
 // time; the UI simply stops seeing an onboard route.
 void NavRoute_Clear();

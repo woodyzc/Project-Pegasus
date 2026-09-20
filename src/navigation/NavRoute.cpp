@@ -48,6 +48,53 @@ uint32_t s_last_publish_ms = 0;
 // that is precisely when they are looking at it.
 #define NAVROUTE_KEEPALIVE_MS 10000
 
+// How long a position stays believable.
+//
+// The same five seconds Page_Dashboard blanks SPEED after, and deliberately
+// so: both publishers send at 1Hz (the receiver, and the phone's
+// requestLocationUpdates at 1000ms), so five is five missed fixes, and the
+// panel should not be navigating from a position it has already stopped
+// showing a speed for.
+#define NAVROUTE_FIX_STALE_MS 5000
+
+// Bumped by the DataCenter callback below on every VALID fix, and read by
+// NavRoute_Tick to notice that one arrived.
+//
+// This exists because DataCenter_Pull has no concept of freshness: once a
+// topic has ever been published it keeps handing out that same last value for
+// ever. So `fix_valid` on a pulled struct does not mean "there is a fix", it
+// means "there was one, once" -- and the whole onboard path was built on that
+// reading. See NavRoute_Tick.
+//
+// A counter rather than a timestamp because the callback runs on the
+// publisher's core and Tick runs on the UI's: this way the only thing crossing
+// between them is one aligned 32-bit word that nothing compares against a
+// clock, and every deadline is measured against the now_ms Tick is handed.
+volatile uint32_t s_fix_seq = 0;
+uint32_t s_seen_fix_seq = 0;
+uint32_t s_last_fix_ms = 0;
+bool s_have_fix_time = false;
+
+void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
+    (void)topic;
+    (void)user_arg;
+    if (data == nullptr || size < sizeof(GPS_Info_t)) {
+        return;
+    }
+    // Stamped on a valid fix, never on a publish. GPS_Reader publishes at 1Hz
+    // with fix_valid false while it acquires -- a climbing num_sv is how
+    // "module present, still searching" is told from "no module" -- so
+    // counting publishes would read a receiver in a tunnel as a live position
+    // for as long as the tunnel.
+    const GPS_Info_t *info = (const GPS_Info_t *)data;
+    if (!info->fix_valid) {
+        return;
+    }
+    s_fix_seq++;
+}
+
+Account s_gps_account("NavRoute/GPS", OnGpsPublished);
+
 void FreeAll() {
     if (s_blob != nullptr) {
         heap_caps_free(s_blob);
@@ -127,6 +174,14 @@ void FinishTransfer() {
 }
 
 } // namespace
+
+void NavRoute_Init() {
+    // Subscribed even with no route loaded. The subscription is what makes
+    // position freshness knowable, and a route can arrive from the phone at
+    // any moment afterwards -- subscribing only once one had would leave the
+    // first seconds of every route navigating on an unstamped fix.
+    DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
+}
 
 void NavRoute_Clear() {
     FreeAll();
@@ -300,6 +355,27 @@ void NavRoute_Tick(uint32_t now_ms) {
     // on the connection: a link that is up but silent is no more use to the
     // rider than one that is down.
     if (s_ever_live && (uint32_t)(now_ms - s_last_live_ms) < TBT_LIVE_GRACE_MS) {
+        return;
+    }
+
+    // Has a valid fix arrived since the last time through here?
+    const uint32_t seq = s_fix_seq;
+    if (seq != s_seen_fix_seq) {
+        s_seen_fix_seq = seq;
+        s_last_fix_ms = now_ms;
+        s_have_fix_time = true;
+    }
+
+    // A position that has stopped arriving is not a position.
+    //
+    // Without this the fallback outlived the phone entirely: stop the link and
+    // the last fix sits in the topic buffer for ever with fix_valid still set,
+    // so this function snapped that frozen point to the route, produced a
+    // turn, and republished it every keepalive -- which reset the dashboard's
+    // own 30s expiry on every pass. The panel showed an amber arrow and a
+    // street name indefinitely, next to a SPEED cell that had gone to dashes
+    // within five seconds, and the one told the truth while the other did not.
+    if (!s_have_fix_time || (uint32_t)(now_ms - s_last_fix_ms) > NAVROUTE_FIX_STALE_MS) {
         return;
     }
 
