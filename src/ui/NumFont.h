@@ -46,19 +46,6 @@ extern const lv_font_t pegasus_font_num_88;
 extern const lv_font_t pegasus_font_num_58b;
 extern const lv_font_t pegasus_font_num_36b;
 
-// The live speed and heart rate on the first page, one weight lighter than
-// the panel's default.
-//
-// LVGL vendors only Montserrat Medium, so "slightly thinner" cannot be had
-// from the built-in faces at all -- this is the Regular instance of the
-// variable font, digits and separators only, which is everything either label
-// can hold. See tools/gennumfont.py for where that font comes from.
-//
-// Its line box is the ink rather than the face's full metrics, so it is
-// shorter than lv_font_montserrat_40 and sits differently in a cell. Check
-// the render, not the reasoning.
-extern const lv_font_t pegasus_font_num_40r;
-
 #ifdef __cplusplus
 }
 #endif
