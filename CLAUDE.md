@@ -589,5 +589,24 @@ Nor is a caller missing: `TbtService.ensureRouteSource()` calls
 `RouteSources.create()` and wires both `onRoutePlanned` (uploads the polyline)
 and `onInstruction` (sends each live turn). `RouteSources` is build-variant
 selected — `src/nomapbox` returns null, `src/mapbox` returns the real thing —
-so a default build has no source, not no caller. What is outstanding is an
-account with two tokens, and nothing else.
+so a default build has no source, not no caller.
+
+**The SDK build works, as of 2026-09-19.** `-PwithMapbox=true assembleDebug`
+resolves the SDK and produces a 51.6MB arm64-only APK carrying
+`libnavigator-android.so`, `libmapbox-common.so` and `libmapbox-maps.so`,
+against 3.3MB for a default build; the unit tests pass on that variant. The
+secret `sk.` download token is in the macOS keychain under the service
+`mapbox-downloads-token`.
+
+⚠️ **Feed that token in through the environment, not `~/.gradle`.** The
+comment in `settings.gradle.kts` says to put `MAPBOX_DOWNLOADS_TOKEN` in
+`~/.gradle/gradle.properties`, and that is right for a normal checkout and
+wrong here: builds in this project override `GRADLE_USER_HOME` to a scratchpad
+toolchain, and Gradle then never reads `~/.gradle` at all. Use
+`ORG_GRADLE_PROJECT_MAPBOX_DOWNLOADS_TOKEN`, which maps to the same project
+property regardless of where `GRADLE_USER_HOME` points.
+
+What is outstanding is the **public `pk.` token**, which is not a build input
+at all — it is typed into the app on the phone and kept in its private
+preferences (`MapboxToken.kt`). Until one is entered the SDK is linked in and
+plans nothing.
