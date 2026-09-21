@@ -53,16 +53,24 @@ const double ROAD_MAX_MPP[ROAD_CLASS_COUNT] = {
 // constant did not become wrong on its own -- it was invalidated one file
 // away, by a change that never touched it.
 //
-// 900 is chosen to restore roughly the ~70ms ceiling 1400 was picked to
-// enforce, and it is deliberately approximate: per-segment cost swings about
-// threefold with zoom, since decimation leaves one long screen-crossing line
-// per way close in and many short ones when dense. No single count is a tight
-// bound at every scale, so this is a backstop against a pathological frame
-// rather than a budget meant to be spent.
+// 900 is a BACKSTOP, and measurement says it is nothing more. Three views on
+// the panel: 532 segments at 165us each (88ms, close in), 460 at 89us (41ms,
+// 1.9km across), both far under this cap. Nothing observed comes near it.
 //
-// Note it does not bind in the view that was measured -- 532 is well under
-// either number -- so this costs nothing in ordinary use and bites only in
-// the dense frames that are already the slowest.
+// It was set expecting count x cost to multiply freely, and they do not --
+// the two are anti-correlated, which is the useful thing learnt here. Long
+// expensive segments only occur zoomed IN, where decimation leaves one
+// screen-crossing line per way and few ways are in view; high segment counts
+// only occur zoomed OUT, where every segment is short. The product is
+// self-limiting, so frame cost is really bounded by ink -- screen area times
+// overdraw -- which is why views as different as those two land in the same
+// 41-88ms band.
+//
+// Do not read a frame-time ceiling off this number, then. If a frame ever
+// does get slow, the thing to measure is coverage, not count; and density is
+// a property of WHERE the rider is, not of the zoom -- the 1.9km view above
+// is river valley and parkland and holds half the ways of a town centre at
+// a quarter the scale.
 constexpr uint32_t ROAD_MAX_SEGMENTS = 900;
 
 // And a share per class, because the ceiling alone starves the wrong ones.
