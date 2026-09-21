@@ -91,7 +91,20 @@ uint8_t RideStats_MaxBpm() { return g_sim.max_bpm; }
 float RideStats_AscentM() { return g_sim.ascent_m; }
 double RideStats_MovingSeconds() { return g_sim.moving_seconds; }
 uint32_t RideLog_PointCount() { return g_sim.log_points; }
-const char *RideLog_FileName() { return g_sim.log_file; }
+// Copy-out, matching the real one since it started taking RideLog's lock --
+// the firmware stopped handing out a pointer the writer task mutates under
+// the reader. Nothing here is threaded, so this is only about the signature.
+bool RideLog_FileName(char *out, size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return false;
+    }
+    if (g_sim.log_file == nullptr || g_sim.log_file[0] == '\0') {
+        out[0] = '\0';
+        return false;
+    }
+    snprintf(out, out_size, "%s", g_sim.log_file);
+    return true;
+}
 bool RideLog_IsRecording() { return g_sim.recording; }
 float RideStats_DescentM() { return 1890.0f; }
 void RideStats_Init() {}
