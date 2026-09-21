@@ -533,17 +533,19 @@ int main(int argc, char **argv) {
         snprintf(path, sizeof(path), "%s/06c-trip-idle-green.ppm", out_dir);
         Render(&page, path);
 
-        // Red: moving, and not one metre of it is being kept. The state the
-        // whole cell exists for.
+        // Amber: moving, and not one metre of it is being kept. The state the
+        // whole cell exists for -- and, since the colours were swapped, the
+        // quieter of the two fills. Rendered so that is a decision someone
+        // looked at rather than one that happened.
         g_sim.gps.speed = 24.0f / 3.6f;
         Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
-        snprintf(path, sizeof(path), "%s/06d-trip-moving-unrecorded-red.ppm", out_dir);
+        snprintf(path, sizeof(path), "%s/06d-trip-moving-unrecorded-amber.ppm", out_dir);
         Render(&page, path);
 
-        // Amber: writing. Put back so later scenes see what they expect.
+        // Red: writing. Put back so later scenes see what they expect.
         g_sim.recording = true;
         Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
-        snprintf(path, sizeof(path), "%s/06e-trip-recording-amber.ppm", out_dir);
+        snprintf(path, sizeof(path), "%s/06e-trip-recording-red.ppm", out_dir);
         Render(&page, path);
     }
 

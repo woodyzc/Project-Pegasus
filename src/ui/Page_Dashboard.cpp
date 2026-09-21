@@ -205,23 +205,26 @@ lv_obj_t *s_trip_label = nullptr;
 // so the odometer climbs, the speed moves and the averages fill in exactly as
 // they would on a recorded ride. Two hours later the card is empty.
 //
-// So the TRIP cell is filled when, and only when, nothing is being written --
-// amber stopped, red while moving. Recording is the state a rider is in for
-// hours, and a block of colour held for hours stops being seen; worse, it
-// spends the panel's one loud gesture on the situation that is fine. So a
-// recording ride looks exactly like every other cell, and the colour means
-// "something is wrong" rather than "here is the recording state".
+// So the TRIP cell is always filled, and which colour it is filled with is the
+// answer: red recording, amber riding with nothing kept, green idle. See
+// PaintTripCell for why red is the recording state rather than the alarm.
 //
-// No word is added either way: a 10px "OFF" beside a 28pt figure is the first
-// thing lost to a glance at speed, in sunlight or on a rough road, whereas a
-// filled block a quarter of the screen wide is read from outside the point of
-// focus.
+// It used to be filled only in the bad states and left plain while recording,
+// on the argument that a colour held for hours stops being seen. That was
+// abandoned because it could not answer "is it running?" without the rider
+// first deciding whether a plain cell meant recording or meant they had
+// misread it -- and this is read in a fifth of a second, if at all.
 //
-// The fill decides the text colour with it. Amber and red are both light, so
-// the only thing legible on both is dark, and COLOR_BG -- the colour the
-// rider already reads the panel against -- inverts cleanly rather than needing
-// a fourth colour invented for it. That inversion is undone on the way back:
-// see RenderRecordingState.
+// No word is added in any state: a 10px "OFF" beside a 28pt figure is the
+// first thing lost to a glance at speed, in sunlight or on a rough road,
+// whereas a filled block a quarter of the screen wide is read from outside the
+// point of focus.
+//
+// The fill decides the text colour with it. All three are light, so the only
+// thing legible on any of them is dark, and COLOR_BG -- the colour the rider
+// already reads the panel against -- inverts cleanly rather than needing a
+// fourth colour invented for it. The cell is permanently inverted, which is
+// what removed the state that used to strand it dark-on-dark.
 lv_obj_t *s_trip_caption = nullptr;
 lv_obj_t *s_trip_cell = nullptr;
 
@@ -941,24 +944,31 @@ void PaintTripCell(lv_obj_t *cell, lv_obj_t *caption, lv_obj_t *value, lv_obj_t 
         return;
     }
 
-    // ---- Three states, three fills, read as a traffic light ----
+    // ---- Three states, three fills ----
+    // Red:   writing. The record light, in the colour every camera uses.
+    // Amber: moving, and not one metre of it is being kept.
     // Green: nothing is being written and nothing needs to be.
-    // Amber: writing.
-    // Red:   moving, and not one metre of it is being kept.
     //
-    // The cell used to be left unfilled while recording, on the argument that
-    // a colour held for hours stops being seen and that the panel's one loud
-    // gesture should be spent on the state that is wrong. That is still true
-    // of red, which is why red is the only one that means act now. What the
-    // old scheme could not do was answer "is it running?" at a glance without
-    // the rider first deciding whether an unfilled cell meant recording or
-    // meant a cell they had misread -- and an owner who rides with this every
-    // day asked for the positive confirmation instead.
+    // Red and amber were the other way round until the owner asked for this,
+    // and the swap is worth understanding rather than just reading off.
+    //
+    // The old scheme assigned colour by severity: red was the one state that
+    // demands action -- riding with nothing recorded -- and recording was
+    // amber because it is merely a state, not a problem. This scheme assigns
+    // it by convention instead. A red dot means REC to everyone who has ever
+    // held a camera, and a head unit is read in a fifth of a second at
+    // twenty-five km/h, where a learned convention beats a reasoned one.
+    //
+    // What it costs: the alert for "you are riding and nothing is being kept"
+    // is now amber rather than red, which is the quieter of the two. That
+    // state is exactly what manual arming exists to catch, and it is the only
+    // one here that loses a whole ride. If it is ever missed on the road, this
+    // is the line to come back to.
     uint32_t bg;
     if (recording) {
-        bg = COLOR_WARN;
+        bg = COLOR_DANGER;
     } else {
-        bg = moving ? COLOR_DANGER : COLOR_OK;
+        bg = moving ? COLOR_WARN : COLOR_OK;
     }
     // Every fill is light, so the ink is dark in all three. The cell is
     // permanently inverted now rather than only sometimes, which removes the
@@ -2141,7 +2151,13 @@ void PageDashboard::onViewLoad() {
     // both ASCENT and INCLINE, and this board has no IMU to produce a grade
     // with anyway.
     lv_obj_t *cadence_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "CADENCE");
-    s_cadence_label = MakeValueIn(cadence_cell, "--", COLOR_VALUE, &lv_font_montserrat_32);
+    // 40pt, the same as SPEED and HEART RATE, rather than the 32 TRIP takes
+    // beside it. TRIP is at 32 because "188.4" is five glyphs; cadence is
+    // three at most -- the tracker rejects anything past 250 -- and "250" at
+    // 40pt measures 72.6px against the 80 this cell has inside its padding.
+    // Being a step smaller than its neighbours for no reason was the only
+    // thing keeping it there.
+    s_cadence_label = MakeValueIn(cadence_cell, "--", COLOR_VALUE, &lv_font_montserrat_40);
     MakeUnit(cadence_cell, "rpm");
     lv_obj_set_style_bg_color(cadence_cell, lv_color_hex(COLOR_CELL_CADENCE), 0);
     // Dark ink, and it stays dark: nothing recolours this figure per update,

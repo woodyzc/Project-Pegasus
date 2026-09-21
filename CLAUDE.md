@@ -323,16 +323,33 @@ These were each discovered the slow way. They are not optional trivia.
   device sat on a desk.
 
   SPEED is deliberately **not** gated: it is a live sensor reading, not a ride
-  statistic, and a rider pushing the bike wants to see it move. The TRIP cell is the defence: it is *filled* when, and only
-  when, nothing is being written — amber stopped, red while moving — and looks
-  like any other cell while recording. Filling the good state too was tried
-  and dropped: a rider is recording for hours, and a block of colour held for
-  hours stops being seen, besides spending the panel's one loud gesture on the
-  situation that is fine. No word is added either way — a 10px "OFF" beside a
-  28pt figure is the first thing lost to a glance at speed, in sunlight, on a
-  rough road, whereas a filled block a quarter of the screen wide is read from
-  outside the point of focus. While filled, its text is `COLOR_BG`: amber and
-  red are both light, so only dark is legible on both, which makes this the
+  statistic, and a rider pushing the bike wants to see it move. The TRIP cell
+  is the defence, and it is *always* filled — the colour is the answer:
+
+  | | |
+  |---|---|
+  | **red** | recording. The record light, in the colour every camera uses. |
+  | **amber** | moving, and not one metre of it is being kept. |
+  | **green** | nothing is being written and nothing needs to be. |
+
+  Red and amber were the other way round until 2026-09-20, when the owner
+  asked to swap them. The old scheme assigned colour by severity — red for the
+  one state that demands action — and this one assigns it by convention, on
+  the argument that a red dot means REC to anyone who has held a camera and
+  that a panel read in a fifth of a second is better served by a learned cue
+  than a reasoned one. **What it costs is that the alert for "riding and
+  recording nothing" is now the quieter of the two colours**, and that is the
+  only state here that loses a whole ride. If it is ever missed on the road,
+  that is the trade to revisit.
+
+  Leaving the good state unfilled was tried before either scheme and dropped:
+  it could not answer "is it running?" without the rider first deciding
+  whether a plain cell meant recording or meant they had misread it. No word
+  is added in any state — a 10px "OFF" beside a 28pt figure is the first thing
+  lost to a glance at speed, in sunlight, on a rough road, whereas a filled
+  block a quarter of the screen wide is read from outside the point of focus.
+  Its text is always `COLOR_BG`: all three fills are light, so only dark is
+  legible on any of them, which makes this the
   one place on the panel that inverts — and every colour has to be put back
   explicitly on the way out, or the cell stays inverted for the rest of the
   boot. Do not quietly demote it.
