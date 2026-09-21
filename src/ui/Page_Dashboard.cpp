@@ -245,7 +245,17 @@ lv_obj_t *s_clock_caption = nullptr;
 
 // Applying a TZ string calls tzset(), which is not free, so only redo it when
 // the zone actually changes -- which is almost never on a bike.
-const char *s_active_tz = nullptr;
+// A copy of the POSIX TZ string currently in the environment, not a pointer
+// to it.
+//
+// It was a pointer, and TimeZone_PosixFor returns a shared static buffer on
+// its fallback path -- so once the rider was anywhere the zone table does not
+// cover, s_active_tz aimed at that buffer and strcmp compared it with itself.
+// Always equal, so setenv() was never called again and the clock froze on
+// whatever solar offset it had when it first fell back, across every
+// whole-hour meridian after it.
+char s_active_tz[40] = "";
+bool s_active_tz_set = false;
 lv_obj_t *s_hr_label = nullptr;
 // Crank cadence. Live only -- there is no ride average for it anywhere, so
 // this label and the second page's are the same number, copied.
@@ -1206,10 +1216,11 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 bool approximate = false;
                 const char *tz = TimeZone_PosixFor(gps.lat, gps.lon, &approximate);
 
-                if (s_active_tz == nullptr || strcmp(s_active_tz, tz) != 0) {
+                if (!s_active_tz_set || strcmp(s_active_tz, tz) != 0) {
                     setenv("TZ", tz, 1);
                     tzset();
-                    s_active_tz = tz;
+                    snprintf(s_active_tz, sizeof(s_active_tz), "%s", tz);
+                    s_active_tz_set = true;
                 }
 
                 const time_t epoch = (time_t)TimeZone_UtcToEpoch(
@@ -2412,7 +2423,8 @@ void PageDashboard::onViewUnload() {
     s_trip_cell = nullptr;
     s_clock_label = nullptr;
     s_clock_caption = nullptr;
-    s_active_tz = nullptr;
+    s_active_tz[0] = '\0';
+    s_active_tz_set = false;
     s_cadence_label = nullptr;
     s_hr_label = nullptr;
     s_speed_avg_label = nullptr;

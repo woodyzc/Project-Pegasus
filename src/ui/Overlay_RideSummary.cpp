@@ -83,10 +83,7 @@ void RideSummary_Capture(RideSummary_t *out) {
     out->ascent_m = RideStats_AscentM();
     out->points = RideLog_PointCount();
 
-    const char *name = RideLog_FileName();
-    if (name != nullptr) {
-        snprintf(out->file, sizeof(out->file), "%s", name);
-    }
+    RideLog_FileName(out->file, sizeof(out->file));
 }
 
 void Overlay_RideSummary_Show(const RideSummary_t *summary, bool ended) {

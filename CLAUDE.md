@@ -154,9 +154,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - The NVS bring-up watchdog in `Settings_Init()` used to force the mode to
     GPX, which worked only because GPX happened to start no radio. That
     coincidence silently cost the whole position feature the moment it was
-    built. It now raises `Settings_RadiosHeldOff()` instead — one boot with no
-    GATT server and no advertisement, which is where every hang in §8 actually
-    lived — and leaves the navigation mode alone. **"What navigation do I show"
+    built. It now raises `Settings_RadiosHeldOff()` instead — one boot with **no
+    radio at all**, which is where every hang in §8 actually lived — and leaves
+    the navigation mode alone. It held off only the GATT server until
+    2026-09-20, which made it useless against the likelier hang: `BLE_HR_Start()`
+    runs a synchronous 15s scan on the same stack, so a held-off boot hung too,
+    and since the counter is cleared when the hold fires the board settled into
+    a permanent three-boot cycle — hang, hang, hang-with-the-server-off — while
+    the settings page promised a restart would try again. **"What navigation do I show"
     and "do I touch the radio" are separate questions; do not re-merge them.**
 
 ## 4. Software Architecture & FreeRTOS Core Rules
@@ -222,6 +227,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - **Snap to the polyline and measure ALONG it.** Nearest-maneuver-in-a-
     straight-line fails on an out-and-back, where the rider is metres from a
     turn they will not reach for an hour. `test_route_parse.c` has that case.
+  - **And snapping alone does not finish that job.** On a there-and-back the
+    two legs are the same points in the same order, so both segments snap with
+    the same cross-track and the global minimum settles it on segment index —
+    always the outbound one. The rider is shown the outbound leg's next turn
+    for the whole way home, and it never self-corrects because every fix
+    re-decides it identically. `RouteFollow_SnapFrom` breaks the tie with where
+    the rider already was, and that hint is **bounded**
+    (`ROUTE_SNAP_HINT_BUDGET_M`) so a fix that genuinely belongs elsewhere
+    still re-acquires immediately — the bound is what keeps the recovery a
+    global search gives for free. Note that a single-fix test cannot catch the
+    mistake this went through: making forward movement free is silently
+    useless, because the return leg's candidate is *always* ahead of the hint.
+    Only a test that walks a whole ride through the turnaround, feeding each
+    answer back as the next hint, shows it.
   - **The onboard path needs the same 10s keepalive the phone path has.**
     `Page_Dashboard` drops a turn it has not heard about for 30s, so publishing
     only on change blanks the panel for a rider stopped at a light -- which is
@@ -531,7 +550,11 @@ Three constraints shape it, and none are negotiable:
 - **It is the only reader of the card while it runs.** `SD_MMC` is not
   thread-safe, and the card is otherwise read by the LVGL task and written by
   the ride-log task. Hence the modal on `lv_layer_top()` rather than a page
-  (nowhere to navigate to), and the refusal to start while recording.
+  (nowhere to navigate to), and the refusal to start while a ride is **armed**
+  — not merely while it is recording. A ride is armed from "Start new ride" and
+  opens its file on the first valid fix, which can be a kitchen and half an
+  hour apart; gating on recording let the server start in the gap and the
+  writer open the card underneath it.
 - **`src/system/FilePath.c` is the security boundary and is host-tested.**
   Three directories, no nesting, no traversal, no dotfiles, and only `.gpx` at
   the card root — the root is the owner's own folder, not a share. It is the

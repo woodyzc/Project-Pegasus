@@ -42,7 +42,15 @@ void RideLog_Init();
 bool RideLog_IsRecording();
 
 // Name of the file being written, or "" before the first point.
-const char *RideLog_FileName();
+// Copies the current ride's file name into `out`, NUL-terminated, and returns
+// true when there is one. `out` is left empty and false returned otherwise.
+//
+// A copy rather than the pointer this used to hand out. s_name is written a
+// field at a time by the writer task on Core 0 while the settings page and the
+// ride summary read it from Core 1, so a caller holding the raw pointer could
+// format a name that was half the old ride and half the new one. Taking the
+// same lock the odometer uses makes the read atomic with respect to the write.
+bool RideLog_FileName(char *out, size_t out_size);
 
 // Ends the ride being recorded, so the next fix opens a new file.
 //

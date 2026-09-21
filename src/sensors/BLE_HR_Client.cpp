@@ -54,11 +54,15 @@ constexpr uint32_t kShutdownDisconnectMs = 1500;
 // tearing the stack down anyway.
 //
 // The task normally sits in vTaskDelay and parks within a tick, so this is
-// almost never spent. It is sized for the case it exists to survive: the task
-// inside a connect attempt, which can hold it for kConnectTimeoutMs. Waiting
-// the full 5s would make the Restart button feel broken, so this stops short
-// and proceeds -- which is no worse than the behaviour it replaces, where the
-// stack was torn down under the task every single time.
+// almost never spent. The two things that used to hold it longer -- a scan in
+// getResults() and a connect() that can run for kConnectTimeoutMs -- are both
+// actively cancelled by BLE_HR_Shutdown() before this wait begins, so it is
+// now a safety net rather than a deadline anything is expected to reach.
+//
+// It still stops short of kConnectTimeoutMs on purpose: if a park ever does
+// time out, proceeding is no worse than the behaviour this replaced, where the
+// stack was torn down under the task every single time, and the settings page
+// reports the timeout rather than hiding it.
 constexpr uint32_t kShutdownParkMs = 2500;
 
 // Direct connects to the stored address to tolerate before throwing the
@@ -489,6 +493,22 @@ void ParkSupervisor() {
     NimBLEScan *scan = NimBLEDevice::getScan();
     if (scan != nullptr) {
         scan->stop();
+    }
+
+    // And a connect in progress blocks it for up to kConnectTimeoutMs, which
+    // is twice the park deadline below -- so the one case the deadline was
+    // sized for was also the one case it could not wait out. Tearing the stack
+    // down while the task is inside connect() is a use-after-free that leaves
+    // no other trace.
+    //
+    // Cancelling is the answer rather than waiting longer: lengthening the
+    // deadline to 5s+ would make Restart feel broken on every press to fix a
+    // case that only happens when a peer is mid-handshake. The task rechecks
+    // s_shutdown_requested at the top of its loop, so an aborted connect parks
+    // it on the very next pass. Safe when no connect is in flight -- it
+    // answers false and changes nothing.
+    if (s_client != nullptr) {
+        s_client->cancelConnect();
     }
 
     const uint32_t started = millis();

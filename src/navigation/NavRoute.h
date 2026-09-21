@@ -16,6 +16,10 @@
 // is written from a NimBLE callback on one core and read by the UI on another,
 // and it decides which of two navigation sources the rider is actually shown.
 //
+// That cross-core sharing is guarded by a recursive mutex inside the .cpp,
+// including the lock order against DataCenter's. Every accessor here takes it,
+// which is why none of them hands back a pointer into the store.
+//
 // ---------------------------------------------------------------------------
 // WHICH SOURCE WINS
 // ---------------------------------------------------------------------------
@@ -71,10 +75,15 @@ bool NavRoute_IsLoaded();
 // when no transfer has started.
 void NavRoute_Progress(uint16_t *out_received, uint16_t *out_total);
 
-// The assembled route, or false when none is loaded. The blob belongs to this
-// module and stays valid until the next NavRoute_Clear() or a new transfer.
+// The assembled route's manifest, or false when none is loaded. A copy: the
+// blob itself is deliberately not exposed.
+//
+// It used to be, as NavRoute_Blob(), and nothing outside this file ever called
+// it. A raw pointer into the store is exactly what cannot be handed out now
+// that the store is locked -- the caller would hold it after the lock was
+// released, which is the free-under-a-reader this module was just fixed for.
+// Anything needing the geometry belongs in here, under the lock, beside Tick.
 bool NavRoute_Manifest(RouteManifest_t *out);
-const uint8_t *NavRoute_Blob();
 
 // Route length in metres, from the cumulative table rather than the manifest,
 // so it is the length we will actually navigate against.

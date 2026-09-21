@@ -176,7 +176,20 @@ bool GpxTrack_Load(const char *path) {
         return false;
     }
 
-    TrackBuffer_Init(&s_track, s_lat_store, s_lon_store, GPX_MAX_POINTS);
+    // NOT reset here, which is where it used to be.
+    //
+    // The old track was wiped the moment a file was opened, so picking the
+    // wrong file -- or a .gpx with no trackpoints in it, which is what a
+    // waypoint or route export is -- destroyed the route the rider was
+    // following and returned false, leaving them with nothing. The parse
+    // commits on its first valid point instead (see below), so a file that
+    // yields none leaves the loaded track exactly as it was.
+    //
+    // Deliberately not a two-pass count-then-load: this runs from the picker's
+    // event callback with the UI frozen behind it, and reading a multi-megabyte
+    // card file twice to answer a question the first byte of the first point
+    // already answers is the wrong trade.
+    bool committed = false;
 
     GpxParser_t parser;
     Gpx_Init(&parser);
@@ -201,13 +214,28 @@ bool GpxTrack_Load(const char *path) {
             double lat;
             double lon;
             if (Gpx_Feed(&parser, (char)chunk[i], &lat, &lon)) {
+                if (!committed) {
+                    TrackBuffer_Init(&s_track, s_lat_store, s_lon_store, GPX_MAX_POINTS);
+                    committed = true;
+                }
                 TrackBuffer_Add(&s_track, lat, lon);
             }
         }
     }
+    // A read that stopped early is not the same as a file that ended, and both
+    // leave the loop the same way. Without this, a card losing contact
+    // mid-file returns a silently truncated track as a successful load -- a
+    // route that simply stops in the middle of nowhere, with nothing on screen
+    // to say it was cut short rather than planned that way.
+    const bool short_read = (size_t)file.position() < (size_t)file.size();
     file.close();
 
-    if (s_track.count == 0) {
+    if (!committed || s_track.count == 0) {
+        // The loaded track, if there was one, is still intact and still named.
+        return false;
+    }
+    if (short_read) {
+        TrackBuffer_Init(&s_track, s_lat_store, s_lon_store, GPX_MAX_POINTS);
         s_loaded_name[0] = '\0';
         return false;
     }

@@ -9,6 +9,7 @@
 #include <freertos/task.h>
 
 #include "../system/DataCenter.h"
+#include "../system/FileServer.h"
 #include "../system/TripAccum.h"
 #include "GpxTrack.h"
 #include "GpxWrite.h"
@@ -176,7 +177,45 @@ volatile bool s_shutdown_done = false;
 uint32_t s_auto_end_count = 0;
 // Set once the card has refused us, so the ride is not spent retrying.
 bool s_failed = false;
+// The open ride's path, written by the writer task on Core 0 and read by the
+// UI on Core 1 -- the settings page redraws it once a second and the ride
+// summary formats it when a ride ends.
+//
+// Guarded, because it is written a field at a time by snprintf inside
+// ChooseFileName and cleared a byte at a time on every failure path. A reader
+// used to be handed the buffer itself and could format a name that was half
+// one ride and half the next. Same pattern as Trip's odometer lock, and for
+// the same reason: a cross-core read of something that is not written
+// atomically.
 char s_name[48] = "";
+SemaphoreHandle_t s_name_lock = nullptr;
+
+struct NameLock {
+    NameLock() {
+        if (s_name_lock != nullptr) {
+            xSemaphoreTake(s_name_lock, portMAX_DELAY);
+        }
+    }
+    ~NameLock() {
+        if (s_name_lock != nullptr) {
+            xSemaphoreGive(s_name_lock);
+        }
+    }
+    NameLock(const NameLock &) = delete;
+    NameLock &operator=(const NameLock &) = delete;
+};
+
+// Every write to s_name goes through one of these two.
+void SetName(const char *name) {
+    NameLock lock;
+    snprintf(s_name, sizeof(s_name), "%s", name != nullptr ? name : "");
+}
+
+void ClearName() {
+    NameLock lock;
+    s_name[0] = '\0';
+}
+
 volatile uint32_t s_points = 0;
 
 // Files thrown away for holding fewer than MIN_KEPT_POINTS. On the panel,
@@ -268,14 +307,18 @@ bool OpenFile(const RideLogPoint_t &first, const char *track_name) {
     // result is deliberately ignored; the open below is the real test.
     SD_MMC.mkdir("/rides");
 
-    if (!ChooseFileName(first, s_name, sizeof(s_name))) {
-        s_name[0] = '\0';
+    // Chosen into a local first: ChooseFileName fills its buffer in pieces, and
+    // s_name is read from the other core at any moment.
+    char chosen[sizeof(s_name)];
+    if (!ChooseFileName(first, chosen, sizeof(chosen))) {
+        ClearName();
         return false;
     }
+    SetName(chosen);
 
-    s_file = SD_MMC.open(s_name, FILE_WRITE);
+    s_file = SD_MMC.open(chosen, FILE_WRITE);
     if (!s_file) {
-        s_name[0] = '\0';
+        ClearName();
         return false;
     }
 
@@ -283,7 +326,7 @@ bool OpenFile(const RideLogPoint_t &first, const char *track_name) {
     const size_t len = GpxWrite_Header(header, sizeof(header), track_name);
     if (len == 0 || s_file.write((const uint8_t *)header, len) != len) {
         s_file.close();
-        s_name[0] = '\0';
+        ClearName();
         return false;
     }
 
@@ -294,7 +337,7 @@ bool OpenFile(const RideLogPoint_t &first, const char *track_name) {
     // arrives, the card holds a valid, empty GPX rather than a stub.
     if (!WriteFooter()) {
         s_file.close();
-        s_name[0] = '\0';
+        ClearName();
         return false;
     }
     s_file.flush();
@@ -344,8 +387,8 @@ void CloseRide() {
     char doomed[sizeof(s_name)];
     doomed[0] = '\0';
     if (too_short) {
-        strncpy(doomed, s_name, sizeof(doomed) - 1);
-        doomed[sizeof(doomed) - 1] = '\0';
+        NameLock lock;
+        snprintf(doomed, sizeof(doomed), "%s", s_name);
     }
 
     if (s_file) {
@@ -362,7 +405,7 @@ void CloseRide() {
     }
 
     s_recording = false;
-    s_name[0] = '\0';
+    ClearName();
     s_points = 0;
     s_body_end = 0;
     s_has_last = false;
@@ -438,7 +481,15 @@ void WriterTask(void *pv) {
                 }
             }
 
-            if (!s_failed && s_armed && !s_recording) {
+            if (!s_failed && s_armed && !s_recording && !FileServer_IsRunning()) {
+                // The second half of the interlock in FileServer_Start(),
+                // which refuses to start while a ride is armed. This side
+                // costs one bool and closes the window where both decisions
+                // are taken at once -- the point is that neither task ever
+                // opens the card believing it is alone when it is not.
+                //
+                // Skipped rather than failed: the transfer ends in a restart,
+                // and until then there is nothing useful to write to.
                 if (!OpenFile(point, "Pegasus ride")) {
                     // Giving up for this power-on rather than retrying. A card
                     // that would not take the file is a steady state, not a
@@ -604,6 +655,13 @@ Account s_hr_account("RideLog/HR", OnHeartRatePublished);
 } // namespace
 
 void RideLog_Init() {
+    // Before the early return: the accessors are reachable from the UI whether
+    // or not a card was mounted, and a null lock would leave them unguarded on
+    // exactly the boots where the settings page is most likely to be open.
+    if (s_name_lock == nullptr) {
+        s_name_lock = xSemaphoreCreateMutex();
+    }
+
     // No card, no logging, and no task or subscription either. Hot-plug is not
     // supported anywhere in this firmware -- GpxTrack mounts once at boot --
     // so a card absent now will be absent for the whole ride.
@@ -742,8 +800,13 @@ const char *RideLog_NotRecordingReason() {
     return nullptr; // armed, card fine, genuinely waiting for a first fix
 }
 
-const char *RideLog_FileName() {
-    return s_name;
+bool RideLog_FileName(char *out, size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return false;
+    }
+    NameLock lock;
+    snprintf(out, out_size, "%s", s_name);
+    return out[0] != '\0';
 }
 
 uint32_t RideLog_PointCount() {

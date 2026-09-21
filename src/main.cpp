@@ -251,18 +251,33 @@ void setup() {
     // so without one it draws nothing at all.
     //
     // Held off only when the watchdog says the last two boots hung here.
+    // Held off only when the watchdog says the last two boots hung here, and
+    // it now covers EVERY radio rather than the GATT server alone.
+    //
+    // It used to skip BLE_TBT_Start() and run the heart-rate client anyway,
+    // which made the escape hatch useless against most of what it guards. A
+    // hang inside BLE_HR_Start() -- a synchronous fifteen-second scan on the
+    // same NimBLE stack, and the half of bring-up with the longer history of
+    // wedging (see CLAUDE.md section 8) -- hung the held-off boot too. The
+    // counter is cleared when the hold fires, so the board settled into a
+    // three-boot cycle of hang, hang, hang-with-the-server-off, for ever,
+    // while the settings page told the rider a restart would try again.
+    //
+    // A boot that is held off starts no radio at all. That is the point of it:
+    // it is the one state in which the rider can reliably reach the settings
+    // page and change the thing that is wedging.
     const bool radios_ok = !Settings_RadiosHeldOff();
     if (radios_ok) {
         BLE_TBT_Start();
+
+        BLE_HR_Start();
+
+        // After the heart rate, and it only starts a task -- no synchronous
+        // scan. Its first discovery therefore happens once setup() is already
+        // past the blocking part, and it waits on the same gate rather than
+        // racing for the radio.
+        BLE_CSC_Start();
     }
-
-    BLE_HR_Start();
-
-    // After the heart rate, and it only starts a task -- no synchronous scan.
-    // Its first discovery therefore happens once setup() is already past the
-    // blocking part, and it waits on the same gate rather than racing for the
-    // radio.
-    BLE_CSC_Start();
 
     // Advertising goes last, and the split from BLE_TBT_Start() is the point.
     // Registration had to come before any connection existed; advertising has

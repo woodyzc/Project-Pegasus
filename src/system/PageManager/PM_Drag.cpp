@@ -194,8 +194,27 @@ void PageManager::RootEnableDrag(lv_obj_t* root)
 void PageManager::onRootAsyncLeave(void* data)
 {
     PageBase* base = (PageBase*)data;
-    PM_LOG_INFO("Page(%s) send event: LV_EVENT_LEAVE, need to handle...", base->_Name);
+
+    /* Upstream X-TRACK stops here and expects each page to install its own
+     * LV_EVENT_LEAVE handler that calls Pop(). No page in this firmware ever
+     * did, and nothing anywhere else in the tree handles that event either, so
+     * a drag past the halfway point simply ended: the page stayed current,
+     * stayed on top, and stayed drawn at whatever offset the finger left it
+     * at, with no gesture or button able to bring it back. A soft lock, and
+     * reachable from every page -- main.cpp sets LOAD_ANIM_OVER_LEFT globally,
+     * which is an "over" animation with a horizontal drag direction, so
+     * PM_State enables the drag on anything pushed over a cached page.
+     *
+     * The event is still sent first, and sent before the Pop so a page can see
+     * it while it is still loaded. Popping here rather than in each page keeps
+     * the gesture working for pages that have no reason to know about it. */
+    PM_LOG_INFO("Page(%s) send event: LV_EVENT_LEAVE", base->_Name);
     lv_event_send(base->_root, LV_EVENT_LEAVE, base);
+
+    if (base->_Manager != nullptr)
+    {
+        base->_Manager->Pop();
+    }
 }
 
 /**

@@ -165,6 +165,12 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     }
 
     MapView_SetPosition(&s_view, &gps);
+    // The no-fix branch above refreshes too, and this one used to rely on
+    // Page_Dashboard's 100ms timer -- still alive underneath this page -- to
+    // do it as a side effect. That is not a dependency worth keeping: it lives
+    // in another file, it is invisible from here, and it would take the roads
+    // away the moment the dashboard stopped being the page below.
+    RoadView_Refresh();
     lv_label_set_text_fmt(s_status_label, "%d sats", (int)gps.num_sv);
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_ACCENT), 0);
     UpdateScale();

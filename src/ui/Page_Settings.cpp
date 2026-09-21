@@ -387,11 +387,11 @@ void RefreshNavSelection() {
     if (Settings_RadiosHeldOff()) {
         // No longer a note about the mode. The watchdog stopped moving that
         // setting when position stopped being tied to it -- what it holds off
-        // now is the GATT server, which is both the thing that hung and the
-        // thing the phone writes a position into.
+        // now is every radio: the GATT server the phone writes a position
+        // into, the heart-rate client, and cadence.
         lv_label_set_text(s_nav_note, "Radios held off this boot: the previous two did not "
-                                      "finish starting. No phone link, and no position from "
-                                      "it either. Restart to try again.");
+                                      "finish starting. No phone link, no position from it, "
+                                      "no heart rate and no cadence. Restart to try again.");
         lv_obj_set_style_text_color(s_nav_note, lv_color_hex(COLOR_DANGER), 0);
     } else if (!Settings_NavModeIsImplemented(current)) {
         // Say so rather than let the rider discover an empty ROUTE panel on
@@ -653,7 +653,9 @@ void InfoTimerCallback(lv_timer_t *timer) {
 
     if (s_ridelog_value != nullptr) {
         if (RideLog_IsRecording()) {
-            lv_label_set_text_fmt(s_ridelog_value, "Ride log: %s (%u pts)", RideLog_FileName(),
+            char name[48];
+            RideLog_FileName(name, sizeof(name));
+            lv_label_set_text_fmt(s_ridelog_value, "Ride log: %s (%u pts)", name,
                                   (unsigned)RideLog_PointCount());
         } else if (!RideLog_IsArmed()) {
             // Disarmed is not "waiting for fix", and conflating them is how a
@@ -1334,8 +1336,9 @@ void PageSettings::onViewLoad() {
     if (!GpxTrack_CardMounted()) {
         MakeInfoRow(info_card, "Ride log", "no SD card");
     } else if (RideLog_IsRecording()) {
-        snprintf(buf, sizeof(buf), "%s (%u pts)", RideLog_FileName(),
-                 (unsigned)RideLog_PointCount());
+        char name[48];
+        RideLog_FileName(name, sizeof(name));
+        snprintf(buf, sizeof(buf), "%s (%u pts)", name, (unsigned)RideLog_PointCount());
         s_ridelog_value = MakeInfoRow(info_card, "Ride log", buf);
     } else {
         s_ridelog_value = MakeInfoRow(info_card, "Ride log", "waiting for fix");

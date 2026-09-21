@@ -2,9 +2,51 @@
 
 #include <Arduino.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <string.h>
 
 namespace {
+
+// Guards the route store against its two tasks.
+//
+// This module is written from NimBLE's host task -- every characteristic
+// callback lands there -- and read from the Core 1 task that pumps
+// NavRoute_Tick(). The header has said so since the file was written, and for
+// just as long nothing enforced it: BeginTransfer() calls FreeAll(), which
+// heap_caps_free()s the blob, while Tick() may be part-way through snapping a
+// fix to that exact allocation. It is not a rare interleaving either. The
+// phone re-sends the whole route on a reroute, which is a supported and
+// ordinary thing for it to do mid-ride, and it is precisely when the rider is
+// relying on the display.
+//
+// Recursive because the accessors call each other -- Tick() ends by calling
+// NavRoute_EnrichDirective(), which locks again on the same task.
+//
+// LOCK ORDER: this lock may be taken while DataCenter's is NOT held, never
+// the other way round. OnGpsPublished() below runs inside DataCenter_Publish()
+// with DataCenter's mutex held, so it must not touch this one -- it bumps a
+// volatile counter and nothing else, which is the whole reason that counter
+// exists. Tick() releases this lock before it publishes, for the same reason.
+SemaphoreHandle_t s_lock = nullptr;
+
+// Scoped hold. Safe before NavRoute_Init() has run and safe if the semaphore
+// could not be created: a board that cannot allocate one has worse problems
+// than this race, and failing to navigate would be the wrong answer to it.
+struct RouteLock {
+    RouteLock() {
+        if (s_lock != nullptr) {
+            xSemaphoreTakeRecursive(s_lock, portMAX_DELAY);
+        }
+    }
+    ~RouteLock() {
+        if (s_lock != nullptr) {
+            xSemaphoreGiveRecursive(s_lock);
+        }
+    }
+    RouteLock(const RouteLock &) = delete;
+    RouteLock &operator=(const RouteLock &) = delete;
+};
 
 // The assembled blob and the cumulative distance table both live in PSRAM:
 // a 4,000-point route is 32KB of polyline and another 16KB of table, which is
@@ -176,6 +218,14 @@ void FinishTransfer() {
 } // namespace
 
 void NavRoute_Init() {
+    // Before the subscription, and before anything else can reach the store.
+    // main.cpp calls this well ahead of the radios, so no callback can arrive
+    // first, but the accessors tolerate a null lock anyway rather than
+    // depending on that ordering staying true.
+    if (s_lock == nullptr) {
+        s_lock = xSemaphoreCreateRecursiveMutex();
+    }
+
     // Subscribed even with no route loaded. The subscription is what makes
     // position freshness knowable, and a route can arrive from the phone at
     // any moment afterwards -- subscribing only once one had would leave the
@@ -184,10 +234,13 @@ void NavRoute_Init() {
 }
 
 void NavRoute_Clear() {
+    RouteLock lock;
     FreeAll();
 }
 
 bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
+    RouteLock lock;
+
     uint16_t index = 0;
     const uint8_t *payload = nullptr;
     uint16_t payload_len = 0;
@@ -243,10 +296,12 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
 }
 
 bool NavRoute_IsLoaded() {
+    RouteLock lock;
     return s_loaded;
 }
 
 void NavRoute_Progress(uint16_t *out_received, uint16_t *out_total) {
+    RouteLock lock;
     if (out_received != nullptr) {
         *out_received = s_have_manifest ? s_received_count : 0;
     }
@@ -256,6 +311,7 @@ void NavRoute_Progress(uint16_t *out_received, uint16_t *out_total) {
 }
 
 bool NavRoute_Manifest(RouteManifest_t *out) {
+    RouteLock lock;
     if (out == nullptr || !s_loaded) {
         return false;
     }
@@ -263,15 +319,13 @@ bool NavRoute_Manifest(RouteManifest_t *out) {
     return true;
 }
 
-const uint8_t *NavRoute_Blob() {
-    return s_loaded ? s_blob : nullptr;
-}
-
 uint32_t NavRoute_LengthMetres() {
+    RouteLock lock;
     return s_length_m;
 }
 
 void NavRoute_NoteLiveDirective() {
+    RouteLock lock;
     s_last_live_ms = millis();
     s_ever_live = true;
 }
@@ -281,6 +335,7 @@ void NavRoute_NotePhoneGone() {
     // disconnect is not a gap -- it is the answer the grace period was waiting
     // for. Handing over at once avoids a stretch where the phone is provably
     // gone and the head unit is still deferring to it.
+    RouteLock lock;
     s_ever_live = false;
     // Force the next tick to publish even if the cached route happens to yield
     // the same turn the phone last sent, so the source indicator flips.
@@ -289,6 +344,7 @@ void NavRoute_NotePhoneGone() {
 }
 
 bool NavRoute_LastFix(RouteFix_t *out) {
+    RouteLock lock;
     if (out == nullptr || !s_have_fix) {
         return false;
     }
@@ -297,6 +353,7 @@ bool NavRoute_LastFix(RouteFix_t *out) {
 }
 
 bool NavRoute_EnrichDirective(TBT_Directive_t *directive) {
+    RouteLock lock;
     if (directive == nullptr) {
         return false;
     }
@@ -346,16 +403,16 @@ bool NavRoute_EnrichDirective(TBT_Directive_t *directive) {
     return true;
 }
 
-void NavRoute_Tick(uint32_t now_ms) {
+// Everything Tick does that touches the store, under the lock. Returns true
+// when *out carries a directive the caller should publish.
+//
+// Split out so DataCenter_Publish() happens with this module's lock released:
+// publishing runs every subscriber's callback synchronously, on this task, and
+// holding two buses' locks at once is how a deadlock gets built by accident.
+// See the LOCK ORDER note at the top of this file.
+static bool TickLocked(uint32_t now_ms, TBT_Directive_t *out) {
     if (!s_loaded) {
-        return;
-    }
-
-    // The phone wins while it is talking. Note this is a timeout on DATA, not
-    // on the connection: a link that is up but silent is no more use to the
-    // rider than one that is down.
-    if (s_ever_live && (uint32_t)(now_ms - s_last_live_ms) < TBT_LIVE_GRACE_MS) {
-        return;
+        return false;
     }
 
     // Has a valid fix arrived since the last time through here?
@@ -375,8 +432,29 @@ void NavRoute_Tick(uint32_t now_ms) {
     // own 30s expiry on every pass. The panel showed an amber arrow and a
     // street name indefinitely, next to a SPEED cell that had gone to dashes
     // within five seconds, and the one told the truth while the other did not.
-    if (!s_have_fix_time || (uint32_t)(now_ms - s_last_fix_ms) > NAVROUTE_FIX_STALE_MS) {
-        return;
+    const bool fix_fresh =
+        s_have_fix_time && (uint32_t)(now_ms - s_last_fix_ms) <= NAVROUTE_FIX_STALE_MS;
+
+    // Aged out here rather than after the handover below, so it happens even
+    // while the phone is the one navigating. s_last_fix feeds two things that
+    // both go wrong quietly when it is stale: the distances
+    // NavRoute_EnrichDirective() hangs off a live phone directive, and the
+    // hint the snap below is about to be given. A hint is only worth having
+    // because it says where the rider was a second ago; five seconds of
+    // silence is exactly when it stops saying that.
+    if (!fix_fresh) {
+        s_have_fix = false;
+    }
+
+    // The phone wins while it is talking. Note this is a timeout on DATA, not
+    // on the connection: a link that is up but silent is no more use to the
+    // rider than one that is down.
+    if (s_ever_live && (uint32_t)(now_ms - s_last_live_ms) < TBT_LIVE_GRACE_MS) {
+        return false;
+    }
+
+    if (!fix_fresh) {
+        return false;
     }
 
     GPS_Info_t gps;
@@ -384,12 +462,18 @@ void NavRoute_Tick(uint32_t now_ms) {
         // No fix means no onboard navigation. Deliberately silent rather than
         // publishing an empty directive: the last live turn the phone sent is
         // better than nothing, and Page_Dashboard already ages it out.
-        return;
+        return false;
     }
 
+    // Told where the rider was on the previous fix, which is the only thing
+    // that can settle an out-and-back -- both legs of one are the same points
+    // in the same order, so they snap identically and the geometry has no
+    // opinion. See RouteFollow_SnapFrom. The hint is bounded there, so a fix
+    // that genuinely belongs elsewhere still re-acquires immediately.
     RouteFix_t fix;
-    if (!RouteFollow_Snap(s_blob, &s_manifest, s_cum, gps.lat, gps.lon, &fix)) {
-        return;
+    if (!RouteFollow_SnapFrom(s_blob, &s_manifest, s_cum, gps.lat, gps.lon, s_have_fix,
+                              s_have_fix ? s_last_fix.distance_along_m : 0, &fix)) {
+        return false;
     }
     s_last_fix = fix;
     s_have_fix = true;
@@ -429,11 +513,24 @@ void NavRoute_Tick(uint32_t now_ms) {
         directive.icon_id == s_last_icon && directive.distance_m == s_last_distance;
     const bool due = (uint32_t)(now_ms - s_last_publish_ms) >= NAVROUTE_KEEPALIVE_MS;
     if (unchanged && !due) {
-        return;
+        return false;
     }
     s_last_icon = directive.icon_id;
     s_last_distance = directive.distance_m;
     s_last_publish_ms = now_ms;
     NavRoute_EnrichDirective(&directive);
-    DataCenter_Publish(TOPIC_NAV_TBT, &directive);
+    *out = directive;
+    return true;
+}
+
+void NavRoute_Tick(uint32_t now_ms) {
+    TBT_Directive_t directive;
+    bool publish = false;
+    {
+        RouteLock lock;
+        publish = TickLocked(now_ms, &directive);
+    }
+    if (publish) {
+        DataCenter_Publish(TOPIC_NAV_TBT, &directive);
+    }
 }

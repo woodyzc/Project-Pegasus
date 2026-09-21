@@ -1,5 +1,6 @@
 #include "GpxParse.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -109,7 +110,16 @@ bool Gpx_ParseTagAttributes(const char *tag, double *out_lat, double *out_lon) {
         return false;
     }
     /* Out-of-range values are corruption, not data. Drawing a trail to them
-       would put a line across the map to nowhere. */
+       would put a line across the map to nowhere.
+
+       isfinite() first, and not as a belt-and-braces extra: strtod accepts
+       "nan" and "inf", and every comparison against a NaN is false, so a
+       lat="nan" walks through all four bounds untouched. It is then cast to
+       int32_t through lat * 1e7, which is undefined behaviour rather than a
+       wrong pixel. */
+    if (!isfinite(lat) || !isfinite(lon)) {
+        return false;
+    }
     if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
         return false;
     }

@@ -189,11 +189,17 @@ extern const char *const TOPIC_BATTERY;
 extern const char *const TOPIC_NAV_TBT;
 extern const char *const TOPIC_PHONE_ALERT;
 
-// Called by a subscriber on every DataCenter_Publish() to that topic, with a
-// fresh copy of the published data (NOT a pointer into DataCenter's internal
-// buffer -- safe to read after the call returns, no locking needed by the
-// callback). Keep this short and non-blocking: it runs synchronously inside
-// DataCenter_Publish(), on the publisher's own task/core.
+// Called by a subscriber on every DataCenter_Publish() to that topic.
+//
+// `data` points AT the topic's own buffer -- it is not a copy, whatever this
+// comment used to claim. It is valid only for the duration of the call, which
+// is safe because DataCenter_Publish() holds the bus mutex across every
+// callback, and it is emphatically not safe to store. A callback that wants
+// the value afterwards must copy it out, or call DataCenter_Pull() later.
+//
+// Keep this short and non-blocking: it runs synchronously inside
+// DataCenter_Publish(), on the publisher's own task/core, with that mutex
+// held. Anything slow belongs behind a flag the owning task picks up.
 typedef void (*DataCenter_Callback_t)(const char *topic, const void *data, uint32_t size, void *user_arg);
 
 // A subscriber's handle on the bus. One Account per subscriber (not per

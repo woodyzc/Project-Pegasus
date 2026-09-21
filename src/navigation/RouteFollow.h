@@ -64,19 +64,56 @@ uint32_t RouteFollow_BuildCumulative(const uint8_t *blob,
                                      const RouteManifest_t *manifest,
                                      uint32_t *out_cum);
 
-// Snaps a position to the route. False only if the inputs are unusable.
+// Snaps a position to the route, with no idea where the rider was. False only
+// if the inputs are unusable.
 //
 // Searches every segment. That is O(n) per fix -- about 4,000 segments worst
 // case, once a second -- which measured far cheaper than the bookkeeping a
 // windowed search around the last fix would need, and unlike a windowed search
 // it recovers immediately from a GPS jump, a paused ride, or a head unit
 // restarted mid-route.
+//
+// Use this only when there is genuinely no previous fix. Snapping on geometry
+// alone cannot settle an out-and-back -- see RouteFollow_SnapFrom.
 bool RouteFollow_Snap(const uint8_t *blob,
                       const RouteManifest_t *manifest,
                       const uint32_t *cum,
                       double lat,
                       double lon,
                       RouteFix_t *out);
+
+// The same snap, told where the rider was on the previous fix.
+//
+// ---------------------------------------------------------------------------
+// WHY THE SNAP NEEDS A MEMORY
+// ---------------------------------------------------------------------------
+// Snapping to the polyline fixes the "nearest maneuver" failure described
+// above, and it does not fix the one underneath it. On an out-and-back the
+// two legs are the same points in the same order, so both segments snap with
+// the same cross-track -- to within floating point when the route repeats the
+// same geometry, which is exactly what a planner returns for a there-and-back.
+// The global minimum then settles it by segment index, which always means the
+// outbound leg. A rider on the way home gets the outbound leg's next turn for
+// the whole return: wrong arrow, wrong street, wrong countdown, and it never
+// self-corrects because every fix re-decides it the same way.
+//
+// So the tie is broken by where the rider already was. This is NOT a windowed
+// search: every segment is still examined, and the hint can only discount a
+// candidate by ROUTE_SNAP_HINT_BUDGET_M. A fix that genuinely belongs
+// elsewhere on the route beats a stale hint outright, which is what keeps the
+// GPS-jump and resumed-ride recovery the unhinted search promises above.
+//
+// `have_hint` false is identical to RouteFollow_Snap, and that is the right
+// call after a restart, a long gap, or any other break where the last known
+// position stopped meaning anything.
+bool RouteFollow_SnapFrom(const uint8_t *blob,
+                          const RouteManifest_t *manifest,
+                          const uint32_t *cum,
+                          double lat,
+                          double lon,
+                          bool have_hint,
+                          uint32_t hint_along_m,
+                          RouteFix_t *out);
 
 // The first maneuver at or beyond `distance_along_m`, and how far away it is.
 // False when the route has no maneuvers left, which is the arrival case.

@@ -320,6 +320,172 @@ static void test_snap_out_and_back(void) {
     check(mv.icon_id == 10, "return leg is heading for the arrival");
 }
 
+/* The case the test above dodges, and the one a real planner produces.
+ *
+ * test_snap_out_and_back separates the two legs by 10m, which is enough for
+ * the geometry to tell them apart. A there-and-back route does not come back
+ * 10m to the north -- it comes back along the identical points in reverse,
+ * because that is the road. Both legs then snap with the same cross-track and
+ * no amount of geometry can choose between them: the global minimum settles
+ * it on segment index, which is always the outbound leg, so a rider on the
+ * way home is shown the outbound leg's next turn for the entire return and it
+ * never self-corrects.
+ *
+ * What distinguishes them is where the rider already was. */
+static void test_snap_coincident_legs(void) {
+    enum { POINTS = 3 };
+    static uint8_t blob[POINTS * ROUTE_POINT_SIZE];
+    static uint32_t cum[POINTS];
+    RouteManifest_t m;
+    memset(&m, 0, sizeof(m));
+    m.point_count = POINTS;
+    m.maneuver_count = 0;
+
+    /* East to the turnaround, then back over the very same points. */
+    put_point(blob, 0, 390000000, -770000000);
+    put_point(blob, 1, 390000000, -769980000);
+    put_point(blob, 2, 390000000, -770000000);
+
+    const uint32_t total = RouteFollow_BuildCumulative(blob, &m, cum);
+    check(total > 300, "coincident out-and-back has real length");
+
+    /* One position, halfway along the shared road. */
+    const double lat = 39.0;
+    const double lon = -76.999;
+
+    RouteFix_t going_out;
+    RouteFix_t coming_back;
+    check(RouteFollow_SnapFrom(blob, &m, cum, lat, lon, true, 20, &going_out),
+          "snap with a hint from early on the outbound leg");
+    check(RouteFollow_SnapFrom(blob, &m, cum, lat, lon, true, 250, &coming_back),
+          "snap with a hint from the return leg");
+
+    /* The whole point: identical coordinates, opposite answers, and the only
+     * thing that differs is where the rider was a second ago. */
+    check(going_out.distance_along_m < total / 2,
+          "hinted outbound stays on the outbound leg");
+    check(coming_back.distance_along_m > total / 2,
+          "hinted return stays on the return leg");
+
+    /* The hint must not touch what is measured, only what is chosen. Both
+     * fixes are on the line, so both are on-route with no cross-track. */
+    check(going_out.cross_track_m <= 1, "outbound fix is on the line");
+    check(coming_back.cross_track_m <= 1, "return fix is on the line");
+    check(!going_out.off_route && !coming_back.off_route,
+          "a hinted choice is still judged on its real cross-track");
+
+    /* Unhinted is exactly the old behaviour, for callers that have no fix to
+     * reason from. */
+    RouteFix_t blind_a;
+    RouteFix_t blind_b;
+    check(RouteFollow_Snap(blob, &m, cum, lat, lon, &blind_a), "unhinted snap");
+    check(RouteFollow_SnapFrom(blob, &m, cum, lat, lon, false, 0, &blind_b),
+          "snap with have_hint false");
+    check(blind_a.segment_index == blind_b.segment_index &&
+              blind_a.distance_along_m == blind_b.distance_along_m,
+          "have_hint false is identical to the unhinted snap");
+}
+
+/* A ride through the turnaround, each fix hinted by the one before it.
+ *
+ * The single-fix test above proves the hint is read. This proves it composes:
+ * the answer has to carry the rider around the far end and back without ever
+ * going backwards, because the hint on every fix is the previous fix's own
+ * answer and a single wrong choice would stick for the rest of the ride. */
+static void test_snap_tracks_through_turnaround(void) {
+    enum { POINTS = 3 };
+    static uint8_t blob[POINTS * ROUTE_POINT_SIZE];
+    static uint32_t cum[POINTS];
+    RouteManifest_t m;
+    memset(&m, 0, sizeof(m));
+    m.point_count = POINTS;
+    m.maneuver_count = 0;
+
+    put_point(blob, 0, 390000000, -770000000);
+    put_point(blob, 1, 390000000, -769980000);
+    put_point(blob, 2, 390000000, -770000000);
+
+    const uint32_t total = RouteFollow_BuildCumulative(blob, &m, cum);
+
+    /* Out from just inside the start to just short of the turnaround, then
+     * back. Roughly 17m a step, which is a fast descent at 1Hz. */
+    double lons[64];
+    int n = 0;
+    /* East, from just inside the start to just short of the turnaround. */
+    for (double l = -76.9999; l <= -76.9981 + 1e-9 && n < 64; l += 0.0002) {
+        lons[n++] = l;
+    }
+    /* Then west again over the identical ground. The rider turns a few metres
+     * short of the planned turnaround, which is both realistic and harder:
+     * the snap has to change legs without the fix ever reaching the vertex
+     * that separates them. */
+    for (double l = -76.9983; l >= -76.9999 - 1e-9 && n < 64; l -= 0.0002) {
+        lons[n++] = l;
+    }
+    check(n > 15, "the simulated ride has fixes in it");
+
+    bool have_hint = false;
+    uint32_t hint = 0;
+    uint32_t previous = 0;
+    int regressions = 0;
+    int reached_return = 0;
+
+    for (int i = 0; i < n; i++) {
+        RouteFix_t fix;
+        if (!RouteFollow_SnapFrom(blob, &m, cum, 39.0, lons[i], have_hint, hint, &fix)) {
+            check(0, "every fix along the ride snaps");
+            return;
+        }
+        if (have_hint && fix.distance_along_m + 1 < previous) {
+            regressions++;
+        }
+        if (fix.distance_along_m > total / 2) {
+            reached_return = 1;
+        }
+        previous = fix.distance_along_m;
+        hint = fix.distance_along_m;
+        have_hint = true;
+    }
+
+    check(regressions == 0, "the ride never snaps backwards along the route");
+    check(reached_return, "the ride is recognised as being on the return leg");
+    check_near((double)previous, (double)total, 30.0,
+               "the ride finishes near the end of the route, not back at the start");
+}
+
+/* The hint is a tie-breaker, not an anchor.
+ *
+ * This is the property that lets the hinted snap keep the recovery the
+ * unhinted one promises: a GPS jump, a tunnel, a ride resumed somewhere else.
+ * The legs here are 100m apart, so the geometry has a real opinion, and a
+ * hint pointing firmly at the wrong one must lose. */
+static void test_snap_hint_cannot_override_geometry(void) {
+    enum { POINTS = 4 };
+    static uint8_t blob[POINTS * ROUTE_POINT_SIZE];
+    static uint32_t cum[POINTS];
+    RouteManifest_t m;
+    memset(&m, 0, sizeof(m));
+    m.point_count = POINTS;
+    m.maneuver_count = 0;
+
+    /* Out east along 39.0, back west along 39.0009 -- about 100m north. */
+    put_point(blob, 0, 390000000, -770000000);
+    put_point(blob, 1, 390000000, -769980000);
+    put_point(blob, 2, 390009000, -769980000);
+    put_point(blob, 3, 390009000, -770000000);
+
+    const uint32_t total = RouteFollow_BuildCumulative(blob, &m, cum);
+
+    /* The rider is unambiguously on the outbound line, and the hint insists
+     * they are most of the way round the return leg. */
+    RouteFix_t fix;
+    check(RouteFollow_SnapFrom(blob, &m, cum, 39.0, -76.999, true, total - 20, &fix),
+          "snap with a hint that contradicts the geometry");
+    check(fix.segment_index == 0, "a 100m error beats a 25m hint discount");
+    check(fix.distance_along_m < total / 2, "the fix re-acquires on the outbound leg");
+    check(fix.cross_track_m <= 1, "and it is on that line, not merely nearest it");
+}
+
 static void test_next_maneuver(void) {
     enum { POINTS = 2, MANEUVERS = 3 };
     static uint8_t blob[POINTS * ROUTE_POINT_SIZE + MANEUVERS * ROUTE_MANEUVER_SIZE];
@@ -365,6 +531,9 @@ int main(void) {
     test_records();
     test_snap_straight();
     test_snap_out_and_back();
+    test_snap_coincident_legs();
+    test_snap_tracks_through_turnaround();
+    test_snap_hint_cannot_override_geometry();
     test_next_maneuver();
 
     printf("%d checks, %d failures\n", checks, failures);
