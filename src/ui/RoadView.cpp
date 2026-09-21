@@ -102,19 +102,32 @@ inline uint8_t OutCode(const lv_point_t *p, const lv_area_t *a) {
     return code;
 }
 
+// Colours are set against COLOR_MAP_BG (0x0B1116), and they are set by
+// contrast ratio rather than by eye, because "looks fine on the bench" is a
+// dim room at 30cm and the panel is read in sunlight at arm's length.
+//
+// What was here before was too dark to see. Minor streets at 0x333A42 are
+// 1.65:1 against that background and water at 0x1C3E5C is 1.73:1 -- below the
+// 3:1 floor for any graphical object, so on a transflective panel outdoors
+// they were a texture rather than a map. The ramp now runs 4.0 / 5.2 / 5.7 /
+// 3.0, which keeps the class hierarchy legible as brightness while leaving
+// every road well under the trail: COLOR_TRAIL_AHEAD is ~11:1, so the one
+// line that is not scenery still wins the eye outright.
+//
+// Widths are up one step across the board for the same reason. A 1px road on
+// a 240px panel is a hairline that anti-aliasing then halves the contrast of
+// again -- the two faults compound, which is why the fix has to be both.
+//
+// Arteries stay blue and stay the lightest road, because they are the thing
+// you navigate by; the earlier note about not using amber still holds, since
+// amber is the ridden trail's colour. Water is deliberately the most
+// saturated and the darkest of the four despite being the widest: it is a
+// landmark to recognise, not a route to follow.
 const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
-    {0x333A42, 1}, // minor
-    {0x4E5760, 2}, // secondary
-    // Arteries in blue, not the amber they were. Amber is the trail's own
-    // colour family now that the ridden part of it is yellow, and a road
-    // sharing that family is a road a rider mistakes for the route.
-    //
-    // Muted rather than the bright blue this first was. Roads are the backdrop
-    // the route is read against, and a bright artery pulled the eye off the
-    // one line on the map that matters. Still a step lighter than the water
-    // below it, which is darker again and drawn thicker.
-    {0x2F6389, 3}, // artery
-    {0x1C3E5C, 4}, // water
+    {0x68737F, 2}, // minor      -- 4.0:1
+    {0x8D98A5, 3}, // secondary  -- 5.2:1
+    {0x4D93C4, 4}, // artery     -- 5.7:1
+    {0x27628F, 5}, // water      -- 3.0:1
 };
 
 // The MapView this layer belongs to. Its projection is the one that matters:

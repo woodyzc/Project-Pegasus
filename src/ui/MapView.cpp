@@ -63,16 +63,22 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // by the one shared point, the ridden colour wins and the join is clean.
     view->trail = lv_line_create(view->container);
     lv_obj_set_style_line_color(view->trail, lv_color_hex(COLOR_TRAIL_AHEAD), 0);
-    // 4px, not 2. The roads under it are drawn 1 to 4px wide, and a route the
-    // same weight as the streets it crosses is a route the eye has to hunt
-    // for. This is the one line on the map that is not scenery.
-    lv_obj_set_style_line_width(view->trail, 4, 0);
+    // 6px, and it tracks the roads rather than being chosen on its own. The
+    // roads under it are drawn 2 to 5px wide, and a route the same weight as
+    // the streets it crosses is a route the eye has to hunt for. This is the
+    // one line on the map that is not scenery.
+    //
+    // It was 4 while the roads were 1 to 4. Widening them for legibility
+    // without widening this would have quietly handed the top of the
+    // hierarchy to the rivers -- the fix for one problem creating another,
+    // one file away, with nothing to catch it but looking at the screen.
+    lv_obj_set_style_line_width(view->trail, 6, 0);
     lv_obj_set_style_line_rounded(view->trail, true, 0);
     lv_obj_set_pos(view->trail, 0, 0);
 
     view->trail_done = lv_line_create(view->container);
     lv_obj_set_style_line_color(view->trail_done, lv_color_hex(COLOR_TRAIL_DONE), 0);
-    lv_obj_set_style_line_width(view->trail_done, 4, 0);
+    lv_obj_set_style_line_width(view->trail_done, 6, 0);
     lv_obj_set_style_line_rounded(view->trail_done, true, 0);
     lv_obj_set_pos(view->trail_done, 0, 0);
 
@@ -81,7 +87,10 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // relative to the line I am supposed to be following.
     view->marker = lv_line_create(view->container);
     lv_obj_set_style_line_color(view->marker, lv_color_hex(COLOR_MARKER), 0);
-    lv_obj_set_style_line_width(view->marker, 2, 0);
+    // 3px: the marker is an outline, not a fill, so at 2px against a trail now
+    // twice that weight it read as the thinnest thing on the map -- which is
+    // backwards for the one mark that says where the rider is.
+    lv_obj_set_style_line_width(view->marker, 3, 0);
     lv_obj_set_style_line_rounded(view->marker, true, 0);
     lv_obj_set_pos(view->marker, 0, 0);
     lv_obj_add_flag(view->marker, LV_OBJ_FLAG_HIDDEN);
