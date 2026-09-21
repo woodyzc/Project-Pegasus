@@ -45,17 +45,41 @@ const double ROAD_MAX_MPP[ROAD_CLASS_COUNT] = {
 // redraw", it is the board feeling broken. A dense extract reaches that
 // ceiling on every frame, which is what made the Arlington map unusable while
 // Germantown was fine: same way count, three times the arteries.
-constexpr uint32_t ROAD_MAX_SEGMENTS = 1400;
+//
+// 900, not 1400, because widening the roads changed what a segment COSTS and
+// this number is a frame-time ceiling denominated in segments. 1400 was
+// derived from a measured ~51us; the panel now reports 88ms of draw for 532
+// segments, so the calibration behind 1400 no longer describes anything. The
+// constant did not become wrong on its own -- it was invalidated one file
+// away, by a change that never touched it.
+//
+// 900 is chosen to restore roughly the ~70ms ceiling 1400 was picked to
+// enforce, and it is deliberately approximate: per-segment cost swings about
+// threefold with zoom, since decimation leaves one long screen-crossing line
+// per way close in and many short ones when dense. No single count is a tight
+// bound at every scale, so this is a backstop against a pathological frame
+// rather than a budget meant to be spent.
+//
+// Note it does not bind in the view that was measured -- 532 is well under
+// either number -- so this costs nothing in ordinary use and bites only in
+// the dense frames that are already the slowest.
+constexpr uint32_t ROAD_MAX_SEGMENTS = 900;
 
 // And a share per class, because the ceiling alone starves the wrong ones.
 // The passes run in painter's order -- water under roads -- so a global budget
 // spent by the time the artery pass runs leaves the map without the roads a
 // rider actually navigates by. Indexed by ROAD_CLASS_*.
+//
+// Scaled with the ceiling above rather than left alone: these oversubscribe it
+// by half (1360 against 900, as 2100 did against 1400) so a class can use
+// another's slack, and holding them fixed while the ceiling fell would have
+// quietly raised minor streets' share of a smaller budget -- starving the
+// arteries this table exists to protect.
 const uint32_t ROAD_CLASS_SEGMENTS[ROAD_CLASS_COUNT] = {
-    400,  // minor
-    400,  // secondary
-    900,  // artery  -- the most, and drawn last, so it needs protecting
-    400,  // water
+    260,  // minor
+    260,  // secondary
+    580,  // artery  -- the most, and drawn last, so it needs protecting
+    260,  // water
 };
 
 // Ways that can be on screen at once. Static rather than on the stack: this
