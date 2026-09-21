@@ -957,6 +957,11 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_text_font(s_cadencelink_value, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(s_cadencelink_value, lv_color_hex(COLOR_VALUE), 0);
     lv_label_set_text(s_cadencelink_value, "Cadence: --");
+    // Two lines once a sensor is connected: the rpm, then the raw fields
+    // behind it. Wrapped rather than clipped, because the second line is only
+    // useful in full.
+    lv_label_set_long_mode(s_cadencelink_value, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_cadencelink_value, LV_PCT(100));
 
     // Sits in the heart-rate card because that is where the radio status
     // already lives, and both links share the one NimBLE stack.

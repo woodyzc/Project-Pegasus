@@ -101,6 +101,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     coasting. That is also why the supervisor republishes the current rpm once
     a second even when nothing changed: a rider holding a steady cadence
     produces no changes at all, and silence on that topic means "gone".
+  - ⚠️ **A dual-mode sensor decides speed-or-cadence at its end, and a
+    firmware that only reads cadence cannot tell you so.** Verified on the
+    bench 2026-09-20: the sensor connected, subscribed, notified 1,500 times,
+    and the panel read a steady 0 -- because every packet carried wheel data
+    and no crank data. Flags `0x01`, length 7, crank fields simply absent.
+    Switching the sensor to cadence mode fixed it and nothing in this firmware
+    changed.
+
+    The settings page now says which of the two it is, in words, and shows the
+    raw packet fields **only when every packet has arrived without crank
+    data**. Read `SPEED SENSOR, no cadence` as final -- that comes from the
+    sensor's own CSC Feature bit 1 -- and `sending SPEED not cadence` as a
+    mounting or pairing question at the sensor. `@left crank` versus
+    `@rear hub` is the sensor telling you which it believes it is.
+
+    The general lesson is the one §8 keeps re-teaching: a silent wrong answer
+    needs a diagnostic on the panel, because this board has no usable serial
+    console to put one on.
   - **Three connections is the ceiling and all three are now spoken for** --
     phone, heart rate, cadence -- against NimBLE's
     `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` of 3. A fourth sensor needs that raised

@@ -16,6 +16,16 @@ namespace {
 // Standard GATT assigned numbers.
 const NimBLEUUID kCscService((uint16_t)0x1816);     // Cycling Speed and Cadence
 const NimBLEUUID kCscMeasurement((uint16_t)0x2A5B); // CSC Measurement
+const NimBLEUUID kCscFeature((uint16_t)0x2A5C);     // CSC Feature
+const NimBLEUUID kSensorLocation((uint16_t)0x2A5D); // Sensor Location
+
+// CSC Feature bits. The one that matters is bit 1: a sensor that does not set
+// it cannot report cadence at all, and no amount of configuration will change
+// that. Bit 2 says it can be told where it is mounted, which on a dual-mode
+// sensor is how the mode is chosen.
+#define CSC_FEATURE_WHEEL_SUPPORTED 0x0001
+#define CSC_FEATURE_CRANK_SUPPORTED 0x0002
+#define CSC_FEATURE_MULTI_LOCATION 0x0004
 
 constexpr uint32_t kDiscoveryScanMs = 10000;
 constexpr uint32_t kBackoffStartMs = 1000;
@@ -60,7 +70,64 @@ volatile bool s_disconnect_event = false;
 CadenceTracker_t s_tracker;
 SemaphoreHandle_t s_tracker_mutex = nullptr;
 
-char s_status[96] = "not started";
+char s_status[224] = "not started";
+
+// ---- Raw-packet diagnostics, drawn on the settings page ----
+//
+// "Connected but always zero" has three causes that look identical from the
+// outside: the sensor is sending wheel data and no crank data, the crank
+// counter is not advancing, or the interval arithmetic is wrong. Only the
+// bytes tell them apart, and serial is unusable on this board (CLAUDE.md §8),
+// so they go on the panel -- which is the same answer that worked for every
+// other blind spot here.
+//
+// Written from NimBLE's host task and read by the UI. Each is a single
+// naturally-aligned word and no two are compared against each other, so a torn
+// read would at worst show one stale field for one refresh.
+volatile uint8_t s_dbg_flags = 0;
+volatile uint8_t s_dbg_len = 0;
+volatile uint16_t s_dbg_revs = 0;
+volatile uint16_t s_dbg_ticks = 0;
+volatile uint32_t s_dbg_notifies = 0;
+volatile uint32_t s_dbg_parse_fails = 0;
+
+// Read once per connection, and the pair that answers the only question worth
+// asking when every packet turns out to be wheel-only: is this the wrong
+// sensor, or the right sensor in the wrong mode?
+//
+// 0x2A5C bit 1 is "Crank Revolution Data Supported". Clear means speed-only
+// hardware and nothing here can help. Set, with the measurements still
+// carrying no crank data, means the sensor believes it is on a wheel --
+// 0x2A5D says where it thinks it is, and that is a mounting or pairing
+// question rather than a firmware one.
+volatile uint16_t s_dbg_feature = 0;
+volatile bool s_have_feature = false;
+volatile uint8_t s_dbg_location = 0xFF;
+
+// Sensor Location, from the GATT assigned numbers. Named rather than printed
+// as a bare number because "Rear Hub" is the answer and "13" is a lookup.
+const char *SensorLocationName(uint8_t code) {
+    switch (code) {
+        case 0: return "other";
+        case 1: return "top of shoe";
+        case 2: return "in shoe";
+        case 3: return "hip";
+        case 4: return "front wheel";
+        case 5: return "left crank";
+        case 6: return "right crank";
+        case 7: return "left pedal";
+        case 8: return "right pedal";
+        case 9: return "front hub";
+        case 10: return "rear dropout";
+        case 11: return "chainstay";
+        case 12: return "rear wheel";
+        case 13: return "rear hub";
+        case 14: return "chest";
+        case 15: return "spider";
+        case 16: return "chain ring";
+        default: return "?";
+    }
+}
 
 void PublishRpm(uint16_t rpm) {
     Cadence_t out;
@@ -99,13 +166,19 @@ void OnNotify(NimBLERemoteCharacteristic *characteristic, uint8_t *data, size_t 
     (void)is_notify;
 
     s_had_notify = true;
+    s_dbg_notifies++;
+    s_dbg_len = (uint8_t)length;
+    s_dbg_flags = (data != nullptr && length >= 1) ? data[0] : 0;
 
     CscMeasurement_t m;
     if (!Csc_ParseMeasurement(data, length, &m)) {
         // A combined speed-and-cadence sensor may legitimately send a
         // wheel-only packet. Not an error, just nothing to say.
+        s_dbg_parse_fails++;
         return;
     }
+    s_dbg_revs = m.crank_revs;
+    s_dbg_ticks = m.crank_event_time;
 
     if (s_tracker_mutex == nullptr) {
         return;
@@ -199,6 +272,29 @@ bool ConnectAndSubscribe() {
         s_client->disconnect();
         return false;
     }
+
+    // What the sensor says it can do, and where it thinks it is. Both are
+    // optional characteristics, so neither failing is an error -- it just
+    // leaves that half of the question unanswered.
+    s_have_feature = false;
+    s_dbg_location = 0xFF;
+    NimBLERemoteCharacteristic *feature = service->getCharacteristic(kCscFeature);
+    if (feature != nullptr && feature->canRead()) {
+        NimBLEAttValue value = feature->readValue();
+        if (value.length() >= 2) {
+            s_dbg_feature = (uint16_t)(value[0] | ((uint16_t)value[1] << 8));
+            s_have_feature = true;
+        }
+    }
+    NimBLERemoteCharacteristic *location = service->getCharacteristic(kSensorLocation);
+    if (location != nullptr && location->canRead()) {
+        NimBLEAttValue value = location->readValue();
+        if (value.length() >= 1) {
+            s_dbg_location = value[0];
+        }
+    }
+    Serial.printf("[BLE_CSC] feature=0x%04X location=%u (%s)\n", (unsigned)s_dbg_feature,
+                  (unsigned)s_dbg_location, SensorLocationName(s_dbg_location));
 
     if (s_tracker_mutex != nullptr &&
         xSemaphoreTake(s_tracker_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -392,7 +488,76 @@ const char *BLE_CSC_StatusText(void) {
             rpm = s_tracker.rpm;
             xSemaphoreGive(s_tracker_mutex);
         }
-        snprintf(s_status, sizeof(s_status), "Cadence: connected, %u rpm", (unsigned)rpm);
+        // The verdict first, in words, then the raw fields behind it.
+        //
+        // "f01/7 n0 t0 p1514/1514" is a complete answer and nobody should have
+        // to decode it twice. Every packet arriving without crank data is a
+        // specific, nameable state -- the sensor is reporting speed -- and the
+        // panel is where that belongs, because this board has no usable
+        // serial console to put it on instead (CLAUDE.md §8).
+        const uint32_t notifies = s_dbg_notifies;
+        const uint32_t fails = s_dbg_parse_fails;
+        const bool all_wheel_only = notifies > 0 && fails == notifies;
+
+        char verdict[80];
+        if (!all_wheel_only) {
+            snprintf(verdict, sizeof(verdict), "%u rpm", (unsigned)rpm);
+        } else if (s_have_feature && !(s_dbg_feature & CSC_FEATURE_CRANK_SUPPORTED)) {
+            // Definitive, and the one answer that ends the investigation: the
+            // sensor itself says it cannot count crank revolutions.
+            snprintf(verdict, sizeof(verdict), "SPEED SENSOR, no cadence");
+        } else {
+            // It can, or will not say, but is not doing it. That is a mounting
+            // or pairing question at the sensor, not something this firmware
+            // can switch.
+            snprintf(verdict, sizeof(verdict), "sending SPEED not cadence");
+        }
+
+        char where[40];
+        if (s_dbg_location != 0xFF) {
+            snprintf(where, sizeof(where), " @%s", SensorLocationName(s_dbg_location));
+        } else {
+            where[0] = '\0';
+        }
+
+        //   f  = the flags byte, then the packet length. Bit 1 (0x02) must be
+        //        set or there is no crank data in the packet at all, whatever
+        //        the sensor is sold as. Length tells a truncated packet from a
+        //        wheel-only one: crank-only is 5 bytes, wheel+crank is 11.
+        //   n  = crank revolutions, free-running. Must climb while pedalling.
+        //   t  = crank event time, 1/1024s, free-running and wrapping at 64s.
+        //   p  = notifications received / packets with no crank data in them.
+        //   F  = the CSC Feature bits the sensor reports, "--" if it has none.
+        // The raw line is shown only when something is wrong.
+        //
+        // It earned its place by answering "connected but always zero" in one
+        // photograph, and it stays for the next time -- a sensor swap, a mode
+        // that gets switched back, a flat coin cell. But a working sensor
+        // should not spend two lines of the settings page proving it: the rpm
+        // and where the sensor says it is mounted are the whole story then.
+        if (!all_wheel_only) {
+            snprintf(s_status, sizeof(s_status), "Cadence: connected, %s%s", verdict, where);
+            return s_status;
+        }
+
+        //   f  = the flags byte, then the packet length. Bit 1 (0x02) must be
+        //        set or there is no crank data in the packet at all, whatever
+        //        the sensor is sold as. Length tells a truncated packet from a
+        //        wheel-only one: crank-only is 5 bytes, wheel+crank is 11.
+        //   n  = crank revolutions, free-running. Must climb while pedalling.
+        //   t  = crank event time, 1/1024s, free-running and wrapping at 64s.
+        //   p  = notifications received / packets with no crank data in them.
+        //   F  = the CSC Feature bits the sensor reports, "--" if it has none.
+        char feat[16];
+        if (s_have_feature) {
+            snprintf(feat, sizeof(feat), "F%04X", (unsigned)s_dbg_feature);
+        } else {
+            snprintf(feat, sizeof(feat), "F--");
+        }
+        snprintf(s_status, sizeof(s_status),
+                 "Cadence: connected, %s%s\nf%02X/%u n%u t%u p%lu/%lu %s", verdict, where,
+                 (unsigned)s_dbg_flags, (unsigned)s_dbg_len, (unsigned)s_dbg_revs,
+                 (unsigned)s_dbg_ticks, (unsigned long)notifies, (unsigned long)fails, feat);
     }
     return s_status;
 }
