@@ -6,13 +6,16 @@
 #include "../system/DataCenter.h"
 #include "NmeaParse.h"
 
-// Overridable per board from platformio.ini. Defaults avoid GPIO43/44 so
-// UART0 stays free for a USB-TTL debug adapter -- see the header.
+// Overridable per board from platformio.ini. Defaults are the ES3C28P
+// reference design's IO2/IO3/IO14/IO21 expansion header -- see the header
+// comment for why neither GPIO43/44 (this board's silkscreened UART header,
+// reserved for USB-TTL debug) nor GPIO4/5 (wired to the onboard PCM5101 I2S
+// amp) are free.
 #ifndef GPS_UART_RX_PIN
-#define GPS_UART_RX_PIN 4 // ESP32-S3 RX <- module TX
+#define GPS_UART_RX_PIN 2 // ESP32-S3 RX <- module TX
 #endif
 #ifndef GPS_UART_TX_PIN
-#define GPS_UART_TX_PIN 5 // ESP32-S3 TX -> module RX
+#define GPS_UART_TX_PIN 3 // ESP32-S3 TX -> module RX
 #endif
 #ifndef GPS_UART_BAUD
 // The ATGM336H leaves the factory at 9600, and nothing in this firmware asks

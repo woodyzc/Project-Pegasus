@@ -19,14 +19,29 @@
 // fill the same struct.
 //
 // ---------------------------------------------------------------------------
-// Pin choice deviates from CLAUDE.md §2 on purpose
+// Pin choice deviates from CLAUDE.md §2, and not for the reason this file
+// used to give
 // ---------------------------------------------------------------------------
-// The spec puts the module on GPIO43/44. Those are UART0 -- the only remaining
-// way to get real logs off this board, since serial over USB-Serial-JTAG is
-// unusable on the development host (see CLAUDE.md §8). The ESP32-S3 routes any
-// UART to any pin through the GPIO matrix, so there is no reason to spend the
-// debug port on the GNSS module. Defaults below are overridable from
-// platformio.ini per board.
+// The spec puts the module on GPIO43/44. Those are UART0, physically brought
+// out on this board to the header silkscreened "UART" (RXD/TXD/GND/5V) -- and
+// still off limits, because serial over USB-Serial-JTAG is unusable on the
+// development host (see CLAUDE.md §8), which makes that header the only
+// remaining way to get real logs off this board with a USB-TTL adapter.
+//
+// GPIO4/GPIO5 are NOT a free alternative, despite an earlier version of this
+// file claiming the GPIO matrix made any pin fair game: on the ES3C28P
+// reference design this board is built from, those two are wired to the
+// onboard PCM5101 I2S amp (MCLK=4, BCLK=5) -- the unlabeled header next to
+// the touch FPC connector, silkscreened only "SPEAKER". Unused by firmware
+// today (CLAUDE.md marks audio target-board-only), but still not electrically
+// free: a module driving them fights the DAC.
+//
+// The only header on this board actually broken out and unclaimed is the
+// 4-pin one silkscreened IO2/IO3/IO14/IO21 ("Expansion" in the same reference
+// design's docs). The GNSS module goes there: RX on IO2, TX on IO3, IO14/IO21
+// left for whatever needs a spare GPIO next. It has no VCC/GND of its own --
+// borrow those from the I2C header's 3.3V/GND pins without touching SCL/SDA.
+// Defaults below are overridable from platformio.ini per board.
 // ---------------------------------------------------------------------------
 //
 // NOTE: the NMEA decoding is covered by test/host/test_nmea_parse.c, but the

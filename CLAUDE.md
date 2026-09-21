@@ -40,9 +40,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     has no documented binary config protocol at all, and leaves the factory
     streaming plain NMEA-0183 text (GGA/RMC, plus GSA/GSV/VTG this firmware
     ignores) at 9600 baud with nothing to configure it into anything else.
-    `GPS_Reader.h` expects it on the same UART1 pins as before (GPIO4 RX /
-    GPIO5 TX, chosen to keep GPIO43/44 free for USB-TTL debug per §8), just
-    at 9600 baud instead of the M10's 38400. `src/sensors/NmeaParse.c` is the
+    `GPS_Reader.h` expects it on UART1, GPIO2 RX / GPIO3 TX — the board's
+    IO2/IO3/IO14/IO21 expansion header, its only breakout that is actually
+    free. GPIO43/44 (this board's silkscreened "UART" header) stays reserved
+    for USB-TTL debug per §8, and an earlier version of this note put the
+    module on GPIO4/5 instead: wrong, because on the ES3C28P reference design
+    this board is built from, those two are wired to the onboard PCM5101 I2S
+    amp (MCLK/BCLK) and were never actually free, whatever the firmware
+    itself does or doesn't do with audio. 9600 baud, not the M10's 38400.
+    `src/sensors/NmeaParse.c` is the
     from-scratch GGA/RMC decoder this reads through (host-tested,
     `test/host/test_nmea_parse.c`), parallel to `UbxParse.c` for when the
     M10 shows up — both fill the same `GPS_Info_t`, so nothing downstream of
