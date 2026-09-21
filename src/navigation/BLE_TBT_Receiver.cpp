@@ -97,7 +97,19 @@ class TbtCallbacks : public NimBLECharacteristicCallbacks {
 
         NimBLEAttValue value = characteristic->getValue();
 
+        // Zeroed, and this is not defensive habit -- off_route lives in this
+        // struct and NOTHING on the phone path ever writes it. TBT_ParseFrame
+        // fills the four wire fields, source is set below, and
+        // NavRoute_EnrichDirective fills its three; off_route was left as
+        // whatever was on the stack. The dashboard colours the arrow red when
+        // it is set, so a live phone turn flickered between red and cyan at
+        // random while the countdown underneath it was perfectly correct.
+        //
+        // The struct's own comment in DataCenter.h says "every existing
+        // publisher that zeroes this struct" -- this one did not.
         TBT_Directive_t directive;
+        memset(&directive, 0, sizeof(directive));
+
         if (!TBT_ParseFrame(value.data(), value.length(), &directive.icon_id,
                             &directive.distance_m, directive.street_name,
                             sizeof(directive.street_name), &directive.exit_number)) {

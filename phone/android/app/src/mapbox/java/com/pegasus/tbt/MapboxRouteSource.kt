@@ -166,17 +166,34 @@ class MapboxRouteSource(private val context: Context) : RouteSource {
     private val progressObserver = RouteProgressObserver { progress ->
         val legProgress = progress.currentLegProgress ?: return@RouteProgressObserver
         val stepProgress = legProgress.currentStepProgress ?: return@RouteProgressObserver
-        val maneuver = stepProgress.step?.maneuver()
+        // A step's maneuver happens at its START -- the same convention
+        // PlannedRoute.fromSteps is built on -- so the turn the rider is
+        // riding TOWARDS belongs to the upcoming step, not the current one.
+        //
+        // This used to read stepProgress.step.maneuver(), which is the turn
+        // already taken, while distanceRemaining below counts down to the end
+        // of the current step, ie. to the NEXT turn. So the arrow and street
+        // name sat one maneuver behind a countdown that was correct: the panel
+        // ticked down accurately to a junction while naming the wrong turn for
+        // it, then flipped to the turn just completed as each one was passed.
+        //
+        // upcomingStep is null only on the final step, whose own maneuver is
+        // the arrival -- which is exactly what belongs on screen there.
+        val maneuverStep = legProgress.upcomingStep ?: stepProgress.step
+        val maneuver = maneuverStep?.maneuver()
 
         val icon = MapboxManeuver.toIcon(maneuver?.type(), maneuver?.modifier())
 
         onInstruction?.invoke(
             NavigationInstruction(
                 iconId = icon,
-                // distanceRemaining is a Float of metres to the next maneuver,
-                // which is exactly what the head unit counts down.
+                // distanceRemaining is a Float of metres to the end of the
+                // current step, which is where that maneuver happens -- so it
+                // is exactly what the head unit counts down.
                 distanceMetres = stepProgress.distanceRemaining.toInt().coerceAtLeast(0),
-                streetName = stepProgress.step?.name().orEmpty(),
+                // The road the maneuver puts the rider ON, for the same
+                // reason: "turn onto X" names the far side of the junction.
+                streetName = maneuverStep?.name().orEmpty(),
                 exitNumber = maneuver?.exit()?.toInt() ?: 0,
                 remainingMetres = progress.distanceRemaining.toInt(),
             )
