@@ -19,6 +19,9 @@
 #                         src/navigation/TbtParse.c)
 #   * test_ubx_parse    - u-blox NAV-PVT decoding (compiles the real
 #                         src/sensors/UbxParse.c)
+#   * test_nmea_parse   - NMEA GGA/RMC decoding for the ATGM336H actually on
+#                         the bench, which is not a u-blox part and does not
+#                         speak UBX (compiles the real src/sensors/NmeaParse.c)
 #   * test_timezone     - position to POSIX TZ, and the civil-to-epoch maths
 #                         (compiles the real src/system/TimeZone.c)
 #   * test_gpx_parse    - GPX track-point extraction (compiles the real
@@ -83,7 +86,8 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX) \
         test_idle_policy$(SUFFIX) test_ascent$(SUFFIX) \
         test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX) \
-        test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX) test_csc_parse$(SUFFIX)
+        test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX) test_csc_parse$(SUFFIX) \
+        test_nmea_parse$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -126,6 +130,9 @@ test_tbt_parse$(SUFFIX): test_tbt_parse.c $(NAV)/TbtParse.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC)
 
 test_ubx_parse$(SUFFIX): test_ubx_parse.c $(SENSORS)/UbxParse.c
+	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
+
+test_nmea_parse$(SUFFIX): test_nmea_parse.c $(SENSORS)/NmeaParse.c
 	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
 
 test_timezone$(SUFFIX): test_timezone.c $(SYSTEM)/TimeZone.c

@@ -34,6 +34,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **GNSS Module**: u-blox MAX-M10S connected via dedicated UART (GPIO43/44).
   - *Constraint*: Force UBX binary protocol only; disable high-overhead NMEA text parsing.
   - *Power*: Retain micro-power RTC backup (~15μA) for <1s hot starts.
+  - **The module actually on the bench (received 2026-09-21) is an ATGM336H
+    (中科微电子 GPS+BD), not a MAX-M10S — the MAX-M10S still hasn't arrived.**
+    It is a different chipset, not a u-blox part, and does not speak UBX: it
+    has no documented binary config protocol at all, and leaves the factory
+    streaming plain NMEA-0183 text (GGA/RMC, plus GSA/GSV/VTG this firmware
+    ignores) at 9600 baud with nothing to configure it into anything else.
+    `GPS_Reader.h` expects it on the same UART1 pins as before (GPIO4 RX /
+    GPIO5 TX, chosen to keep GPIO43/44 free for USB-TTL debug per §8), just
+    at 9600 baud instead of the M10's 38400. `src/sensors/NmeaParse.c` is the
+    from-scratch GGA/RMC decoder this reads through (host-tested,
+    `test/host/test_nmea_parse.c`), parallel to `UbxParse.c` for when the
+    M10 shows up — both fill the same `GPS_Info_t`, so nothing downstream of
+    `TOPIC_GPS_INFO` cares which one is running. Still unverified against
+    real silicon: received, not yet wired or powered on.
 - **IMU Sensor** *(target board only)*: Onboard QMI8658 6-axis IMU (I2C).
   - *Uses*: Motion detection, inclination/slope calculation, anti-theft alarm, fall detection, and Any-Motion wake-up triggers.
   - Grade and ascent live on the dashboard's **second** page, as INCLINE and

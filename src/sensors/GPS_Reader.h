@@ -2,8 +2,21 @@
 
 #include <stdint.h>
 
-// u-blox MAX-M10S reader: pumps UART bytes through the pure UBX parser and
-// publishes GPS_Info_t to TOPIC_GPS_INFO (CLAUDE.md §4, Core 0 Task 1).
+// ATGM336H (中科微电子 GPS+BD) reader: pumps UART bytes through the pure NMEA
+// GGA/RMC parser and publishes GPS_Info_t to TOPIC_GPS_INFO (CLAUDE.md §4,
+// Core 0 Task 1).
+//
+// ---------------------------------------------------------------------------
+// This is a substitute module, and it is a different chipset than the spec
+// ---------------------------------------------------------------------------
+// CLAUDE.md §2 specs a u-blox MAX-M10S, which speaks a binary UBX protocol --
+// see src/sensors/UbxParse.h and GPS_Reader.cpp's git history for that path.
+// The ATGM336H that actually arrived is not a u-blox part. It has no
+// documented way to switch to a binary protocol and leaves the factory
+// outputting plain NMEA-0183 text at 9600 baud, so this reader speaks NMEA
+// instead. If the MAX-M10S ever arrives, this file is the one to swap back,
+// not GPS_Info_t or anything downstream of TOPIC_GPS_INFO -- both parsers
+// fill the same struct.
 //
 // ---------------------------------------------------------------------------
 // Pin choice deviates from CLAUDE.md §2 on purpose
@@ -16,21 +29,24 @@
 // platformio.ini per board.
 // ---------------------------------------------------------------------------
 //
-// NOTE: no MAX-M10S has ever been attached to this project. The UBX decoding
-// is covered by test/host/test_ubx_parse.c, but the UART wiring, the baud rate
-// and the CFG-VALSET configuration below are unverified against real silicon.
+// NOTE: the NMEA decoding is covered by test/host/test_nmea_parse.c, but the
+// UART wiring and baud rate are unverified against real silicon -- no
+// ATGM336H has been wired in yet, only received.
 
-// Opens the UART and configures the receiver for UBX-only NAV-PVT output.
-// Call once from setup(), after DataCenter_Init().
+// Opens the UART for NMEA input. Call once from setup(), after
+// DataCenter_Init().
 void GPS_Init();
 
 // Spawns the Core 0 reader task. Preconditions: GPS_Init() has run.
 void GPS_StartReader();
 
-// True once a NAV-PVT with a valid fix has been seen. Cheap status for the UI
-// to distinguish "no module" from "module present, still acquiring".
+// True once a GGA sentence with a non-zero fix quality has been seen. Cheap
+// status for the UI to distinguish "no module" from "module present, still
+// acquiring".
 bool GPS_HasFix();
 
-// Number of NAV-PVT frames accepted so far. Zero after several seconds means
-// nothing is arriving: wrong pins, wrong baud, or the module never configured.
+// Number of GGA sentences accepted so far (checksum valid, decoded
+// successfully -- with or without a fix). Zero after several seconds means
+// nothing is arriving: wrong pins, wrong baud, or a module that is not
+// actually a GPS+BD talker at all.
 uint32_t GPS_FrameCount();
