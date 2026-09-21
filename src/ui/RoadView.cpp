@@ -159,7 +159,12 @@ const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
     {0x68737F, 2}, // minor      -- 4.0:1
     {0x8D98A5, 3}, // secondary  -- 5.2:1
     {0x4D93C4, 4}, // artery     -- 5.7:1
-    {0x27628F, 5}, // water      -- 3.0:1
+    // 4px, not 5. Water was the widest thing on the map and at this colour it
+    // became the most dominant feature on screen -- competing with the route,
+    // which is the one line that must win outright. Narrowed rather than
+    // darkened: it is still the strongest landmark, just no longer heavier
+    // than the thing the rider is following.
+    {0x27628F, 4}, // water      -- 3.0:1
 };
 
 // The MapView this layer belongs to. Its projection is the one that matters:
