@@ -255,6 +255,63 @@ static void test_reconnect_forgets_everything(void) {
     check_eq(t.rpm, 0, "and the reset cleared the last rpm");
 }
 
+static void test_a_long_stop_invalidates_the_baseline(void) {
+    printf("-- a stop longer than the clock can measure --\n");
+
+    /* The crank's event time only advances when the crank turns, and it wraps
+     * every 65536 ticks -- 64.0 seconds exactly. So a rider who stands at a
+     * light for longer than that resumes with a baseline whose distance in
+     * time is unknowable, and the 16-bit subtraction answers anyway.
+     *
+     * The answer is not obviously wrong, which is the whole problem. 65s of
+     * standing still leaves a residue of 1024 ticks, so the first revolution
+     * after it reads as a clean 60rpm -- past no sanity check, identical in
+     * every way to a real measurement, and a pure invention.
+     *
+     * CADENCE_MAX_RPM cannot catch this. It only rejects residues short enough
+     * to imply an absurd cadence, and a stop can land on any residue it likes. */
+    CadenceTracker_t t;
+    CadenceTracker_Reset(&t);
+    feed(&t, 0, 0, 0);
+    check_eq(feed(&t, 1, 683, 683), 90, "pedalling before the stop");
+
+    /* The sensor keeps notifying while the rider stands there, with its
+     * counters frozen. None of that advances the baseline -- which is exactly
+     * why the baseline is the thing that goes stale. */
+    check_eq(feed(&t, 1, 683, 3000), NO_UPDATE, "repeats while stopped say nothing new");
+    check_eq(feed(&t, 1, 683, 4000), 0, "and the idle timeout reaches zero");
+
+    /* 65 seconds after that last real crank event, one revolution. The event
+     * time has advanced 66560 ticks and wrapped, leaving 1024. */
+    const uint16_t resumed_ticks = (uint16_t)(683u + 66560u); /* wraps to 1707 */
+    check_eq(feed(&t, 2, resumed_ticks, 683 + 65000), NO_UPDATE,
+             "the first stroke after a 65s stop re-seeds rather than inventing 60rpm");
+    check_eq(t.rpm, 0, "and nothing was published over the zero");
+
+    /* Re-seeded, so the very next revolution is an ordinary measurement. One
+     * sample is the whole cost of the guard. */
+    check_eq(feed(&t, 3, (uint16_t)(resumed_ticks + 683), 683 + 65683), 90,
+             "the next stroke reads normally");
+}
+
+static void test_a_gap_inside_the_domain_is_still_arithmetic(void) {
+    printf("-- a stop the clock CAN measure --\n");
+
+    /* Just under the wrap the subtraction is exact, and one revolution in 59
+     * seconds really is about 1rpm. Slow, but measured rather than guessed, so
+     * the guard must not swallow it -- the threshold exists to reject the
+     * unknowable, not the unusual. */
+    CadenceTracker_t t;
+    CadenceTracker_Reset(&t);
+    feed(&t, 0, 0, 0);
+    check_eq(feed(&t, 1, 683, 683), 90, "pedalling before the stop");
+    check_eq(feed(&t, 1, 683, 4000), 0, "idle timeout reaches zero");
+
+    /* 59 seconds is 60416 ticks, which does not wrap past 683. */
+    check_eq(feed(&t, 2, (uint16_t)(683u + 60416u), 683 + 59000), 1,
+             "one revolution in 59 seconds is 1rpm, and it is real");
+}
+
 static void test_null_safety(void) {
     printf("-- null arguments --\n");
 
@@ -280,6 +337,8 @@ int main(void) {
     test_stopping_with_no_packets_at_all();
     test_implausible_intervals();
     test_reconnect_forgets_everything();
+    test_a_long_stop_invalidates_the_baseline();
+    test_a_gap_inside_the_domain_is_still_arithmetic();
     test_null_safety();
 
     printf("\n%d checks, %d failures\n", checks, failures);

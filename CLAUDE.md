@@ -101,6 +101,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     coasting. That is also why the supervisor republishes the current rpm once
     a second even when nothing changed: a rider holding a steady cadence
     produces no changes at all, and silence on that topic means "gone".
+  - **A stop longer than 64 seconds destroys the baseline, and the wrong
+    answer it produces looks right.** The crank event time advances only when
+    the crank turns and wraps every 65536 ticks, so a rider standing at a long
+    light resumes with a gap whose wrap count is unknowable -- and the 16-bit
+    subtraction answers anyway. 65s of standing still leaves a residue of 1024
+    ticks, so the first stroke back reads as a clean 60rpm: past every sanity
+    check, indistinguishable from a measurement, entirely invented.
+    `CADENCE_MAX_RPM` cannot catch it, because a stop can land on any residue
+    it likes. `CADENCE_BASELINE_MAX_GAP_MS` throws the baseline away instead,
+    at a cost of exactly one sample. The same guard covers a live link that
+    simply goes quiet for a minute, which is why there is no separate check
+    for that. `last_sample_ms` tracks the last sample that *advanced* the
+    event time, not the last notification -- a sensor notifies on a timer
+    whether or not anyone is pedalling.
+  - **The rejected sample still commits its counters, and that is correct.**
+    An external review called this a state-machine bug and proposed
+    validate-then-commit. It is backwards: the counters are absolute and
+    free-running, so what was anomalous is the *interval*, not the packet.
+    Committing means the next delta is measured from the most recent real
+    crank event and recovers in one notification; not committing measures from
+    a baseline that is now even older, and the tracker can stick rejecting for
+    ever. `test_csc_parse.c` pins the recovery ("and the next good interval
+    still reads").
   - ⚠️ **A dual-mode sensor decides speed-or-cadence at its end, and a
     firmware that only reads cadence cannot tell you so.** Verified on the
     bench 2026-09-20: the sensor connected, subscribed, notified 1,500 times,
@@ -245,6 +268,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     `Page_Dashboard` drops a turn it has not heard about for 30s, so publishing
     only on change blanks the panel for a rider stopped at a light -- which is
     exactly when they are looking at it.
+  - **Maneuver order is checked once, when the route lands.**
+    `RouteFollow_NextManeuver` scans forwards and takes the first entry at or
+    beyond the rider, so an out-of-order array does not fail loudly -- it hands
+    back a turn already ridden past, every second, for the rest of the route.
+    `RouteFollow_ManeuversOrdered()` turns the assumption into a fact in
+    `FinishTransfer()`, and a route that fails it is refused rather than
+    navigated badly in silence. Equal distances are allowed: two instructions
+    at one coordinate is a real thing a router emits, and only strict
+    inversion breaks the scan.
+  - **Two publishers share `TOPIC_NAV_TBT`, so the onboard one re-checks
+    before it writes.** `NavRoute_Tick` decides under the route lock and
+    publishes with it released -- deliberately, so DataCenter's subscribers do
+    not run with two buses' locks held -- and in that gap NimBLE's host task
+    can publish a live turn that this one then overwrites. `s_live_seq` is
+    compared across the gap and the stale publish is dropped. A millisecond
+    stamp cannot settle it; two events in one millisecond read as one. The
+    keepalive bookkeeping is deliberately *not* rolled back: the phone owns the
+    panel for the next `TBT_LIVE_GRACE_MS` anyway, and if it falls silent again
+    the keepalive is long overdue, so the onboard path resumes on the next tick
+    rather than waiting.
 
 ## 6. Open-Source Reference Repositories (`deps/`)
 Vendored as git submodules, reference only — nothing under `deps/` is a build

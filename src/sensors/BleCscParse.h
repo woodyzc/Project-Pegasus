@@ -84,8 +84,33 @@ bool Csc_ParseMeasurement(const uint8_t *data, size_t length, CscMeasurement_t *
 // the cranks.
 #define CADENCE_IDLE_MS 3000
 
+// How long the baseline may go without advancing before it is thrown away
+// rather than subtracted from.
+//
+// The event time wraps every 65536 ticks, which is 64.0 seconds, and the
+// crank's event time only advances when the crank turns. So a rider who stops
+// at a light for longer than that starts again with a baseline whose true
+// distance in time is unknowable: 64.5 seconds of standing still decodes as
+// half a second, one revolution across it reads as 120rpm, and CADENCE_MAX_RPM
+// does not reject it because 120rpm is a perfectly ordinary cadence. It is a
+// fabricated number that looks exactly like a real one, which is the failure
+// this module exists to prevent.
+//
+// 60s rather than 64 leaves margin for the difference between the sensor's
+// clock and ours. The cost of firing is one sample: the packet re-seeds the
+// baseline and says nothing, and the next one is a normal reading.
+//
+// This also covers a live link that simply goes quiet for a minute -- same
+// ambiguity, same answer -- so there is no separate check for it.
+#define CADENCE_BASELINE_MAX_GAP_MS 60000
+
 typedef struct {
     // The previous accepted sample, and when it arrived by our clock.
+    //
+    // last_sample_ms tracks the last sample that ADVANCED the crank event
+    // time, not the last notification: a sensor notifies on a timer whether
+    // or not the rider is pedalling, so the arrival of a packet says nothing
+    // about how much time the counters below have had to wrap in.
     uint16_t last_revs;
     uint16_t last_event_time;
     uint32_t last_sample_ms;

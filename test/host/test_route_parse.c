@@ -524,6 +524,51 @@ static void test_next_maneuver(void) {
           "past the last maneuver there is nothing left");
 }
 
+static void test_maneuver_ordering(void) {
+    enum { POINTS = 2, MANEUVERS = 3 };
+    static uint8_t blob[POINTS * ROUTE_POINT_SIZE + MANEUVERS * ROUTE_MANEUVER_SIZE];
+    RouteManifest_t m;
+    memset(&m, 0, sizeof(m));
+    m.point_count = POINTS;
+    m.maneuver_count = MANEUVERS;
+
+    put_point(blob, 0, 390000000, -770000000);
+    put_point(blob, 1, 390000000, -769900000);
+
+    put_maneuver(blob, POINTS, 0, 2, 0, 100, "First St");
+    put_maneuver(blob, POINTS, 1, 3, 0, 500, "Second St");
+    put_maneuver(blob, POINTS, 2, 10, 0, 900, "Destination");
+    check(RouteFollow_ManeuversOrdered(blob, &m), "an ascending route is ordered");
+
+    /* Two instructions at one coordinate is a real thing a router emits -- a
+     * turn and an immediate arrival, say -- and the linear scan handles it.
+     * Only strict inversion breaks it, so only strict inversion is rejected. */
+    put_maneuver(blob, POINTS, 1, 3, 0, 100, "Second St");
+    check(RouteFollow_ManeuversOrdered(blob, &m), "equal distances are allowed");
+
+    /* The failure this exists for. RouteFollow_NextManeuver scans forwards and
+     * takes the first entry at or beyond the rider, so an inverted array does
+     * not error -- it hands back a turn already ridden past, and keeps doing
+     * it. The check below shows the wrong answer the caller would otherwise
+     * act on. */
+    put_maneuver(blob, POINTS, 1, 3, 0, 50, "Second St");
+    check(!RouteFollow_ManeuversOrdered(blob, &m), "a maneuver going backwards is rejected");
+
+    RouteManeuver_t mv;
+    uint32_t to = 0;
+    check(RouteFollow_NextManeuver(blob, &m, 200, &mv, &to),
+          "the unchecked scan answers anyway");
+    check(strcmp(mv.street_name, "Destination") == 0,
+          "and skips the maneuver it was standing before");
+
+    /* No maneuvers at all is a straight shot to an arrival, not a fault. */
+    m.maneuver_count = 0;
+    check(RouteFollow_ManeuversOrdered(blob, &m), "a route with no maneuvers is ordered");
+
+    check(!RouteFollow_ManeuversOrdered(NULL, &m), "null blob rejected");
+    check(!RouteFollow_ManeuversOrdered(blob, NULL), "null manifest rejected");
+}
+
 int main(void) {
     test_chunk_header();
     test_manifest();
@@ -535,6 +580,7 @@ int main(void) {
     test_snap_tracks_through_turnaround();
     test_snap_hint_cannot_override_geometry();
     test_next_maneuver();
+    test_maneuver_ordering();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

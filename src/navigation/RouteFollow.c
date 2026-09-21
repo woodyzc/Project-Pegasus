@@ -234,6 +234,29 @@ bool RouteFollow_SnapFrom(const uint8_t *blob,
     return true;
 }
 
+bool RouteFollow_ManeuversOrdered(const uint8_t *blob, const RouteManifest_t *manifest) {
+    if (blob == NULL || manifest == NULL) {
+        return false;
+    }
+
+    uint32_t previous = 0;
+    for (uint16_t i = 0; i < manifest->maneuver_count; i++) {
+        RouteManeuver_t m;
+        if (!Route_Maneuver(blob, manifest, i, &m)) {
+            // Unreadable is not ordered. The caller's only sensible response
+            // to either is the same one.
+            return false;
+        }
+        if (m.distance_along_route_m < previous) {
+            return false;
+        }
+        previous = m.distance_along_route_m;
+    }
+    // No maneuvers is vacuously ordered, and a legitimate route: a straight
+    // shot has nothing but an arrival.
+    return true;
+}
+
 bool RouteFollow_NextManeuver(const uint8_t *blob,
                               const RouteManifest_t *manifest,
                               uint32_t distance_along_m,
