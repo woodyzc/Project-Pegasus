@@ -115,12 +115,28 @@ bool RouteFollow_SnapFrom(const uint8_t *blob,
                           uint32_t hint_along_m,
                           RouteFix_t *out);
 
+// True when the blob's maneuvers are in the ascending distance order every
+// function below depends on. Check it once, when a route finishes arriving.
+//
+// The linear scan in RouteFollow_NextManeuver returns the FIRST entry at or
+// beyond the rider, so an out-of-order array does not fail loudly -- it
+// silently returns a maneuver the rider has already ridden past, for the rest
+// of the route, with a confident distance attached. The phone encoder emits
+// them in order and Route_ParseManifest has no opinion on it, so this is the
+// only place the assumption can be turned into a fact. It is O(maneuver_count)
+// once per route against a ceiling of 256.
+//
+// Equal distances are allowed: two instructions at one coordinate is a real
+// thing a router emits, and it is only strict inversion that breaks the scan.
+bool RouteFollow_ManeuversOrdered(const uint8_t *blob, const RouteManifest_t *manifest);
+
 // The first maneuver at or beyond `distance_along_m`, and how far away it is.
 // False when the route has no maneuvers left, which is the arrival case.
 //
-// Maneuvers must be in ascending distance order; the phone encoder guarantees
-// that and Route_ParseManifest does not check it, because a route that
-// violated it would still navigate, just badly.
+// Maneuvers must be in ascending distance order. The phone encoder guarantees
+// that, Route_ParseManifest does not check it, and NavRoute refuses a route
+// that fails RouteFollow_ManeuversOrdered() above rather than navigating it
+// badly in silence.
 bool RouteFollow_NextManeuver(const uint8_t *blob,
                               const RouteManifest_t *manifest,
                               uint32_t distance_along_m,

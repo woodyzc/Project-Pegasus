@@ -16,11 +16,152 @@ constexpr uint32_t COLOR_MAP_BG = 0x0B1116;
 // where amber reads as a mark left behind -- which is what it is.
 constexpr uint32_t COLOR_TRAIL_DONE = 0xFFD166;
 constexpr uint32_t COLOR_TRAIL_AHEAD = 0x7CE38B;
+
 constexpr uint32_t COLOR_MARKER = 0x61DAFB;
 
-// Half-height of the heading triangle. Big enough to read the direction at a
-// glance, small enough not to hide the trail underneath it.
-constexpr double MARKER_RADIUS = 7.0;
+// Outlined in the map's own background colour, so the marker keeps a hard
+// edge wherever it sits. It is drawn ON TOP of the route and the roads, and
+// every one of those is light -- white-grey streets, green and amber trail --
+// so a cyan triangle laid directly on them loses its shape at exactly the
+// moment it matters, which is when the rider is on the line they are
+// following. Dark separates it from all of them at once. Over bare map this
+// outline is invisible, which is the correct behaviour rather than a flaw.
+constexpr uint32_t COLOR_MARKER_EDGE = COLOR_MAP_BG;
+
+// Half-height of the heading triangle: ~22px tall and ~15px wide.
+//
+// 14, doubled from 7. At 7 it was 11px tall and read as a speck once the
+// roads around it were widened for legibility -- the thing that says WHERE
+// THE RIDER IS was the faintest mark on its own map. Every head unit worth
+// copying draws this big; the reference that prompted the change gives it
+// roughly a tenth of the map's height, which is what this is.
+//
+// It is still small enough not to hide the trail: the triangle covers about
+// 165 square px of a 240x184 tile, and it is the one thing allowed to sit on
+// top of the route because it is the rider's own position.
+constexpr double MARKER_RADIUS = 14.0;
+
+// The triangle is FILLED, and that needs a draw callback rather than a widget.
+//
+// It used to be an lv_line tracing the three corners, which looked solid only
+// because it was 11px tall and stroked 3px -- the stroke very nearly met in
+// the middle. Doubling the size turns that same object into a wireframe
+// outline, so "make it bigger" could not be done by changing one number.
+// LVGL 8 has no filled-polygon primitive outside lv_canvas, and a canvas
+// would mean a per-view pixel buffer redrawn on every fix for a shape that is
+// three points; scanline-filling it here costs ~22 rect draws at 1Hz and no
+// memory at all. RoadView draws its whole road network this way for the same
+// reason.
+void MarkerDrawCb(lv_event_t *e) {
+    lv_obj_t *obj = lv_event_get_target(e);
+    MapView_t *view = (MapView_t *)lv_obj_get_user_data(obj);
+    if (view == nullptr) {
+        return;
+    }
+    lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
+
+    lv_area_t area;
+    lv_obj_get_coords(obj, &area);
+
+    // marker_points[0..2] are the corners; [3] repeats [0] to close the
+    // outline stroke below.
+    const lv_point_t *p = view->marker_points;
+
+    lv_coord_t min_y = p[0].y;
+    lv_coord_t max_y = p[0].y;
+    for (int i = 1; i < 3; i++) {
+        if (p[i].y < min_y) min_y = p[i].y;
+        if (p[i].y > max_y) max_y = p[i].y;
+    }
+
+    // Rects rather than 1px lines: a horizontal line is anti-aliased at both
+    // ends, so a stack of them builds a shape with soft ragged sides. A rect
+    // of one row is exact, and the outline below supplies the smooth edge.
+    lv_draw_rect_dsc_t fill;
+    lv_draw_rect_dsc_init(&fill);
+    fill.bg_color = lv_color_hex(COLOR_MARKER);
+    fill.bg_opa = LV_OPA_COVER;
+    fill.border_width = 0;
+    fill.radius = 0;
+
+    for (lv_coord_t y = min_y; y <= max_y; y++) {
+        // Where this row crosses each edge. A triangle is convex, so the
+        // filled span is simply the leftmost crossing to the rightmost.
+        double xs[3];
+        int n = 0;
+        for (int i = 0; i < 3; i++) {
+            const lv_point_t a = p[i];
+            const lv_point_t b = p[(i + 1) % 3];
+            if (a.y == b.y) {
+                continue; // horizontal edge: the other two already span it
+            }
+            const lv_coord_t lo_y = a.y < b.y ? a.y : b.y;
+            const lv_coord_t hi_y = a.y < b.y ? b.y : a.y;
+            if (y < lo_y || y > hi_y) {
+                continue;
+            }
+            xs[n++] = (double)a.x + (double)(b.x - a.x) * (double)(y - a.y) /
+                                        (double)(b.y - a.y);
+        }
+        if (n < 2) {
+            continue;
+        }
+        double lo = xs[0];
+        double hi = xs[0];
+        for (int i = 1; i < n; i++) {
+            if (xs[i] < lo) lo = xs[i];
+            if (xs[i] > hi) hi = xs[i];
+        }
+        lv_area_t row;
+        row.x1 = (lv_coord_t)(area.x1 + lo);
+        row.x2 = (lv_coord_t)(area.x1 + hi);
+        row.y1 = (lv_coord_t)(area.y1 + y);
+        row.y2 = row.y1;
+        if (row.x2 < row.x1) {
+            continue;
+        }
+        lv_draw_rect(ctx, &fill, &row);
+    }
+
+    // The border last, over the fill, so it trims the stepped edge the
+    // scanlines leave and separates the marker from whatever it is sitting on.
+    //
+    // Drawn around a triangle pushed OUT from the centroid, not around the
+    // filled one. A stroke is centred on its path, so an outline traced on the
+    // fill's own edge spends half its width eating the fill -- and because
+    // this border is the background colour, that does not read as a border
+    // over bare map, it just makes the marker smaller. Measured: it cost 4px
+    // of width and 6px of height, giving back most of the enlargement this
+    // change exists to deliver. Pushing the path outward puts the whole stroke
+    // outside the silhouette, so the cyan keeps its full size and the border
+    // is added to it rather than subtracted from it.
+    //
+    // 1.15 leaves the stroke's inner edge a fraction inside the fill, which is
+    // deliberate: exactly abutting would let the background show through the
+    // seam on some rotations.
+    const double EDGE_PUSH = 1.15;
+    const double gx = (p[0].x + p[1].x + p[2].x) / 3.0;
+    const double gy = (p[0].y + p[1].y + p[2].y) / 3.0;
+    lv_point_t out[4];
+    for (int i = 0; i < 3; i++) {
+        out[i].x = (lv_coord_t)(gx + (p[i].x - gx) * EDGE_PUSH);
+        out[i].y = (lv_coord_t)(gy + (p[i].y - gy) * EDGE_PUSH);
+    }
+    out[3] = out[0];
+
+    lv_draw_line_dsc_t edge;
+    lv_draw_line_dsc_init(&edge);
+    edge.color = lv_color_hex(COLOR_MARKER_EDGE);
+    edge.width = 2;
+    edge.round_start = 1;
+    edge.round_end = 1;
+    for (int i = 0; i < 3; i++) {
+        lv_point_t a = {(lv_coord_t)(area.x1 + out[i].x), (lv_coord_t)(area.y1 + out[i].y)};
+        lv_point_t b = {(lv_coord_t)(area.x1 + out[i + 1].x),
+                        (lv_coord_t)(area.y1 + out[i + 1].y)};
+        lv_draw_line(ctx, &edge, &a, &b);
+    }
+}
 
 } // namespace
 
@@ -63,27 +204,44 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // by the one shared point, the ridden colour wins and the join is clean.
     view->trail = lv_line_create(view->container);
     lv_obj_set_style_line_color(view->trail, lv_color_hex(COLOR_TRAIL_AHEAD), 0);
-    // 4px, not 2. The roads under it are drawn 1 to 4px wide, and a route the
-    // same weight as the streets it crosses is a route the eye has to hunt
-    // for. This is the one line on the map that is not scenery.
-    lv_obj_set_style_line_width(view->trail, 4, 0);
+    // 6px, and it tracks the roads rather than being chosen on its own. The
+    // roads under it are drawn 2 to 5px wide, and a route the same weight as
+    // the streets it crosses is a route the eye has to hunt for. This is the
+    // one line on the map that is not scenery.
+    //
+    // It was 4 while the roads were 1 to 4. Widening them for legibility
+    // without widening this would have quietly handed the top of the
+    // hierarchy to the rivers -- the fix for one problem creating another,
+    // one file away, with nothing to catch it but looking at the screen.
+    lv_obj_set_style_line_width(view->trail, 6, 0);
     lv_obj_set_style_line_rounded(view->trail, true, 0);
     lv_obj_set_pos(view->trail, 0, 0);
 
     view->trail_done = lv_line_create(view->container);
     lv_obj_set_style_line_color(view->trail_done, lv_color_hex(COLOR_TRAIL_DONE), 0);
-    lv_obj_set_style_line_width(view->trail_done, 4, 0);
+    lv_obj_set_style_line_width(view->trail_done, 6, 0);
     lv_obj_set_style_line_rounded(view->trail_done, true, 0);
     lv_obj_set_pos(view->trail_done, 0, 0);
 
     // A triangle rather than a dot: the rider's heading is already published
     // and carries real information at a junction -- which way am I pointing
     // relative to the line I am supposed to be following.
-    view->marker = lv_line_create(view->container);
-    lv_obj_set_style_line_color(view->marker, lv_color_hex(COLOR_MARKER), 0);
-    lv_obj_set_style_line_width(view->marker, 2, 0);
-    lv_obj_set_style_line_rounded(view->marker, true, 0);
+    view->marker = lv_obj_create(view->container);
     lv_obj_set_pos(view->marker, 0, 0);
+    lv_obj_set_size(view->marker, w, h);
+    lv_obj_set_style_bg_opa(view->marker, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(view->marker, 0, 0);
+    lv_obj_set_style_pad_all(view->marker, 0, 0);
+    lv_obj_clear_flag(view->marker, LV_OBJ_FLAG_SCROLLABLE);
+    // Not clickable. lv_obj_create sets LV_OBJ_FLAG_CLICKABLE by default and
+    // this object covers the whole tile, so leaving it set would swallow every
+    // touch on the map -- the dashboard's navigation tile would stop opening
+    // the ROUTE page, and its zoom buttons would stop answering. The lv_line
+    // this replaces cleared the flag in its own constructor, so the hazard
+    // arrives with the switch to lv_obj rather than being visible in the diff.
+    lv_obj_clear_flag(view->marker, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(view->marker, view);
+    lv_obj_add_event_cb(view->marker, MarkerDrawCb, LV_EVENT_DRAW_MAIN, nullptr);
     lv_obj_add_flag(view->marker, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -170,7 +328,10 @@ void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
         view->marker_points[2].y = (lv_coord_t)(cy - MARKER_RADIUS * 0.8 * cos(rad - back));
         view->marker_points[3] = view->marker_points[0]; // close the triangle
 
-        lv_line_set_points(view->marker, view->marker_points, 4);
+        // The points live in the struct and the callback reads them, so the
+        // object has to be told its content changed -- there is no
+        // lv_line_set_points to do it here any more.
+        lv_obj_invalidate(view->marker);
         lv_obj_clear_flag(view->marker, LV_OBJ_FLAG_HIDDEN);
     }
 

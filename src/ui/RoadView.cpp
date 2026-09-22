@@ -45,17 +45,49 @@ const double ROAD_MAX_MPP[ROAD_CLASS_COUNT] = {
 // redraw", it is the board feeling broken. A dense extract reaches that
 // ceiling on every frame, which is what made the Arlington map unusable while
 // Germantown was fine: same way count, three times the arteries.
-constexpr uint32_t ROAD_MAX_SEGMENTS = 1400;
+//
+// 900, not 1400, because widening the roads changed what a segment COSTS and
+// this number is a frame-time ceiling denominated in segments. 1400 was
+// derived from a measured ~51us; the panel now reports 88ms of draw for 532
+// segments, so the calibration behind 1400 no longer describes anything. The
+// constant did not become wrong on its own -- it was invalidated one file
+// away, by a change that never touched it.
+//
+// 900 is a BACKSTOP, and measurement says it is nothing more. Three views on
+// the panel: 532 segments at 165us each (88ms, close in), 460 at 89us (41ms,
+// 1.9km across), both far under this cap. Nothing observed comes near it.
+//
+// It was set expecting count x cost to multiply freely, and they do not --
+// the two are anti-correlated, which is the useful thing learnt here. Long
+// expensive segments only occur zoomed IN, where decimation leaves one
+// screen-crossing line per way and few ways are in view; high segment counts
+// only occur zoomed OUT, where every segment is short. The product is
+// self-limiting, so frame cost is really bounded by ink -- screen area times
+// overdraw -- which is why views as different as those two land in the same
+// 41-88ms band.
+//
+// Do not read a frame-time ceiling off this number, then. If a frame ever
+// does get slow, the thing to measure is coverage, not count; and density is
+// a property of WHERE the rider is, not of the zoom -- the 1.9km view above
+// is river valley and parkland and holds half the ways of a town centre at
+// a quarter the scale.
+constexpr uint32_t ROAD_MAX_SEGMENTS = 900;
 
 // And a share per class, because the ceiling alone starves the wrong ones.
 // The passes run in painter's order -- water under roads -- so a global budget
 // spent by the time the artery pass runs leaves the map without the roads a
 // rider actually navigates by. Indexed by ROAD_CLASS_*.
+//
+// Scaled with the ceiling above rather than left alone: these oversubscribe it
+// by half (1360 against 900, as 2100 did against 1400) so a class can use
+// another's slack, and holding them fixed while the ceiling fell would have
+// quietly raised minor streets' share of a smaller budget -- starving the
+// arteries this table exists to protect.
 const uint32_t ROAD_CLASS_SEGMENTS[ROAD_CLASS_COUNT] = {
-    400,  // minor
-    400,  // secondary
-    900,  // artery  -- the most, and drawn last, so it needs protecting
-    400,  // water
+    260,  // minor
+    260,  // secondary
+    580,  // artery  -- the most, and drawn last, so it needs protecting
+    260,  // water
 };
 
 // Ways that can be on screen at once. Static rather than on the stack: this
@@ -102,19 +134,37 @@ inline uint8_t OutCode(const lv_point_t *p, const lv_area_t *a) {
     return code;
 }
 
+// Colours are set against COLOR_MAP_BG (0x0B1116), and they are set by
+// contrast ratio rather than by eye, because "looks fine on the bench" is a
+// dim room at 30cm and the panel is read in sunlight at arm's length.
+//
+// What was here before was too dark to see. Minor streets at 0x333A42 are
+// 1.65:1 against that background and water at 0x1C3E5C is 1.73:1 -- below the
+// 3:1 floor for any graphical object, so on a transflective panel outdoors
+// they were a texture rather than a map. The ramp now runs 4.0 / 5.2 / 5.7 /
+// 3.0, which keeps the class hierarchy legible as brightness while leaving
+// every road well under the trail: COLOR_TRAIL_AHEAD is ~11:1, so the one
+// line that is not scenery still wins the eye outright.
+//
+// Widths are up one step across the board for the same reason. A 1px road on
+// a 240px panel is a hairline that anti-aliasing then halves the contrast of
+// again -- the two faults compound, which is why the fix has to be both.
+//
+// Arteries stay blue and stay the lightest road, because they are the thing
+// you navigate by; the earlier note about not using amber still holds, since
+// amber is the ridden trail's colour. Water is deliberately the most
+// saturated and the darkest of the four despite being the widest: it is a
+// landmark to recognise, not a route to follow.
 const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
-    {0x333A42, 1}, // minor
-    {0x4E5760, 2}, // secondary
-    // Arteries in blue, not the amber they were. Amber is the trail's own
-    // colour family now that the ridden part of it is yellow, and a road
-    // sharing that family is a road a rider mistakes for the route.
-    //
-    // Muted rather than the bright blue this first was. Roads are the backdrop
-    // the route is read against, and a bright artery pulled the eye off the
-    // one line on the map that matters. Still a step lighter than the water
-    // below it, which is darker again and drawn thicker.
-    {0x2F6389, 3}, // artery
-    {0x1C3E5C, 4}, // water
+    {0x68737F, 2}, // minor      -- 4.0:1
+    {0x8D98A5, 3}, // secondary  -- 5.2:1
+    {0x4D93C4, 4}, // artery     -- 5.7:1
+    // 4px, not 5. Water was the widest thing on the map and at this colour it
+    // became the most dominant feature on screen -- competing with the route,
+    // which is the one line that must win outright. Narrowed rather than
+    // darkened: it is still the strongest landmark, just no longer heavier
+    // than the thing the rider is following.
+    {0x27628F, 4}, // water      -- 3.0:1
 };
 
 // The MapView this layer belongs to. Its projection is the one that matters:

@@ -51,6 +51,16 @@ bool CadenceTracker_Update(CadenceTracker_t *t, const CscMeasurement_t *m, uint3
         return false;
     }
 
+    // A baseline older than the event time's own 64-second domain cannot be
+    // subtracted from -- the wrap count is unknown, so the difference is a
+    // guess that looks like a measurement. Drop it and re-seed below. See
+    // CADENCE_BASELINE_MAX_GAP_MS for why the rejected rpm is not enough on
+    // its own: the fabricated value is usually plausible.
+    if (t->have_last &&
+        (uint32_t)(now_ms - t->last_sample_ms) >= CADENCE_BASELINE_MAX_GAP_MS) {
+        t->have_last = false;
+    }
+
     if (!t->have_last) {
         t->last_revs = m->crank_revs;
         t->last_event_time = m->crank_event_time;

@@ -73,6 +73,14 @@ bool s_have_fix = false;
 uint32_t s_last_live_ms = 0;
 bool s_ever_live = false;
 
+// Bumped on every live directive from the phone. NavRoute_Tick decides to
+// publish under the lock and then publishes with it released, so the phone's
+// NimBLE host task can slip a fresh turn in between the two and lose the race
+// to the onboard turn it just superseded -- both write TOPIC_NAV_TBT and the
+// last writer wins. A stamp in milliseconds cannot settle that: two events in
+// one millisecond read as one. A counter can.
+uint32_t s_live_seq = 0;
+
 // What we last published, so an unchanged directive is not republished at 1Hz.
 // DataCenter wakes subscribers on publish, and a dashboard relayout every
 // second for an unchanged turn is wasted frame time.
@@ -212,7 +220,15 @@ void FinishTransfer() {
     // A route whose points are all identical measures zero and cannot be
     // navigated -- treat it as a failed transfer rather than dividing by it
     // later.
-    s_loaded = s_length_m > 0;
+    //
+    // Maneuver order is checked here for the same reason and with the same
+    // answer. RouteFollow_NextManeuver scans linearly and takes the first
+    // entry at or beyond the rider, so an inverted array does not fail: it
+    // hands back a turn already ridden past, every second, for the whole
+    // route. Refusing the route shows the rider nothing, which is honest;
+    // accepting it shows them a wrong turn, which is not. Once per transfer,
+    // 256 entries at most.
+    s_loaded = s_length_m > 0 && RouteFollow_ManeuversOrdered(s_blob, &s_manifest);
 }
 
 } // namespace
@@ -328,6 +344,7 @@ void NavRoute_NoteLiveDirective() {
     RouteLock lock;
     s_last_live_ms = millis();
     s_ever_live = true;
+    s_live_seq++;
 }
 
 void NavRoute_NotePhoneGone() {
@@ -410,7 +427,8 @@ bool NavRoute_EnrichDirective(TBT_Directive_t *directive) {
 // publishing runs every subscriber's callback synchronously, on this task, and
 // holding two buses' locks at once is how a deadlock gets built by accident.
 // See the LOCK ORDER note at the top of this file.
-static bool TickLocked(uint32_t now_ms, TBT_Directive_t *out) {
+static bool TickLocked(uint32_t now_ms, TBT_Directive_t *out, uint32_t *out_live_seq) {
+    *out_live_seq = s_live_seq;
     if (!s_loaded) {
         return false;
     }
@@ -526,11 +544,38 @@ static bool TickLocked(uint32_t now_ms, TBT_Directive_t *out) {
 void NavRoute_Tick(uint32_t now_ms) {
     TBT_Directive_t directive;
     bool publish = false;
+    uint32_t live_seq = 0;
     {
         RouteLock lock;
-        publish = TickLocked(now_ms, &directive);
+        publish = TickLocked(now_ms, &directive, &live_seq);
     }
-    if (publish) {
-        DataCenter_Publish(TOPIC_NAV_TBT, &directive);
+    if (!publish) {
+        return;
     }
+
+    // Did the phone speak while the lock was down? TickLocked found it silent
+    // past the grace period, decided the head unit should navigate, and then
+    // released the lock so that DataCenter_Publish below does not run every
+    // subscriber's callback with this module's lock held. That gap is short
+    // and it is not empty: a live turn arriving in it is published by NimBLE's
+    // host task, and if this publish lands afterwards the rider is shown the
+    // onboard turn that the phone's arrival had just superseded.
+    //
+    // It self-corrects on the phone's next frame, so this is a flicker at the
+    // handover rather than a lasting wrong turn -- but the handover is exactly
+    // when the rider looks down to see who is navigating.
+    //
+    // Dropping the publish rather than retrying, and deliberately not rolling
+    // back the keepalive bookkeeping TickLocked just wrote: the phone now owns
+    // the panel for the next TBT_LIVE_GRACE_MS anyway, and if it falls silent
+    // again the keepalive is long past due by then, so the onboard path
+    // resumes on the very next tick rather than waiting.
+    {
+        RouteLock lock;
+        if (s_live_seq != live_seq) {
+            return;
+        }
+    }
+
+    DataCenter_Publish(TOPIC_NAV_TBT, &directive);
 }
