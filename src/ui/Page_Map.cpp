@@ -6,6 +6,7 @@
 #include "../navigation/GpxTrack.h"
 #include "../navigation/MapProject.h"
 #include "../navigation/RoadMap.h"
+#include "../sensors/GPS_Reader.h"
 #include "../system/DataCenter.h"
 #include "../system/PageManager/PageManager.h"
 #include "MapView.h"
@@ -27,6 +28,7 @@ constexpr uint32_t COLOR_CAPTION = 0x93A4B8;
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;
 constexpr uint32_t COLOR_PANEL = 0x18232E;
+constexpr uint32_t COLOR_WARN = 0xFFD166;   // same amber as the dashboard's
 
 constexpr lv_coord_t MAP_X = 0;
 constexpr lv_coord_t MAP_Y = 36;
@@ -78,6 +80,62 @@ void UpdateScale() {
         lv_label_set_text_fmt(s_scale_label, "%.1f km across", across / 1000.0);
     } else {
         lv_label_set_text_fmt(s_scale_label, "%d m across", (int)across);
+    }
+}
+
+// The status corner, and the only place on the panel that can tell a GNSS
+// wiring mistake from a cold start.
+//
+// "Waiting for fix" could not: it read identically for a correctly wired
+// module still acquiring and for one connected to nothing, and serial is
+// unusable on the dev host (CLAUDE.md §8), so there was nowhere else to look.
+// GPS_FrameCount() counts GGA sentences that passed checksum, so any non-zero
+// value proves the pins, the baud rate and the module itself, and leaves only
+// the sky to wait for. Zero after a few seconds means bytes are not arriving
+// at all.
+//
+// Precedence here is deliberate, because one 15-character corner cannot hold
+// two facts (the centred "ROUTE" title is what caps the width):
+//   1. no card at all -- a hardware fault that also defeats this page's whole
+//      purpose, so it outranks everything;
+//   2. a fix -- with its source, because during GNSS bring-up a phone fix on
+//      this same topic would otherwise read as the receiver working;
+//   3. no bytes -- the actionable one;
+//   4. bytes but no fix -- acquiring, with the count as proof of life.
+// "No .gpx on card" used to live here and lost its slot to (3): an empty
+// route picker one tap away says the same thing, and a missing card still
+// reports itself through (1).
+void UpdateStatusLabel() {
+    if (s_status_label == nullptr) {
+        return;
+    }
+
+    if (GpxTrack_PointCount() == 0 && !GpxTrack_CardMounted()) {
+        lv_label_set_text(s_status_label, "No SD card");
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_WARN), 0);
+        return;
+    }
+
+    GPS_Info_t gps;
+    const bool have = DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps));
+
+    if (have && gps.fix_valid) {
+        if (gps.from_module) {
+            lv_label_set_text_fmt(s_status_label, "%d sats", (int)gps.num_sv);
+        } else {
+            lv_label_set_text_fmt(s_status_label, "%d sats phone", (int)gps.num_sv);
+        }
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_ACCENT), 0);
+        return;
+    }
+
+    const uint32_t frames = GPS_FrameCount();
+    if (frames == 0) {
+        lv_label_set_text(s_status_label, "No GNSS data");
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_WARN), 0);
+    } else {
+        lv_label_set_text_fmt(s_status_label, "Acquiring %u", (unsigned)frames);
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
     }
 }
 
@@ -144,6 +202,15 @@ void OnZoomClicked(lv_event_t *e) {
 void RefreshTimerCallback(lv_timer_t *timer) {
     (void)timer;
 
+    // Every tick, and deliberately ahead of the dirty gate below: a module on
+    // the wrong pins publishes NOTHING -- GPS_Reader only publishes once a GGA
+    // has decoded -- so s_gps_dirty stays false for ever and an early return
+    // would leave the corner reading whatever onViewLoad wrote. Gating the
+    // "no bytes are arriving" diagnostic on bytes arriving is the bug this
+    // label was added to fix, and it is CLAUDE.md §8's rule about blanking a
+    // label rather than skipping the write, one step further out.
+    UpdateStatusLabel();
+
     if (!s_gps_dirty) {
         return;
     }
@@ -159,8 +226,6 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         // meaningless without a fix, and MapView hides it.
         MapView_SetPosition(&s_view, &gps);
         RoadView_Refresh();
-        lv_label_set_text(s_status_label, "Waiting for fix");
-        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
         return;
     }
 
@@ -171,8 +236,6 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     // in another file, it is invisible from here, and it would take the roads
     // away the moment the dashboard stopped being the page below.
     RoadView_Refresh();
-    lv_label_set_text_fmt(s_status_label, "%d sats", (int)gps.num_sv);
-    lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_ACCENT), 0);
     UpdateScale();
 }
 
@@ -530,13 +593,14 @@ void PageMap::onViewLoad() {
         }
         RoadView_Refresh();
         UpdateScale();
-    } else if (s_status_label != nullptr) {
-        // The status corner rather than a line of its own: with no trail there
-        // is no scale and no satellite count to show either, so the corner is
-        // free and is already where this page says what it knows.
-        lv_label_set_text(s_status_label,
-                          GpxTrack_CardMounted() ? "No .gpx on card" : "No SD card");
     }
+
+    // The corner's first text, rather than leaving the creation placeholder up
+    // for the 500ms until the timer's first tick. UpdateStatusLabel owns every
+    // message in it from here on, card state included, so that a page cached
+    // for the life of the boot (CLAUDE.md §8) cannot keep showing what was
+    // true at Push().
+    UpdateStatusLabel();
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
     s_refresh_timer = lv_timer_create(RefreshTimerCallback, 500, nullptr);
