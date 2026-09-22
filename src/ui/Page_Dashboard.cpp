@@ -371,6 +371,20 @@ uint32_t s_tbt_last_ms = 0;
 uint32_t s_hr_last_ms = 0;
 uint32_t s_cadence_last_ms = 0;
 lv_obj_t *s_battery_label = nullptr;
+
+// Satellite count, in the status strip beside the clock. The strip is drawn on
+// the page rather than inside the navigation tile, so this reads the same in
+// both navigation modes -- which is the point of it being here and not on the
+// ROUTE page, where it only existed before.
+//
+// Held from the last VALID fix rather than read live at draw time: the count
+// is only meaningful with a fix behind it, and this pair is what lets the
+// label age out with the position (GPS_STALE_MS) instead of freezing on the
+// last number the receiver happened to report.
+lv_obj_t *s_sat_label = nullptr;
+uint8_t s_last_num_sv = 0;
+bool s_last_fix_from_module = false;
+
 lv_timer_t *s_refresh_timer = nullptr;
 
 // Set by the DataCenter callbacks below (which may run on Core 0 -- see
@@ -1004,6 +1018,39 @@ void PaintTripCell(lv_obj_t *cell, lv_obj_t *caption, lv_obj_t *value, lv_obj_t 
     }
 }
 
+// Satellites, in the top-left of the status strip.
+//
+// The symbol carries the source, because the number alone cannot: the phone
+// publishes to TOPIC_GPS_INFO too (CLAUDE.md §5), and a phone-supplied count
+// beside a pin icon would read as the receiver working. That is the exact
+// false positive the ROUTE corner was built to rule out, and it is worth no
+// less here. A pin means the module; a Bluetooth mark means the phone.
+//
+// "--" covers both having no fix and having lost one. There is deliberately
+// no third state for "module talking but not yet fixed" -- that is the ROUTE
+// page's "Acquiring N", a bring-up diagnostic, and it does not belong on a
+// panel read at 30km/h.
+void RenderSatellites() {
+    if (s_sat_label == nullptr) {
+        return;
+    }
+
+    // s_gps_last_ms is stamped on a valid fix and zeroed when one goes stale,
+    // so it is the freshness of the POSITION, not of the last publish. A
+    // receiver in a tunnel keeps publishing at 1Hz while knowing nothing.
+    if (s_gps_last_ms == 0) {
+        lv_label_set_text(s_sat_label, LV_SYMBOL_GPS " --");
+        lv_obj_set_style_text_color(s_sat_label, lv_color_hex(COLOR_CAPTION), 0);
+        return;
+    }
+
+    lv_label_set_text_fmt(s_sat_label,
+                          s_last_fix_from_module ? LV_SYMBOL_GPS " %d"
+                                                 : LV_SYMBOL_BLUETOOTH " %d",
+                          (int)s_last_num_sv);
+    lv_obj_set_style_text_color(s_sat_label, lv_color_hex(COLOR_VALUE), 0);
+}
+
 // See s_trip_cell for why only the bad states are filled, and why filling
 // forces the text dark.
 void RenderRecordingState() {
@@ -1153,6 +1200,11 @@ void RefreshTimerCallback(lv_timer_t *timer) {
 
         RenderSpeedAndTrip();
         RenderHeartRateStats();
+        // On the tick as well as on the publish, for the same reason the
+        // averages are: a lost fix stops the publishes, and the count has to
+        // fall back to "--" on the strength of time passing rather than of a
+        // message arriving.
+        RenderSatellites();
         // On the same one-second tick as the averages, and for the same
         // reason: nothing publishes while the rider is stopped, so a state
         // drawn only on a GPS publish would freeze in whichever colour it
@@ -1176,7 +1228,10 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 s_last_speed_kmh = gps.speed * 3.6f;
                 s_has_speed = true;
                 s_gps_last_ms = lv_tick_get();
+                s_last_num_sv = gps.num_sv;
+                s_last_fix_from_module = gps.from_module;
             }
+            RenderSatellites();
 
             // Only here, inside the publish branch, so a lost fix lets the
             // hold expire instead of pinning the caption red on a reading
@@ -2109,6 +2164,16 @@ void PageDashboard::onViewLoad() {
     s_battery_label = MakeLabel(parent, LV_SYMBOL_BATTERY_FULL " --%", &lv_font_montserrat_12,
                                 COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -PAD, 7);
 
+    // ---- Satellites ----
+    // The strip's free corner: the clock sits mid (pulled 8px left) and the
+    // battery right, so the left has been empty since this layout was drawn.
+    // Same font and baseline as the battery, so the two read as one strip.
+    // On `parent` rather than in the navigation tile, which is what makes it
+    // survive the TBT/GPX branch below -- both leave this 28px band alone.
+    s_sat_label = MakeLabel(parent, LV_SYMBOL_GPS " --", &lv_font_montserrat_12,
+                            COLOR_CAPTION, LV_ALIGN_TOP_LEFT, PAD, 7);
+    RenderSatellites();
+
 
     // ---- Four metrics, two by two ----
     // Speed is one of them now rather than a hero: worth reading, but not at
@@ -2466,4 +2531,9 @@ void PageDashboard::onViewUnload() {
     s_zone_marker = nullptr;
     s_zone_bar_w = 0;
     s_battery_label = nullptr;
+    // The count and its source are deliberately NOT cleared with the label:
+    // they describe the fix, not the widget, and the page is rebuilt while a
+    // ride is under way. Zeroing them here would redraw a live 9-satellite
+    // fix as "--" until the next publish.
+    s_sat_label = nullptr;
 }
