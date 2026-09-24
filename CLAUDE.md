@@ -40,10 +40,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     has no documented binary config protocol at all, and leaves the factory
     streaming plain NMEA-0183 text (GGA/RMC, plus GSA/GSV/VTG this firmware
     ignores) at 9600 baud with nothing to configure it into anything else.
-    `GPS_Reader.h` expects it on UART1, GPIO2 RX / GPIO3 TX — the board's
-    IO2/IO3/IO14/IO21 expansion header, its only breakout that is actually
-    free. GPIO43/44 (this board's silkscreened "UART" header) stays reserved
-    for USB-TTL debug per §8, and an earlier version of this note put the
+    **It runs on UART0, GPIO44 RX / GPIO43 TX — the board's silkscreened
+    "UART" header (RXD/TXD/GND/5V)**, verified receiving satellites there on
+    2026-09-23. That header wins because it carries power and both signals on
+    one connector while leaving the touchscreen and the I2C bus alone, and it
+    is what §2 specified for the GNSS to begin with. UART0 is free despite
+    older notes here reserving it for USB-TTL debug: `Serial` on this board is
+    the USB CDC (`ARDUINO_USB_CDC_ON_BOOT=1`), so nothing in this firmware
+    ever drove GPIO43/44. ⚠️ **That header's supply pin is 5V, not 3.3V** —
+    check the breakout's rating before using it, and take 3.3V from the I2C
+    header instead if in doubt; GPIO44 is not 5V-tolerant either.
+
+    Two earlier placements, both kept because the reasoning still applies.
+    IO2/IO3 (the IO2/IO3/IO14/IO21 expansion header) works and is the
+    fallback, but that header has no power pins, so it needs a second pair of
+    wires. IO15/IO16 (the I2C header) also works and costs the **entire
+    touchscreen** — those are the FT6336G's SCL/SDA, and one set of pins
+    serves one peripheral. `-D PEGASUS_GPS_ON_I2C_HEADER=1` still selects it
+    and holds the touch controller in reset so it cannot fight for the bus;
+    there is no reason to use it. Note the ATGM336H is UART-only and has no
+    I2C interface at all, so it could never have *shared* that bus the way a
+    barometer or an IMU would.
+
+    An earlier version of this note put the
     module on GPIO4/5 instead: wrong, because on the ES3C28P reference design
     this board is built from, those two are wired to the onboard PCM5101 I2S
     amp (MCLK/BCLK) and were never actually free, whatever the firmware
@@ -339,9 +358,16 @@ These were each discovered the slow way. They are not optional trivia.
   the host reboots the chip into download mode (`waiting for download`)
   instead of reading it. `pyserial` asserting DTR/RTS by default holds the
   chip in reset outright. A "silent board" is far more often this than a
-  firmware fault. Workarounds: wire **UART0 (GPIO43/44)** to a USB-TTL
-  adapter — note that collides with the planned GNSS UART — or **print
-  diagnostics to the LCD panel**, which is what actually worked.
+  firmware fault. The workaround that actually worked, and the only one left,
+  is **printing diagnostics to the LCD panel**.
+
+  ⚠️ **The USB-TTL escape hatch is spent.** This used to say "wire UART0
+  (GPIO43/44) to a USB-TTL adapter", and as of 2026-09-23 the GNSS module is
+  on those pins (§2). It was always the theoretical option — every diagnostic
+  this project has ever needed went to the panel — but it is gone now rather
+  than merely unused, so budget for a panel readout when adding anything that
+  needs observing. Reclaiming it means moving the GNSS back to IO2/IO3 and
+  finding it 3.3V and GND elsewhere.
 - **`pio` is not on `PATH`.** Use `~/.platformio/penv/bin/pio`.
 - **Three build flags are load-bearing.** Removing any one produces a
   confusing failure a long way from the cause:
