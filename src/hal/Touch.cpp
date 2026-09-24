@@ -82,6 +82,19 @@ static bool ReadReg(uint8_t reg, uint8_t *buf, uint8_t len) {
 }
 
 void Touch_Init() {
+#if PEGASUS_GPS_ON_I2C_HEADER
+    // The GNSS has this bus. IO15/IO16 are the I2C header's two signal pins
+    // and also the FT6336G's SCL/SDA, so exactly one peripheral can have
+    // them -- see platformio.ini. There is no touch in this configuration.
+    //
+    // Held in reset, not merely left uninitialised. RST low keeps the
+    // controller's pins high-impedance; a floating RST would let it come up
+    // and clock SCL, which is the GPS's RX line here -- contention that would
+    // corrupt NMEA rather than announce itself.
+    pinMode(TOUCH_RST_PIN, OUTPUT);
+    digitalWrite(TOUCH_RST_PIN, LOW);
+    return;
+#else
     // The FT6336G stays held in reset until RST is driven high, and answers
     // nothing on I2C until then. Pulse it low then high and give the
     // controller's own firmware time to come up before the first transfer.
@@ -94,9 +107,13 @@ void Touch_Init() {
     Wire.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL);
     Wire.setClock(400000);
     pinMode(TOUCH_INT_PIN, INPUT); // FT6336G INT is active-low, open-drain; not currently used to gate reads (see Touch_Read)
+#endif
 }
 
 bool Touch_IsPressed() {
+#if PEGASUS_GPS_ON_I2C_HEADER
+    return false; // no controller on the bus; see Touch_Init
+#else
     uint8_t touch_count = 0;
     if (!ReadReg(REG_TD_STATUS, &touch_count, 1)) {
         // An I2C read that failed is not a press. Reporting one would let a
@@ -104,9 +121,15 @@ bool Touch_IsPressed() {
         return false;
     }
     return (touch_count & 0x0F) != 0;
+#endif
 }
 
 void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
+#if PEGASUS_GPS_ON_I2C_HEADER
+    (void)drv;
+    data->state = LV_INDEV_STATE_REL;
+    return;
+#else
     uint8_t touch_count = 0;
     if (!ReadReg(REG_TD_STATUS, &touch_count, 1)) {
         data->state = LV_INDEV_STATE_REL;
@@ -156,4 +179,5 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     data->point.x = MapAxis(x, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, TFT_WIDTH);
     data->point.y = MapAxis(y, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, TFT_HEIGHT);
     data->state = LV_INDEV_STATE_PR;
+#endif
 }
