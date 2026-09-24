@@ -55,9 +55,17 @@ void GPS_Init();
 // Spawns the Core 0 reader task. Preconditions: GPS_Init() has run.
 void GPS_StartReader();
 
-// True once a GGA sentence with a non-zero fix quality has been seen. Cheap
-// status for the UI to distinguish "no module" from "module present, still
-// acquiring".
+// Whether the LAST decoded GGA carried a fix. Not sticky -- it is reassigned
+// on every accepted sentence, so it follows the receiver down as well as up.
+// The comment here used to promise "true once a fix has ever been seen",
+// which the code has never done; believing it would have made a receiver
+// that lost its fix look like one that still had it.
+//
+// Nothing calls this today: the UI needs freshness as well as a flag, and a
+// reader polled from another task cannot supply it (see Page_Map's s_fix_seq,
+// which counts valid-fix publishes instead). Kept as the cheap synchronous
+// answer for a caller that wants the receiver's own view rather than the
+// bus's.
 bool GPS_HasFix();
 
 // Number of GGA sentences accepted so far (checksum valid, decoded

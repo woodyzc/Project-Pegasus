@@ -155,16 +155,22 @@ inline uint8_t OutCode(const lv_point_t *p, const lv_area_t *a) {
 // amber is the ridden trail's colour. Water is deliberately the most
 // saturated and the darkest of the four despite being the widest: it is a
 // landmark to recognise, not a route to follow.
+// Ratios below are measured against COLOR_MAP_BG, not estimated. Secondary
+// was 0x8D98A5 and carried this same "5.2:1" comment while actually
+// measuring 6.48:1 -- lighter than the artery it is supposed to sit under,
+// which inverted the one part of the hierarchy that matters most. The other
+// three were derived correctly (3.93 / 5.68 / 2.92 against their stated
+// 4.0 / 5.7 / 3.0); only this entry's hex did not match its own note.
 const RoadStyle ROAD_STYLE[ROAD_CLASS_COUNT] = {
-    {0x68737F, 2}, // minor      -- 4.0:1
-    {0x8D98A5, 3}, // secondary  -- 5.2:1
-    {0x4D93C4, 4}, // artery     -- 5.7:1
+    {0x68737F, 2}, // minor      -- 3.93:1
+    {0x7D8794, 3}, // secondary  -- 5.21:1
+    {0x4D93C4, 4}, // artery     -- 5.68:1, and the lightest road, as intended
     // 4px, not 5. Water was the widest thing on the map and at this colour it
     // became the most dominant feature on screen -- competing with the route,
     // which is the one line that must win outright. Narrowed rather than
     // darkened: it is still the strongest landmark, just no longer heavier
     // than the thing the rider is following.
-    {0x27628F, 4}, // water      -- 3.0:1
+    {0x27628F, 4}, // water      -- 2.92:1
 };
 
 // The MapView this layer belongs to. Its projection is the one that matters:
@@ -420,6 +426,20 @@ void RoadDrawCb(lv_event_t *e) {
 void RoadView_Attach(MapView_t *view) {
     if (view == nullptr || view->container == nullptr || !RoadMap_IsLoaded()) {
         return;
+    }
+
+    // Idempotent, which it has to be now that it is called again whenever an
+    // extract is loaded late (Page_Map's route picker). Without this a second
+    // call stacks another full-size transparent layer on the first: both stay
+    // registered, both invalidate, and both draw every road twice.
+    //
+    // The pairing is by view, not by container, because the view is what the
+    // draw callback projects through -- two layers over one container would
+    // be the duplicate; one layer per view is the invariant.
+    for (int i = 0; i < MAX_LAYERS; i++) {
+        if (g_layers[i] != nullptr && lv_obj_get_user_data(g_layers[i]) == view) {
+            return;
+        }
     }
 
     lv_obj_t *layer = lv_obj_create(view->container);

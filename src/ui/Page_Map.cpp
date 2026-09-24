@@ -59,12 +59,46 @@ lv_timer_t *s_refresh_timer = nullptr;
 
 volatile bool s_gps_dirty = false;
 
+// How long a fix, and a talking receiver, stay believable. The same five
+// seconds the dashboard blanks SPEED after and NavRoute stops navigating
+// after: both publishers send at 1Hz, so this is five missed messages.
+constexpr uint32_t FIX_STALE_MS = 5000;
+constexpr uint32_t GNSS_SILENT_MS = 5000;
+
+// Bumped by the DataCenter callback on every VALID fix, and read on the LVGL
+// side to notice that one arrived.
+//
+// This exists because DataCenter_Pull has no concept of freshness: once a
+// topic has been published it hands back that same last value for ever. So
+// `fix_valid` on a pulled struct means "there was a fix, once" -- and a
+// status corner built on that reading tells a rider whose receiver died
+// mid-ride that it is still tracking satellites. A counter rather than a
+// timestamp because the callback runs on the publisher's core; the same
+// reasoning, and the same pattern, as NavRoute.cpp's s_fix_seq.
+volatile uint32_t s_fix_seq = 0;
+uint32_t s_seen_fix_seq = 0;
+uint32_t s_fix_last_ms = 0;
+
+// The frame count is cumulative and never resets, so its VALUE only proves
+// the receiver spoke at some point. Movement is what proves it is speaking
+// now, which is the question the corner is actually asked.
+uint32_t s_seen_frames = 0;
+uint32_t s_frames_moved_ms = 0;
+
 void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
     (void)topic;
-    (void)data;
-    (void)size;
     (void)user_arg;
     s_gps_dirty = true;
+
+    // Stamped on a valid fix, never on a publish: GPS_Reader publishes at 1Hz
+    // with fix_valid false while it acquires, so counting publishes would read
+    // a receiver in a tunnel as a live position for as long as the tunnel.
+    if (data == nullptr || size < sizeof(GPS_Info_t)) {
+        return;
+    }
+    if (((const GPS_Info_t *)data)->fix_valid) {
+        s_fix_seq++;
+    }
 }
 
 Account s_gps_account("Page_Map/GPS", OnGpsPublished);
@@ -98,10 +132,15 @@ void UpdateScale() {
 // two facts (the centred "ROUTE" title is what caps the width):
 //   1. no card at all -- a hardware fault that also defeats this page's whole
 //      purpose, so it outranks everything;
-//   2. a fix -- with its source, because during GNSS bring-up a phone fix on
-//      this same topic would otherwise read as the receiver working;
-//   3. no bytes -- the actionable one;
-//   4. bytes but no fix -- acquiring, with the count as proof of life.
+//   2. a FRESH fix -- with its source, because during GNSS bring-up a phone
+//      fix on this same topic would otherwise read as the receiver working;
+//   3. a receiver still talking but not fixed -- acquiring, with the count;
+//   4. silence -- the actionable one.
+//
+// Every state above is judged on something that ages. The first version of
+// this label judged on a pulled struct and a cumulative counter, neither of
+// which can go backwards, so a receiver that died mid-ride left the corner
+// frozen on its last good news for ever.
 // "No .gpx on card" used to live here and lost its slot to (3): an empty
 // route picker one tap away says the same thing, and a missing card still
 // reports itself through (1).
@@ -116,10 +155,29 @@ void UpdateStatusLabel() {
         return;
     }
 
-    GPS_Info_t gps;
-    const bool have = DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps));
+    const uint32_t now = lv_tick_get();
 
-    if (have && gps.fix_valid) {
+    // Both of these age, and neither can be read off a pulled struct. See
+    // s_fix_seq and s_seen_frames: a dead receiver leaves DataCenter holding
+    // its last good fix and GPS_FrameCount() holding its final total, so the
+    // corner would have gone on reporting a healthy module indefinitely --
+    // in the one widget whose whole job is to say whether it is healthy.
+    if (s_fix_seq != s_seen_fix_seq) {
+        s_seen_fix_seq = s_fix_seq;
+        s_fix_last_ms = now;
+    }
+    const bool fix_fresh = s_fix_last_ms != 0 && lv_tick_elaps(s_fix_last_ms) <= FIX_STALE_MS;
+
+    const uint32_t frames = GPS_FrameCount();
+    if (frames != s_seen_frames) {
+        s_seen_frames = frames;
+        s_frames_moved_ms = now;
+    }
+    const bool talking =
+        s_frames_moved_ms != 0 && lv_tick_elaps(s_frames_moved_ms) <= GNSS_SILENT_MS;
+
+    GPS_Info_t gps;
+    if (fix_fresh && DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps)) && gps.fix_valid) {
         if (gps.from_module) {
             lv_label_set_text_fmt(s_status_label, "%d sats", (int)gps.num_sv);
         } else {
@@ -129,14 +187,17 @@ void UpdateStatusLabel() {
         return;
     }
 
-    const uint32_t frames = GPS_FrameCount();
-    if (frames == 0) {
-        lv_label_set_text(s_status_label, "No GNSS data");
-        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_WARN), 0);
-    } else {
+    if (talking) {
         lv_label_set_text_fmt(s_status_label, "Acquiring %u", (unsigned)frames);
         lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
+        return;
     }
+
+    // Nothing is arriving NOW. Wrong pins or baud if it never was; a dead or
+    // unplugged receiver if it used to be. The corner cannot tell those apart
+    // and should not pretend to -- both are "check the hardware".
+    lv_label_set_text(s_status_label, "No GNSS data");
+    lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_WARN), 0);
 }
 
 // Only offered once the view has been moved by hand. A control that is always
@@ -288,6 +349,14 @@ void OnRouteChosen(lv_event_t *e) {
         double lon = 0.0;
         if (GpxTrack_Center(&lat, &lon)) {
             RoadMap_LoadCovering(lat, lon);
+            // The layer is only created when an extract is already loaded, so
+            // a page that opened with no roads has none to draw into -- and
+            // PageManager caches this page for the life of the boot, so
+            // onViewLoad will not run again to make one. Without this call the
+            // extract loads, Refresh draws it into nothing, and the streets
+            // stay invisible until a reboot. Idempotent when a layer already
+            // exists, which is the common case.
+            RoadView_Attach(&s_view);
         }
     }
     MapView_Recenter(&s_view);

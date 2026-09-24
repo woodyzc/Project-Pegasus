@@ -13,9 +13,10 @@ namespace {
 // This module is written from NimBLE's host task -- every characteristic
 // callback lands there -- and read from the Core 1 task that pumps
 // NavRoute_Tick(). The header has said so since the file was written, and for
-// just as long nothing enforced it: BeginTransfer() calls FreeAll(), which
-// heap_caps_free()s the blob, while Tick() may be part-way through snapping a
-// fix to that exact allocation. It is not a rare interleaving either. The
+// just as long nothing enforced it: finishing a transfer heap_caps_free()s
+// the live blob to swap the new one in, while Tick() may be part-way through
+// snapping a fix to that exact allocation. It is not a rare interleaving
+// either. The
 // phone re-sends the whole route on a reroute, which is a supported and
 // ordinary thing for it to do mid-ride, and it is precisely when the rider is
 // relying on the display.
@@ -48,22 +49,49 @@ struct RouteLock {
     RouteLock &operator=(const RouteLock &) = delete;
 };
 
+// ---- The live route: what the rider is navigating right now ----
+//
 // The assembled blob and the cumulative distance table both live in PSRAM:
 // a 4,000-point route is 32KB of polyline and another 16KB of table, which is
 // a large fraction of internal RAM and none of it is touched from an ISR.
 uint8_t *s_blob = nullptr;
 uint32_t *s_cum = nullptr;
 
-// Which chunks have landed. One bit each, in internal RAM because it is read
-// and written on every single chunk and it is tiny.
-uint8_t *s_received = nullptr;
-size_t s_received_bytes = 0;
-uint16_t s_received_count = 0;
-
 RouteManifest_t s_manifest;
-bool s_have_manifest = false;
 bool s_loaded = false;
 uint32_t s_length_m = 0;
+
+// ---- The transfer in flight, staged apart from the live route ----
+//
+// These were the same variables until an incoming route was found to destroy
+// the one being ridden before anything had judged it. BeginTransfer() freed
+// the store the moment a MANIFEST arrived, so the rider lost their navigation
+// to a transfer that had not delivered a single point yet -- and if that
+// transfer then failed to arrive, or was refused by FinishTransfer()'s
+// ordering check, there was nothing left to fall back to and no indication
+// that anything had gone.
+//
+// The failure that matters is not the refusal, which needs a broken router.
+// It is the phone walking out of range mid-upload, which is ordinary on a
+// bike and leaves the manifest received and the chunks not. Validating before
+// freeing would not have helped there; only building somewhere else does.
+//
+// So a transfer now assembles here and the live route is replaced by an
+// atomic swap in FinishTransfer(), after the route has been measured and its
+// maneuvers checked. A failed or abandoned transfer costs the staging memory
+// and nothing else. The peak cost is both routes resident at once, which is
+// what PSRAM is for.
+uint8_t *s_rx_blob = nullptr;
+uint32_t *s_rx_cum = nullptr;
+
+// Which chunks have landed. One bit each, in internal RAM because it is read
+// and written on every single chunk and it is tiny.
+uint8_t *s_rx_received = nullptr;
+size_t s_rx_received_bytes = 0;
+uint16_t s_rx_received_count = 0;
+
+RouteManifest_t s_rx_manifest;
+bool s_rx_have_manifest = false;
 
 RouteFix_t s_last_fix;
 bool s_have_fix = false;
@@ -145,7 +173,7 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
 
 Account s_gps_account("NavRoute/GPS", OnGpsPublished);
 
-void FreeAll() {
+void FreeLive() {
     if (s_blob != nullptr) {
         heap_caps_free(s_blob);
         s_blob = nullptr;
@@ -154,61 +182,80 @@ void FreeAll() {
         heap_caps_free(s_cum);
         s_cum = nullptr;
     }
-    if (s_received != nullptr) {
-        heap_caps_free(s_received);
-        s_received = nullptr;
-    }
-    s_received_bytes = 0;
-    s_received_count = 0;
-    s_have_manifest = false;
     s_loaded = false;
     s_length_m = 0;
+}
+
+void FreeRx() {
+    if (s_rx_blob != nullptr) {
+        heap_caps_free(s_rx_blob);
+        s_rx_blob = nullptr;
+    }
+    if (s_rx_cum != nullptr) {
+        heap_caps_free(s_rx_cum);
+        s_rx_cum = nullptr;
+    }
+    if (s_rx_received != nullptr) {
+        heap_caps_free(s_rx_received);
+        s_rx_received = nullptr;
+    }
+    s_rx_received_bytes = 0;
+    s_rx_received_count = 0;
+    s_rx_have_manifest = false;
+}
+
+// The snap and the published directive both describe a route. Reset them
+// whenever the route underneath them changes or goes away, or the first tick
+// afterwards measures a new polyline from the old route's position.
+void ResetFollowState() {
     s_have_fix = false;
     s_last_icon = 0xFF;
     s_last_distance = 0xFFFFFFFFu;
 }
 
 bool ChunkSeen(uint16_t index) {
-    if (s_received == nullptr) {
+    if (s_rx_received == nullptr) {
         return false;
     }
-    return (s_received[index >> 3] & (uint8_t)(1u << (index & 7))) != 0;
+    return (s_rx_received[index >> 3] & (uint8_t)(1u << (index & 7))) != 0;
 }
 
 void MarkChunk(uint16_t index) {
-    if (s_received == nullptr || ChunkSeen(index)) {
+    if (s_rx_received == nullptr || ChunkSeen(index)) {
         return;
     }
-    s_received[index >> 3] |= (uint8_t)(1u << (index & 7));
-    s_received_count++;
+    s_rx_received[index >> 3] |= (uint8_t)(1u << (index & 7));
+    s_rx_received_count++;
 }
 
 // A manifest starts a transfer. Allocating here rather than on the first
 // payload chunk means an out-of-order arrival -- which BLE permits and Android
 // does in practice under load -- is stored rather than dropped.
 bool BeginTransfer(const RouteManifest_t &m) {
-    FreeAll();
+    // Only the staging area. The live route is not touched here -- see the
+    // note on s_rx_blob for what happened when it was.
+    FreeRx();
 
     const size_t blob_size = Route_BlobSize(&m);
-    s_blob = (uint8_t *)heap_caps_calloc(blob_size, 1, MALLOC_CAP_SPIRAM);
-    if (s_blob == nullptr) {
+    s_rx_blob = (uint8_t *)heap_caps_calloc(blob_size, 1, MALLOC_CAP_SPIRAM);
+    if (s_rx_blob == nullptr) {
         return false;
     }
-    s_cum = (uint32_t *)heap_caps_calloc(m.point_count, sizeof(uint32_t), MALLOC_CAP_SPIRAM);
-    if (s_cum == nullptr) {
-        FreeAll();
-        return false;
-    }
-
-    s_received_bytes = ((size_t)m.chunk_count + 7) / 8;
-    s_received = (uint8_t *)heap_caps_calloc(s_received_bytes, 1, MALLOC_CAP_INTERNAL);
-    if (s_received == nullptr) {
-        FreeAll();
+    s_rx_cum = (uint32_t *)heap_caps_calloc(m.point_count, sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+    if (s_rx_cum == nullptr) {
+        FreeRx();
         return false;
     }
 
-    s_manifest = m;
-    s_have_manifest = true;
+    s_rx_received_bytes = ((size_t)m.chunk_count + 7) / 8;
+    s_rx_received = (uint8_t *)heap_caps_calloc(s_rx_received_bytes, 1, MALLOC_CAP_INTERNAL);
+    if (s_rx_received == nullptr) {
+        FreeRx();
+        return false;
+    }
+
+    s_rx_manifest = m;
+    s_rx_have_manifest = true;
     MarkChunk(0); // the manifest is chunk 0 and has now arrived
     return true;
 }
@@ -216,7 +263,8 @@ bool BeginTransfer(const RouteManifest_t &m) {
 // Called once the last chunk lands. Builds the cumulative table so every
 // subsequent fix is a snap rather than a re-measure of the whole polyline.
 void FinishTransfer() {
-    s_length_m = RouteFollow_BuildCumulative(s_blob, &s_manifest, s_cum);
+    const uint32_t length_m = RouteFollow_BuildCumulative(s_rx_blob, &s_rx_manifest, s_rx_cum);
+
     // A route whose points are all identical measures zero and cannot be
     // navigated -- treat it as a failed transfer rather than dividing by it
     // later.
@@ -228,7 +276,32 @@ void FinishTransfer() {
     // route. Refusing the route shows the rider nothing, which is honest;
     // accepting it shows them a wrong turn, which is not. Once per transfer,
     // 256 entries at most.
-    s_loaded = s_length_m > 0 && RouteFollow_ManeuversOrdered(s_blob, &s_manifest);
+    const bool usable = length_m > 0 && RouteFollow_ManeuversOrdered(s_rx_blob, &s_rx_manifest);
+
+    if (!usable) {
+        // The rider keeps whatever they were already navigating. Refusing a
+        // route is not a reason to take away a good one.
+        FreeRx();
+        return;
+    }
+
+    // ---- The swap ----
+    // Under the same lock every reader takes, so Tick() cannot be part-way
+    // through snapping to the old blob while it is freed.
+    FreeLive();
+    s_blob = s_rx_blob;
+    s_rx_blob = nullptr;
+    s_cum = s_rx_cum;
+    s_rx_cum = nullptr;
+    s_manifest = s_rx_manifest;
+    s_length_m = length_m;
+    s_loaded = true;
+
+    // Releases the chunk bitmap and clears the transfer's bookkeeping. The
+    // blob and table are already moved out, so this does not free them.
+    FreeRx();
+
+    ResetFollowState();
 }
 
 } // namespace
@@ -251,7 +324,9 @@ void NavRoute_Init() {
 
 void NavRoute_Clear() {
     RouteLock lock;
-    FreeAll();
+    FreeLive();
+    FreeRx();
+    ResetFollowState();
 }
 
 bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
@@ -273,15 +348,15 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
         // Re-sending the manifest for the transfer already in progress is a
         // retry, not a restart. Treating it as a restart would discard every
         // chunk received so far and make a flaky link never converge.
-        if (s_have_manifest && m.route_id == s_manifest.route_id &&
-            m.point_count == s_manifest.point_count &&
-            m.maneuver_count == s_manifest.maneuver_count) {
+        if (s_rx_have_manifest && m.route_id == s_rx_manifest.route_id &&
+            m.point_count == s_rx_manifest.point_count &&
+            m.maneuver_count == s_rx_manifest.maneuver_count) {
             return true;
         }
         return BeginTransfer(m);
     }
 
-    if (!s_have_manifest || index >= s_manifest.chunk_count) {
+    if (!s_rx_have_manifest || index >= s_rx_manifest.chunk_count) {
         // A payload chunk with no manifest cannot be placed: its offset comes
         // from the manifest's geometry. Dropped, and the phone's retry after
         // the manifest lands will carry it.
@@ -290,22 +365,22 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
 
     // Chunk 1 is the first payload chunk, so it sits at offset 0.
     const size_t offset = (size_t)(index - 1) * ROUTE_CHUNK_PAYLOAD;
-    const size_t blob_size = Route_BlobSize(&s_manifest);
+    const size_t blob_size = Route_BlobSize(&s_rx_manifest);
     if (offset >= blob_size || offset + payload_len > blob_size) {
         return false;
     }
     // Only the final chunk may be short. Anything else short means the sender
     // and this build disagree about ROUTE_CHUNK_PAYLOAD, which would silently
     // scatter the route through the buffer.
-    const bool is_last = (index == (uint16_t)(s_manifest.chunk_count - 1));
+    const bool is_last = (index == (uint16_t)(s_rx_manifest.chunk_count - 1));
     if (!is_last && payload_len != ROUTE_CHUNK_PAYLOAD) {
         return false;
     }
 
-    memcpy(s_blob + offset, payload, payload_len);
+    memcpy(s_rx_blob + offset, payload, payload_len);
     MarkChunk(index);
 
-    if (s_received_count == s_manifest.chunk_count) {
+    if (s_rx_received_count == s_rx_manifest.chunk_count) {
         FinishTransfer();
     }
     return true;
@@ -318,11 +393,14 @@ bool NavRoute_IsLoaded() {
 
 void NavRoute_Progress(uint16_t *out_received, uint16_t *out_total) {
     RouteLock lock;
+    // The transfer in flight, not the route in use: this is what the upload
+    // progress bar is watching, and it ticks while the live route -- if there
+    // is one -- carries on being navigated underneath it.
     if (out_received != nullptr) {
-        *out_received = s_have_manifest ? s_received_count : 0;
+        *out_received = s_rx_have_manifest ? s_rx_received_count : 0;
     }
     if (out_total != nullptr) {
-        *out_total = s_have_manifest ? s_manifest.chunk_count : 0;
+        *out_total = s_rx_have_manifest ? s_rx_manifest.chunk_count : 0;
     }
 }
 
