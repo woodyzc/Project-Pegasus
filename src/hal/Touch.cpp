@@ -143,20 +143,10 @@ static bool ReadReg(uint16_t reg, uint8_t *buf, uint8_t len) {
     TOUCH_BUS.beginTransmission(s_addr);
     TOUCH_BUS.write((uint8_t)(reg >> 8));
     TOUCH_BUS.write((uint8_t)(reg & 0xFF));
-    // false = repeated START, not STOP.
-    //
-    // A STOP here ends the transaction, and this controller then treats the
-    // following read as unrelated to the address just written: it acknowledges
-    // its own address and clocks out nothing, so the master samples an
-    // undriven bus. That is every symptom this bring-up produced -- 28 zero
-    // bytes, then FF FF FF EF repeating, and before that "varied" bytes that
-    // were noise being decoded as contacts at 1075,2563. The part never
-    // returned register data at all; it only ever looked like it had.
-    //
-    // A bare address probe still works through a STOP, which is why
-    // Touch_Init()'s detection found the part at 0x58 correctly while every
-    // read after it failed.
-    if (TOUCH_BUS.endTransmission(false) != 0) {
+    // STOP, matching the vendor driver's Touch_I2C_Read exactly. A repeated
+    // START was tried and changed nothing; this part is happy either way,
+    // and matching the reference removes one more place to be wrong.
+    if (TOUCH_BUS.endTransmission(true) != 0) {
         return false;
     }
     if (TOUCH_BUS.requestFrom((int)s_addr, (int)len) != len) {
@@ -199,19 +189,9 @@ static bool AddressAcks(uint8_t addr) {
 }
 
 void Touch_Init() {
-    // 100kHz, not the vendor's 400kHz.
-    //
-    // At 400kHz this part acknowledged its address on every boot -- detection
-    // never once failed -- and then returned bytes that changed at random
-    // from read to read: FF FF FF EF for a while, then noise. A slave that
-    // ACKs reliably but cannot hold a multi-byte read together is the
-    // signature of marginal signal integrity rather than a protocol fault.
-    // The address byte is short enough to survive; a 28-byte read is not.
-    //
-    // The sensor bus runs 400kHz happily, which is not a counter-argument:
-    // its two devices sit on the board while this one is across the panel's
-    // flex, with whatever pull-ups the FPC provides.
-    TOUCH_BUS.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL, 100000);
+    // 400kHz, as the vendor driver uses. 100kHz was tried while chasing what
+    // looked like signal integrity and made no difference either way.
+    TOUCH_BUS.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL, 400000);
 
     // INPUT_PULLUP, not INPUT. The line is active-low **open-drain**: the
     // controller can pull it down and nothing can pull it up, so without a
@@ -318,94 +298,27 @@ static void AckTouchBlock() {
 // (drivers/input/touchscreen), which is the only published description of
 // this protocol -- Hynitron ships no register appendix for the part.
 static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
-    if (s_addr == CST3530_I2C_ADDR) {
-        // Only while the controller says it has something.
-        //
-        // This is the difference between the init probe and every live read.
-        // The probe runs once, straight after reset, with the part idle, and
-        // has returned byte-identical data on every boot and at both clock
-        // speeds. The live reads poll asynchronously about thirty times a
-        // second and come back different every time -- because they sample
-        // the registers while the controller is rewriting them.
-        //
-        // Linux's driver is interrupt-driven: it reads in response to INT,
-        // never on a timer. Polling a part designed that way is reading a
-        // frame that is being written underneath you, and no register map
-        // would have made those bytes decode.
-        if (digitalRead(TOUCH_INT_PIN) != LOW) {
-            return false;
-        }
-        s_dbg_int_low++;
-
-        // Seven bytes, not the kernel's twenty-eight.
-        //
-        // Two photos ten seconds apart settled this. The one-shot probe's
-        // 4-byte reads came back identical in both, and identical again to
-        // the run before at 400kHz -- stable, reproducible data. Meanwhile
-        // the read counter advanced by 19 in ten seconds against an LVGL
-        // poll rate of about 33 a second, so roughly nineteen of every twenty
-        // 28-byte reads were failing outright and the survivors returned
-        // zeros.
-        //
-        // Short reads work and long ones do not, which is a length limit
-        // rather than the signal-integrity problem the changing bytes looked
-        // like. Everything this driver needs is in the first seven bytes:
-        // coordinates at 1..3, count at 5, check value at 6. The rest of the
-        // kernel's 28 carry contacts two through five, which this UI has no
-        // use for.
-        uint8_t buf[7];
-        if (!ReadReg(REG_TOUCH_XY, buf, sizeof(buf))) {
-            return false;
-        }
-        s_dbg_reads++;
-        memcpy(s_dbg_frame, buf, sizeof(buf));
-        // Latched separately so a tap is still readable afterwards -- holding
-        // a finger on the glass and photographing the panel at the same time
-        // is not a thing one pair of hands does well.
-        if ((buf[5] & CST3XX_TOUCH_COUNT_MASK) != 0 || (buf[0] & 0x0F) != 0) {
-            memcpy(s_dbg_hit, buf, sizeof(buf));
-        }
-
-        // Byte 6 is a fixed check value. The other half of the phantom
-        // contacts: with no validity test, a stale or half-written frame
-        // decodes as a press at whatever coordinates happen to be in it --
-        // which is exactly what 1075,2563 was on a 240x320 panel.
-        if (buf[6] != CST3XX_CHK_VAL) {
-            return false;
-        }
-
-        const uint8_t count = buf[5] & CST3XX_TOUCH_COUNT_MASK;
-        if (count == 0) {
-            return false;
-        }
-
-        // First contact only; this UI has no multi-touch gesture. Byte 3
-        // carries X's low nibble in its high half and Y's in its low half.
-        *raw_x = (uint16_t)(((uint16_t)buf[1] << 4) | ((buf[3] >> 4) & 0x0F));
-        *raw_y = (uint16_t)(((uint16_t)buf[2] << 4) | (buf[3] & 0x0F));
-
-        // Acknowledged only now, having actually consumed a frame.
-        //
-        // It used to be sent on every poll, rejected frames included, and that
-        // silenced the part completely: reads kept succeeding and returned 28
-        // zero bytes for as long as the board was up, while the one frame
-        // latched before the first ack had real content in it. The command is
-        // named STOP in the kernel's header for a reason -- sending it thirty
-        // times a second is telling the controller to stop reporting, over and
-        // over, faster than it can publish anything.
-        AckTouchBlock();
-        return true;
-    }
-
-    // ---- CST328 (V1 board), as the vendor demo describes it. Untested: no
-    // V1 board has ever been on this bench. ----
+    // Waveshare's own Touch_CST328.cpp, followed step for step: read the
+    // count at 0xD005, and only if it is non-zero read 27 bytes of points at
+    // 0xD000 into buf[1..], then clear the count register. The coordinate
+    // packing below is theirs verbatim.
+    //
+    // This is what the driver did originally, and it was right -- it was
+    // simply talking to 0x1A on a board whose controller answers at 0x58, so
+    // every transaction failed and the bytes were never data. Ten rounds of
+    // register widths, read lengths, repeated STARTs, clock speeds and two
+    // borrowed frame layouts were all spent on garbage produced by that one
+    // wrong address, which the address probe had already fixed before any of
+    // them.
     uint8_t count = 0;
     if (!ReadReg(REG_TOUCH_COUNT, &count, 1)) {
         return false;
     }
     s_dbg_reads++;
+    s_dbg_frame[0] = count;
     count &= 0x0F;
-    if (count == 0) {
+    // The vendor treats an impossible count the same as none: clear and drop.
+    if (count == 0 || count > 5) {
         ClearTouchLatch();
         return false;
     }
@@ -418,6 +331,8 @@ static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
         return false;
     }
     ClearTouchLatch();
+    memcpy(s_dbg_frame + 1, buf + 1, sizeof(s_dbg_frame) - 1);
+    memcpy(s_dbg_hit, s_dbg_frame, sizeof(s_dbg_hit));
 
     *raw_x = (uint16_t)(((uint16_t)buf[2] << 4) | ((buf[4] & 0xF0) >> 4));
     *raw_y = (uint16_t)(((uint16_t)buf[3] << 4) | (buf[4] & 0x0F));
