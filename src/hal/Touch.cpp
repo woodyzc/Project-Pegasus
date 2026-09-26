@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <string.h>
 #include "../system/PowerManager.h"
 
 // CST328 (Hynitron) I2C address and the subset of its register map this
@@ -58,6 +59,13 @@ static uint32_t s_dbg_reads = 0;
 static uint32_t s_dbg_presses = 0;
 static uint16_t s_dbg_last_x = 0;
 static uint16_t s_dbg_last_y = 0;
+
+// The first bytes of the most recent touch block, and of the most recent one
+// whose count byte was non-zero. Ground truth about the frame layout, which
+// beats any document: Hynitron publishes no register appendix for this part,
+// and the kernel driver's offsets were derived for its siblings.
+static uint8_t s_dbg_frame[8] = {0};
+static uint8_t s_dbg_hit[8] = {0};
 
 // Raw-panel-to-display orientation mapping, against Display_Init()'s
 // tft.setRotation(0). The CST328 is configured by the panel module itself
@@ -242,6 +250,13 @@ static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
             return false;
         }
         s_dbg_reads++;
+        memcpy(s_dbg_frame, buf, sizeof(s_dbg_frame));
+        // Latched separately so a tap is still readable afterwards -- holding
+        // a finger on the glass and photographing the panel at the same time
+        // is not a thing one pair of hands does well.
+        if ((buf[5] & CST3XX_TOUCH_COUNT_MASK) != 0 || (buf[0] & 0x0F) != 0) {
+            memcpy(s_dbg_hit, buf, sizeof(s_dbg_hit));
+        }
 
         // Byte 6 is a fixed check value. The other half of the phantom
         // contacts: with no validity test, a stale or half-written frame
@@ -364,5 +379,15 @@ void Touch_DebugIdentity(uint8_t *addr, uint16_t *signature) {
     }
     if (signature != nullptr) {
         *signature = s_signature;
+    }
+}
+
+void Touch_DebugFrame(uint8_t *latest, uint8_t *latched, size_t len) {
+    const size_t n = len < sizeof(s_dbg_frame) ? len : sizeof(s_dbg_frame);
+    if (latest != nullptr) {
+        memcpy(latest, s_dbg_frame, n);
+    }
+    if (latched != nullptr) {
+        memcpy(latched, s_dbg_hit, n);
     }
 }

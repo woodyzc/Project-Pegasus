@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #include <lvgl.h>
 
 // Bring up the CST328 capacitive touch controller on the Waveshare
@@ -63,3 +65,13 @@ void Touch_DebugCounters(uint32_t *reads, uint32_t *presses, uint16_t *last_x,
 // 0xCACA the CST328's info block carries; the CST3530 is undocumented and may
 // not, so it is reported rather than required. Either pointer may be null.
 void Touch_DebugIdentity(uint8_t *addr, uint16_t *signature);
+
+// The first `len` bytes (max 8) of the touch block: `latest` is the most
+// recent frame read, `latched` the most recent one that looked like it
+// carried a contact. Either pointer may be null.
+//
+// Ground truth about a frame layout nobody has published. The kernel driver's
+// byte offsets were derived for this part's siblings, and applying them here
+// produced first phantom contacts and then none at all -- at which point
+// reading the actual bytes is cheaper than a third guess.
+void Touch_DebugFrame(uint8_t *latest, uint8_t *latched, size_t len);
