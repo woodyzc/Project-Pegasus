@@ -263,12 +263,10 @@ static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
         // decodes as a press at whatever coordinates happen to be in it --
         // which is exactly what 1075,2563 was on a 240x320 panel.
         if (buf[6] != CST3XX_CHK_VAL) {
-            AckTouchBlock();
             return false;
         }
 
         const uint8_t count = buf[5] & CST3XX_TOUCH_COUNT_MASK;
-        AckTouchBlock();
         if (count == 0) {
             return false;
         }
@@ -277,6 +275,17 @@ static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
         // carries X's low nibble in its high half and Y's in its low half.
         *raw_x = (uint16_t)(((uint16_t)buf[1] << 4) | ((buf[3] >> 4) & 0x0F));
         *raw_y = (uint16_t)(((uint16_t)buf[2] << 4) | (buf[3] & 0x0F));
+
+        // Acknowledged only now, having actually consumed a frame.
+        //
+        // It used to be sent on every poll, rejected frames included, and that
+        // silenced the part completely: reads kept succeeding and returned 28
+        // zero bytes for as long as the board was up, while the one frame
+        // latched before the first ack had real content in it. The command is
+        // named STOP in the kernel's header for a reason -- sending it thirty
+        // times a second is telling the controller to stop reporting, over and
+        // over, faster than it can publish anything.
+        AckTouchBlock();
         return true;
     }
 
