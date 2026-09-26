@@ -46,7 +46,12 @@
 /*=======================
  * FEATURE CONFIGURATION
  *=======================*/
-#define LV_USE_PERF_MONITOR 0
+/* FPS + CPU%% in the bottom-right corner. On while the sluggish UI reported on
+ * 2026-09-26 is being chased: it is the only way to tell "slow to draw" from
+ * "slow to sample touch", which need opposite fixes. Far cheaper than the
+ * touch overlay was -- one small label LVGL already maintains internally.
+ * Set back to 0 once the frame rate is settled. */
+#define LV_USE_PERF_MONITOR 1
 #define LV_USE_MEM_MONITOR 0
 #define LV_USE_LOG 0
 
