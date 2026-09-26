@@ -250,7 +250,6 @@ void Touch_Init() {
         s_addr = 0;
         return; // nothing on the bus; every accessor below is a no-op
     }
-    s_controller_found = true;
 
     {
         uint8_t w2[4] = {0xFF, 0xFF, 0xFF, 0xFF};
@@ -298,6 +297,19 @@ void Touch_Init() {
     }
     WriteReg(REG_NORMAL_MODE, nullptr, 0);
 
+    // The vendor's own gate, restored: Touch_Init() there returns false and
+    // prints "Touch initialization failed!" unless this reads 0xCACA. It is a
+    // fixed constant in the part, not a mode or a measurement, so it either
+    // comes back or the link to the controller is not working.
+    //
+    // Honouring it matters for more than honesty. Without it the driver
+    // decodes whatever the bus returns, and garbage decodes as contacts at
+    // coordinates off the panel -- which is the board pressing its own
+    // buttons and walking through the settings pages on its own. A head unit
+    // that does nothing is usable; one that presses "Start new ride" by
+    // itself is not.
+    s_controller_found = (s_signature == 0xCACA);
+
     attachInterrupt(digitalPinToInterrupt(TOUCH_INT_PIN), TouchISR, RISING);
 
     // Start from a clean latch. Otherwise a press that happened during
@@ -326,6 +338,11 @@ static void AckTouchBlock() {
 // (drivers/input/touchscreen), which is the only published description of
 // this protocol -- Hynitron ships no register appendix for the part.
 static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
+    // No verified controller, no touch reports. See Touch_Init.
+    if (!s_controller_found) {
+        return false;
+    }
+
     // Waveshare's own Touch_CST328.cpp, followed step for step: read the
     // count at 0xD005, and only if it is non-zero read 27 bytes of points at
     // 0xD000 into buf[1..], then clear the count register. The coordinate
