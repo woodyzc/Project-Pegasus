@@ -21,6 +21,15 @@ static TwoWire &TOUCH_BUS = Wire1;
 
 static bool s_controller_found = false;
 
+// Bring-up counters. See Touch_DebugCounters in the header for why these
+// exist: they separate "the I2C link is dead" from "the panel reports
+// nothing" from "the coordinates are wrong", which look identical from the
+// outside on a board whose only input is the thing being tested.
+static uint32_t s_dbg_reads = 0;
+static uint32_t s_dbg_presses = 0;
+static uint16_t s_dbg_last_x = 0;
+static uint16_t s_dbg_last_y = 0;
+
 // Raw-panel-to-display orientation mapping, against Display_Init()'s
 // tft.setRotation(0). The CST328 is configured by the panel module itself
 // with the glass's native 240x320 resolution and reports in those
@@ -164,6 +173,10 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
         data->state = LV_INDEV_STATE_REL;
         return;
     }
+    // Counted after the read succeeded, so this rises only while the I2C link
+    // is actually answering -- which is the first of the three things bring-up
+    // needs to tell apart.
+    s_dbg_reads++;
     count &= 0x0F;
 
     if (count == 0) {
@@ -187,6 +200,10 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     // nibble in the high half and Y's low nibble in the low half.
     const uint16_t raw_x = (uint16_t)(((uint16_t)buf[2] << 4) | ((buf[4] & 0xF0) >> 4));
     const uint16_t raw_y = (uint16_t)(((uint16_t)buf[3] << 4) | (buf[4] & 0x0F));
+
+    s_dbg_presses++;
+    s_dbg_last_x = raw_x;
+    s_dbg_last_y = raw_y;
 
     uint16_t x = raw_x;
     uint16_t y = raw_y;
@@ -216,4 +233,20 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     data->point.x = MapAxis(x, TOUCH_RAW_MIN_X, TOUCH_RAW_MAX_X, TFT_WIDTH);
     data->point.y = MapAxis(y, TOUCH_RAW_MIN_Y, TOUCH_RAW_MAX_Y, TFT_HEIGHT);
     data->state = LV_INDEV_STATE_PR;
+}
+
+void Touch_DebugCounters(uint32_t *reads, uint32_t *presses, uint16_t *last_x,
+                         uint16_t *last_y) {
+    if (reads != nullptr) {
+        *reads = s_dbg_reads;
+    }
+    if (presses != nullptr) {
+        *presses = s_dbg_presses;
+    }
+    if (last_x != nullptr) {
+        *last_x = s_dbg_last_x;
+    }
+    if (last_y != nullptr) {
+        *last_y = s_dbg_last_y;
+    }
 }

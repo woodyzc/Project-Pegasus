@@ -18,6 +18,7 @@
 #include "system/DataCenter.h"
 #include "system/LvglTask.h"
 #include "system/PageManager/PageManager.h"
+#include "ui/Overlay_TouchDebug.h"
 #include "ui/Splash.h"
 #include "system/PowerManager.h"
 #include "system/Settings.h"
@@ -198,6 +199,11 @@ void setup() {
     Splash_Dismiss();
 
     LvglTask_Start(); // Core 1: lv_timer_handler() loop (CLAUDE.md §4)
+
+    // Bring-up only, and compiled out by -D PEGASUS_TOUCH_DEBUG=0. After
+    // LvglTask_Start() because it creates an LVGL timer, and this board's
+    // touch controller is a CST328 whose driver has never run on hardware.
+    TouchDebug_Show();
 
     // Core 0 power monitoring. Started before the radios because it is cheap
     // and independent -- if a radio mode stalls below, the battery reading is

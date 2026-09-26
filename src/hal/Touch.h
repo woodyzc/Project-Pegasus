@@ -36,3 +36,20 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data);
 // LVGL. For the boot splash, which runs before the LVGL task exists and so has
 // no input device to ask.
 bool Touch_IsPressed();
+
+// What the driver has actually seen, for bring-up on a new board.
+//
+// "Touch does not work" has three quite different causes and they are
+// indistinguishable from the outside: the controller never answered at all,
+// it answers but reports no contacts, or it reports contacts at coordinates
+// that land somewhere other than the finger. On a board whose only input is
+// the thing under test, and with no usable serial console (CLAUDE.md §8),
+// the only way to tell them apart is to put the counters on the panel.
+//
+// `reads` counts successful register reads of the touch-count register, so a
+// climbing value means the I2C link is alive whatever the panel reports;
+// `presses` counts reads that found at least one contact; `last_x`/`last_y`
+// are the raw coordinates of the most recent one, before any mapping. Any
+// pointer may be null.
+void Touch_DebugCounters(uint32_t *reads, uint32_t *presses, uint16_t *last_x,
+                         uint16_t *last_y);
