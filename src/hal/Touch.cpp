@@ -128,7 +128,20 @@ static bool ReadReg(uint16_t reg, uint8_t *buf, uint8_t len) {
     TOUCH_BUS.beginTransmission(s_addr);
     TOUCH_BUS.write((uint8_t)(reg >> 8));
     TOUCH_BUS.write((uint8_t)(reg & 0xFF));
-    if (TOUCH_BUS.endTransmission(true) != 0) {
+    // false = repeated START, not STOP.
+    //
+    // A STOP here ends the transaction, and this controller then treats the
+    // following read as unrelated to the address just written: it acknowledges
+    // its own address and clocks out nothing, so the master samples an
+    // undriven bus. That is every symptom this bring-up produced -- 28 zero
+    // bytes, then FF FF FF EF repeating, and before that "varied" bytes that
+    // were noise being decoded as contacts at 1075,2563. The part never
+    // returned register data at all; it only ever looked like it had.
+    //
+    // A bare address probe still works through a STOP, which is why
+    // Touch_Init()'s detection found the part at 0x58 correctly while every
+    // read after it failed.
+    if (TOUCH_BUS.endTransmission(false) != 0) {
         return false;
     }
     if (TOUCH_BUS.requestFrom((int)s_addr, (int)len) != len) {
