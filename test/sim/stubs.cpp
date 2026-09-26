@@ -91,7 +91,21 @@ uint8_t RideStats_MaxBpm() { return g_sim.max_bpm; }
 float RideStats_AscentM() { return g_sim.ascent_m; }
 double RideStats_MovingSeconds() { return g_sim.moving_seconds; }
 uint32_t RideLog_PointCount() { return g_sim.log_points; }
-const char *RideLog_FileName() { return g_sim.log_file; }
+// Copy-out, matching the real one since it started taking RideLog's lock --
+// the firmware stopped handing out a pointer the writer task mutates under
+// the reader. Nothing here is threaded, so this is only about the signature.
+bool RideLog_FileName(char *out, size_t out_size) {
+    if (out == nullptr || out_size == 0) {
+        return false;
+    }
+    if (g_sim.log_file == nullptr || g_sim.log_file[0] == '\0') {
+        out[0] = '\0';
+        return false;
+    }
+    snprintf(out, out_size, "%s", g_sim.log_file);
+    return true;
+}
+bool RideLog_IsRecording() { return g_sim.recording; }
 float RideStats_DescentM() { return 1890.0f; }
 void RideStats_Init() {}
 void RideStats_Reset() {}
@@ -114,9 +128,11 @@ bool GpxTrack_CardMounted() { return false; }
 // does on the board.
 const char *const TOPIC_GPS_INFO = "GPS_Info";
 const char *const TOPIC_HEART_RATE = "Sensor/HeartRate";
+const char *const TOPIC_CADENCE = "Sensor/Cadence";
 const char *const TOPIC_IMU_DATA = "Sensor/IMU";
 const char *const TOPIC_BATTERY = "Sensor/Battery";
 const char *const TOPIC_NAV_TBT = "Nav/TBT";
+const char *const TOPIC_PHONE_ALERT = "Phone/Alert";
 
 Account::Account(const char *id, DataCenter_Callback_t callback, void *user_arg)
     : ID(id), Callback(callback), UserArg(user_arg) {}
@@ -170,6 +186,10 @@ bool DataCenter_Pull(const char *topic, void *out, uint32_t size) {
         memcpy(out, &g_sim.tbt, sizeof(TBT_Directive_t));
         return g_sim.have_tbt;
     }
+    if (strcmp(topic, TOPIC_PHONE_ALERT) == 0 && size == sizeof(Alert_Info_t)) {
+        memcpy(out, &g_sim.alert, sizeof(Alert_Info_t));
+        return g_sim.have_alert;
+    }
     if (strcmp(topic, TOPIC_BATTERY) == 0 && size == sizeof(Battery_t)) {
         memcpy(out, &g_sim.battery, sizeof(Battery_t));
         return true;
@@ -181,6 +201,10 @@ bool DataCenter_Pull(const char *topic, void *out, uint32_t size) {
     if (strcmp(topic, TOPIC_HEART_RATE) == 0 && size == sizeof(HeartRate_t)) {
         memcpy(out, &g_sim.hr, sizeof(HeartRate_t));
         return g_sim.have_hr;
+    }
+    if (strcmp(topic, TOPIC_CADENCE) == 0 && size == sizeof(Cadence_t)) {
+        memcpy(out, &g_sim.cadence, sizeof(Cadence_t));
+        return g_sim.have_cadence;
     }
     if (strcmp(topic, TOPIC_GPS_INFO) == 0 && size == sizeof(GPS_Info_t)) {
         memcpy(out, &g_sim.gps, sizeof(GPS_Info_t));
@@ -280,3 +304,7 @@ uint32_t RoadView_LastCullUs() { return 0; }
 uint32_t RoadView_LastDrawOnlyUs() { return 0; }
 uint32_t RoadView_LastSegments() { return 0; }
 uint32_t RoadView_LastVisibleWays() { return 0; }
+
+// Overlay_Alert calls this when a CALL arrives, to wake the screen. There is
+// no backlight here, so it only has to link.
+void PowerManager_NoteActivity() {}

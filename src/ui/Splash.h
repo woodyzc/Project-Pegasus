@@ -36,11 +36,24 @@ void Splash_Show();
 // that task draws is the dashboard.
 void Splash_Dismiss();
 
-// The converted image, from tools/gensplash.py. 240x320 RGB565, which is the
-// panel's own format, so showing it costs a memcpy and no decoding.
+// The converted image, from tools/gensplash.py. 240x320 LV_IMG_CF_INDEXED_8BIT
+// -- a 256-entry palette followed by one byte per pixel, which LVGL looks up
+// as it draws. Half the flash of true colour (76KB against 150KB) and still no
+// decoder and no decode buffer, which is the property that matters: this is
+// drawn before the LVGL task exists, at the moment the board has least to
+// spare, and a decoder that failed would leave a blank screen with nothing to
+// report it.
+//
+// It is shifted 16px down the frame. The title is drawn hard against the top
+// of the artwork, and hard against the top of the artwork is hard against the
+// bezel once it is on a panel -- which reads as a crop rather than a margin.
+// The cover crop's own slack pays for 9 of those pixels and the flat sky at
+// the top is repeated for the rest. The drawn "SYSTEM INITIALIZING" strip
+// falls off the bottom as a result, deliberately: it was already being clipped
+// and half a line of text reads as a fault, where none reads as a choice.
 //
 // The original it was made from is assets/pegasus-splash.jpeg, and the command
 // is in assets/README.md. Keeping the source art matters here: SplashImage.c
-// is a 960KB array of hex bytes, which can be regenerated but cannot sensibly
-// be edited.
+// is a wall of hex bytes, which can be regenerated but cannot sensibly be
+// edited.
 extern "C" const lv_img_dsc_t pegasus_splash;

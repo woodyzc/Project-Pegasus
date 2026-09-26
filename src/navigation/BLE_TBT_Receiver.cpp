@@ -1,7 +1,9 @@
 #include "BLE_TBT_Receiver.h"
 
+#include "../sensors/GpsFrame.h"
 #include "NavRoute.h"
 
+#include "../system/AlertFrame.h"
 #include "../system/ClockFrame.h"
 #include "../system/TimeSource.h"
 
@@ -95,7 +97,19 @@ class TbtCallbacks : public NimBLECharacteristicCallbacks {
 
         NimBLEAttValue value = characteristic->getValue();
 
+        // Zeroed, and this is not defensive habit -- off_route lives in this
+        // struct and NOTHING on the phone path ever writes it. TBT_ParseFrame
+        // fills the four wire fields, source is set below, and
+        // NavRoute_EnrichDirective fills its three; off_route was left as
+        // whatever was on the stack. The dashboard colours the arrow red when
+        // it is set, so a live phone turn flickered between red and cyan at
+        // random while the countdown underneath it was perfectly correct.
+        //
+        // The struct's own comment in DataCenter.h says "every existing
+        // publisher that zeroes this struct" -- this one did not.
         TBT_Directive_t directive;
+        memset(&directive, 0, sizeof(directive));
+
         if (!TBT_ParseFrame(value.data(), value.length(), &directive.icon_id,
                             &directive.distance_m, directive.street_name,
                             sizeof(directive.street_name), &directive.exit_number)) {
@@ -191,6 +205,121 @@ ServerCallbacks s_server_callbacks;
 TbtCallbacks s_characteristic_callbacks;
 RouteCallbacks s_route_callbacks;
 ClockCallbacks s_clock_callbacks;
+
+// ---- Has the real receiver ever produced a fix? ----
+//
+// GPS_Reader publishes on every NAV-PVT whether or not it has a fix, so
+// "something published" does not mean "a receiver is working". What settles it
+// is a fix that was actually valid, and once one has arrived the module is
+// demonstrably present and the phone stands aside permanently.
+//
+// Permanently, rather than for a grace window like NavRoute's turn handover,
+// and the asymmetry is deliberate. A turn going stale is the phone falling
+// quiet, which is ordinary and reversible. A receiver that produced a fix and
+// then stopped is riding into a tunnel, and there the module's own "no fix"
+// is the truth -- taking the phone's position instead would paper over the
+// outage with a number from a device in a pocket.
+volatile bool s_module_ever_fixed = false;
+
+void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
+    (void)topic;
+    (void)user_arg;
+    if (data == nullptr || size != sizeof(GPS_Info_t)) {
+        return;
+    }
+    const GPS_Info_t *gps = (const GPS_Info_t *)data;
+    // Only a fix from the module counts. Our own republished phone fixes come
+    // through this same topic, so without the source check the first phone fix
+    // would convince us a module exists and silence the phone for ever.
+    if (gps->fix_valid && gps->from_module) {
+        s_module_ever_fixed = true;
+    }
+}
+
+Account s_gps_account("TBT/GpsArb", OnGpsPublished);
+
+class GpsCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &conn_info) override {
+        (void)conn_info;
+        NimBLEAttValue value = characteristic->getValue();
+
+        GpsFrame_t frame;
+        if (!Gps_ParseFrame(value.data(), value.length(), &frame)) {
+            return;
+        }
+
+        // The module has the last word once it has ever had a fix.
+        if (s_module_ever_fixed) {
+            return;
+        }
+
+        GPS_Info_t info;
+        memset(&info, 0, sizeof(info));
+        info.from_module = false;
+        info.fix_valid = frame.fix_valid;
+        info.num_sv = frame.num_sv;
+        info.lat = frame.lat;
+        info.lon = frame.lon;
+        info.speed = frame.speed;
+        info.alt = frame.alt;
+        info.heading = frame.heading;
+        info.time_valid = frame.time_valid;
+        info.year = frame.year;
+        info.month = frame.month;
+        info.day = frame.day;
+        info.hour = frame.hour;
+        info.minute = frame.minute;
+        info.second = frame.second;
+
+        // Published without a fix as well, for the same reason GPS_Reader does
+        // it: the panel needs to tell "the phone is here and acquiring" from
+        // "nothing is feeding us a position at all".
+        DataCenter_Publish(TOPIC_GPS_INFO, &info);
+    }
+};
+
+GpsCallbacks s_gps_callbacks;
+
+
+// ---- Phone alerts ----
+//
+// No arbitration and no state: unlike position, nothing else on this device
+// can produce a call. The one thing worth keeping is a counter, because
+// DataCenter_Pull hands back the last published value forever and the overlay
+// would otherwise have no way to tell a new alert from the one it already
+// showed.
+uint32_t s_alert_seq = 0;
+
+class AlertCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic *characteristic, NimBLEConnInfo &conn_info) override {
+        (void)conn_info;
+        NimBLEAttValue value = characteristic->getValue();
+
+        AlertFrame_t frame;
+        if (!Alert_ParseFrame(value.data(), value.length(), &frame)) {
+            return;
+        }
+
+        Alert_Info_t info;
+        memset(&info, 0, sizeof(info));
+        // Pre-incremented, so the first alert of a boot is seq 1 and a zeroed
+        // struct keeps meaning "nothing has arrived". Wrapping after four
+        // billion alerts lands on 0 for exactly one of them, which costs that
+        // single banner and nothing else.
+        info.seq = ++s_alert_seq;
+        info.kind = (uint8_t)frame.kind;
+        info.count = frame.count;
+        // Bounded by the parser, which is why this is a plain copy: name is
+        // NUL-terminated within ALERT_NAME_MAX + 1 or Alert_ParseFrame refused
+        // the frame above.
+        memcpy(info.name, frame.name, sizeof(info.name));
+
+        DataCenter_Publish(TOPIC_PHONE_ALERT, &info);
+    }
+};
+
+AlertCallbacks s_alert_callbacks;
+
 
 const char *s_start_result = "not started";
 
@@ -306,6 +435,23 @@ void BLE_TBT_Start() {
         TBT_CLOCK_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
     clock->setCallbacks(&s_clock_callbacks);
 
+    // Position from the phone, for a head unit whose own receiver has never
+    // been fitted. WRITE_NR as well as WRITE: a fix arrives once a second and
+    // is worthless a second later, so an unacknowledged write that occasionally
+    // drops one is a better trade than a round trip that delays them all.
+    NimBLECharacteristic *gps = service->createCharacteristic(
+        TBT_GPS_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+    gps->setCallbacks(&s_gps_callbacks);
+    DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
+
+    // Calls, texts and chat messages. WRITE_NR for the same reason as the fix
+    // above, with less at stake: a dropped alert is one the rider reads on the
+    // phone at the next stop, so paying a round trip per notification to
+    // guarantee delivery would buy very little.
+    NimBLECharacteristic *alert = service->createCharacteristic(
+        TBT_ALERT_CHARACTERISTIC_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+    alert->setCallbacks(&s_alert_callbacks);
+
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(TBT_SERVICE_UUID);
     advertising->enableScanResponse(true);
@@ -341,6 +487,20 @@ void BLE_TBT_StartAdvertising() {
     // Ground truth from the controller rather than our own bookkeeping.
     NoteTbtStep("tbt_act", ble_gap_adv_active() ? 1 : 0);
     s_start_result = adv_ok ? "started" : "adv REFUSED";
+}
+
+void BLE_TBT_NoteStackReleased() {
+    // NimBLEDevice::deinit(true) destroys the server this module created, and
+    // nothing here would otherwise notice: s_server was never cleared, so
+    // every null check in this file passed on a dangling pointer and the calls
+    // behind them went into a stack that no longer existed.
+    //
+    // Called by BLE_HR_Client, which owns the deinit because it owns the
+    // disconnect that has to precede it.
+    s_server = nullptr;
+    s_advertising = false;
+    s_paused = false;
+    s_connected = false;
 }
 
 void BLE_TBT_PauseAdvertising() {

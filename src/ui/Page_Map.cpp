@@ -6,6 +6,7 @@
 #include "../navigation/GpxTrack.h"
 #include "../navigation/MapProject.h"
 #include "../navigation/RoadMap.h"
+#include "../sensors/GPS_Reader.h"
 #include "../system/DataCenter.h"
 #include "../system/PageManager/PageManager.h"
 #include "MapView.h"
@@ -27,6 +28,7 @@ constexpr uint32_t COLOR_CAPTION = 0x93A4B8;
 constexpr uint32_t COLOR_VALUE = 0xFFFFFF;
 constexpr uint32_t COLOR_ACCENT = 0x61DAFB;
 constexpr uint32_t COLOR_PANEL = 0x18232E;
+constexpr uint32_t COLOR_WARN = 0xFFD166;   // same amber as the dashboard's
 
 constexpr lv_coord_t MAP_X = 0;
 constexpr lv_coord_t MAP_Y = 36;
@@ -57,12 +59,46 @@ lv_timer_t *s_refresh_timer = nullptr;
 
 volatile bool s_gps_dirty = false;
 
+// How long a fix, and a talking receiver, stay believable. The same five
+// seconds the dashboard blanks SPEED after and NavRoute stops navigating
+// after: both publishers send at 1Hz, so this is five missed messages.
+constexpr uint32_t FIX_STALE_MS = 5000;
+constexpr uint32_t GNSS_SILENT_MS = 5000;
+
+// Bumped by the DataCenter callback on every VALID fix, and read on the LVGL
+// side to notice that one arrived.
+//
+// This exists because DataCenter_Pull has no concept of freshness: once a
+// topic has been published it hands back that same last value for ever. So
+// `fix_valid` on a pulled struct means "there was a fix, once" -- and a
+// status corner built on that reading tells a rider whose receiver died
+// mid-ride that it is still tracking satellites. A counter rather than a
+// timestamp because the callback runs on the publisher's core; the same
+// reasoning, and the same pattern, as NavRoute.cpp's s_fix_seq.
+volatile uint32_t s_fix_seq = 0;
+uint32_t s_seen_fix_seq = 0;
+uint32_t s_fix_last_ms = 0;
+
+// The frame count is cumulative and never resets, so its VALUE only proves
+// the receiver spoke at some point. Movement is what proves it is speaking
+// now, which is the question the corner is actually asked.
+uint32_t s_seen_frames = 0;
+uint32_t s_frames_moved_ms = 0;
+
 void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
     (void)topic;
-    (void)data;
-    (void)size;
     (void)user_arg;
     s_gps_dirty = true;
+
+    // Stamped on a valid fix, never on a publish: GPS_Reader publishes at 1Hz
+    // with fix_valid false while it acquires, so counting publishes would read
+    // a receiver in a tunnel as a live position for as long as the tunnel.
+    if (data == nullptr || size < sizeof(GPS_Info_t)) {
+        return;
+    }
+    if (((const GPS_Info_t *)data)->fix_valid) {
+        s_fix_seq++;
+    }
 }
 
 Account s_gps_account("Page_Map/GPS", OnGpsPublished);
@@ -79,6 +115,89 @@ void UpdateScale() {
     } else {
         lv_label_set_text_fmt(s_scale_label, "%d m across", (int)across);
     }
+}
+
+// The status corner, and the only place on the panel that can tell a GNSS
+// wiring mistake from a cold start.
+//
+// "Waiting for fix" could not: it read identically for a correctly wired
+// module still acquiring and for one connected to nothing, and serial is
+// unusable on the dev host (CLAUDE.md §8), so there was nowhere else to look.
+// GPS_FrameCount() counts GGA sentences that passed checksum, so any non-zero
+// value proves the pins, the baud rate and the module itself, and leaves only
+// the sky to wait for. Zero after a few seconds means bytes are not arriving
+// at all.
+//
+// Precedence here is deliberate, because one 15-character corner cannot hold
+// two facts (the centred "ROUTE" title is what caps the width):
+//   1. no card at all -- a hardware fault that also defeats this page's whole
+//      purpose, so it outranks everything;
+//   2. a FRESH fix -- with its source, because during GNSS bring-up a phone
+//      fix on this same topic would otherwise read as the receiver working;
+//   3. a receiver still talking but not fixed -- acquiring, with the count;
+//   4. silence -- the actionable one.
+//
+// Every state above is judged on something that ages. The first version of
+// this label judged on a pulled struct and a cumulative counter, neither of
+// which can go backwards, so a receiver that died mid-ride left the corner
+// frozen on its last good news for ever.
+// "No .gpx on card" used to live here and lost its slot to (3): an empty
+// route picker one tap away says the same thing, and a missing card still
+// reports itself through (1).
+void UpdateStatusLabel() {
+    if (s_status_label == nullptr) {
+        return;
+    }
+
+    if (GpxTrack_PointCount() == 0 && !GpxTrack_CardMounted()) {
+        lv_label_set_text(s_status_label, "No SD card");
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_WARN), 0);
+        return;
+    }
+
+    const uint32_t now = lv_tick_get();
+
+    // Both of these age, and neither can be read off a pulled struct. See
+    // s_fix_seq and s_seen_frames: a dead receiver leaves DataCenter holding
+    // its last good fix and GPS_FrameCount() holding its final total, so the
+    // corner would have gone on reporting a healthy module indefinitely --
+    // in the one widget whose whole job is to say whether it is healthy.
+    if (s_fix_seq != s_seen_fix_seq) {
+        s_seen_fix_seq = s_fix_seq;
+        s_fix_last_ms = now;
+    }
+    const bool fix_fresh = s_fix_last_ms != 0 && lv_tick_elaps(s_fix_last_ms) <= FIX_STALE_MS;
+
+    const uint32_t frames = GPS_FrameCount();
+    if (frames != s_seen_frames) {
+        s_seen_frames = frames;
+        s_frames_moved_ms = now;
+    }
+    const bool talking =
+        s_frames_moved_ms != 0 && lv_tick_elaps(s_frames_moved_ms) <= GNSS_SILENT_MS;
+
+    GPS_Info_t gps;
+    if (fix_fresh && DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps)) && gps.fix_valid) {
+        if (gps.from_module) {
+            lv_label_set_text_fmt(s_status_label, "%d sats", (int)gps.num_sv);
+        } else {
+            lv_label_set_text_fmt(s_status_label, "%d sats phone", (int)gps.num_sv);
+        }
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_ACCENT), 0);
+        return;
+    }
+
+    if (talking) {
+        lv_label_set_text_fmt(s_status_label, "Acquiring %u", (unsigned)frames);
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
+        return;
+    }
+
+    // Nothing is arriving NOW. Wrong pins or baud if it never was; a dead or
+    // unplugged receiver if it used to be. The corner cannot tell those apart
+    // and should not pretend to -- both are "check the hardware".
+    lv_label_set_text(s_status_label, "No GNSS data");
+    lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_WARN), 0);
 }
 
 // Only offered once the view has been moved by hand. A control that is always
@@ -144,6 +263,15 @@ void OnZoomClicked(lv_event_t *e) {
 void RefreshTimerCallback(lv_timer_t *timer) {
     (void)timer;
 
+    // Every tick, and deliberately ahead of the dirty gate below: a module on
+    // the wrong pins publishes NOTHING -- GPS_Reader only publishes once a GGA
+    // has decoded -- so s_gps_dirty stays false for ever and an early return
+    // would leave the corner reading whatever onViewLoad wrote. Gating the
+    // "no bytes are arriving" diagnostic on bytes arriving is the bug this
+    // label was added to fix, and it is CLAUDE.md §8's rule about blanking a
+    // label rather than skipping the write, one step further out.
+    UpdateStatusLabel();
+
     if (!s_gps_dirty) {
         return;
     }
@@ -159,14 +287,16 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         // meaningless without a fix, and MapView hides it.
         MapView_SetPosition(&s_view, &gps);
         RoadView_Refresh();
-        lv_label_set_text(s_status_label, "Waiting for fix");
-        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
         return;
     }
 
     MapView_SetPosition(&s_view, &gps);
-    lv_label_set_text_fmt(s_status_label, "%d sats", (int)gps.num_sv);
-    lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_ACCENT), 0);
+    // The no-fix branch above refreshes too, and this one used to rely on
+    // Page_Dashboard's 100ms timer -- still alive underneath this page -- to
+    // do it as a side effect. That is not a dependency worth keeping: it lives
+    // in another file, it is invisible from here, and it would take the roads
+    // away the moment the dashboard stopped being the page below.
+    RoadView_Refresh();
     UpdateScale();
 }
 
@@ -219,6 +349,14 @@ void OnRouteChosen(lv_event_t *e) {
         double lon = 0.0;
         if (GpxTrack_Center(&lat, &lon)) {
             RoadMap_LoadCovering(lat, lon);
+            // The layer is only created when an extract is already loaded, so
+            // a page that opened with no roads has none to draw into -- and
+            // PageManager caches this page for the life of the boot, so
+            // onViewLoad will not run again to make one. Without this call the
+            // extract loads, Refresh draws it into nothing, and the streets
+            // stay invisible until a reboot. Idempotent when a layer already
+            // exists, which is the common case.
+            RoadView_Attach(&s_view);
         }
     }
     MapView_Recenter(&s_view);
@@ -524,13 +662,14 @@ void PageMap::onViewLoad() {
         }
         RoadView_Refresh();
         UpdateScale();
-    } else if (s_status_label != nullptr) {
-        // The status corner rather than a line of its own: with no trail there
-        // is no scale and no satellite count to show either, so the corner is
-        // free and is already where this page says what it knows.
-        lv_label_set_text(s_status_label,
-                          GpxTrack_CardMounted() ? "No .gpx on card" : "No SD card");
     }
+
+    // The corner's first text, rather than leaving the creation placeholder up
+    // for the 500ms until the timer's first tick. UpdateStatusLabel owns every
+    // message in it from here on, card state included, so that a page cached
+    // for the life of the boot (CLAUDE.md §8) cannot keep showing what was
+    // true at Push().
+    UpdateStatusLabel();
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
     s_refresh_timer = lv_timer_create(RefreshTimerCallback, 500, nullptr);

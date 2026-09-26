@@ -8,7 +8,9 @@
 #include <esp_system.h>
 
 #include "../system/DataCenter.h"
+#include "BLE_CSC_Client.h"
 #include "BleHrParse.h"
+#include "BleRadioGate.h"
 
 namespace {
 
@@ -47,6 +49,21 @@ constexpr uint16_t kScanWindowMs = 30;
 // How long to wait for a clean disconnect at shutdown. Long enough to cover
 // several connection intervals at the slow end of what a watch negotiates.
 constexpr uint32_t kShutdownDisconnectMs = 1500;
+
+// How long the shutdown waits for the supervisor task to park itself before
+// tearing the stack down anyway.
+//
+// The task normally sits in vTaskDelay and parks within a tick, so this is
+// almost never spent. The two things that used to hold it longer -- a scan in
+// getResults() and a connect() that can run for kConnectTimeoutMs -- are both
+// actively cancelled by BLE_HR_Shutdown() before this wait begins, so it is
+// now a safety net rather than a deadline anything is expected to reach.
+//
+// It still stops short of kConnectTimeoutMs on purpose: if a park ever does
+// time out, proceeding is no worse than the behaviour this replaced, where the
+// stack was torn down under the task every single time, and the settings page
+// reports the timeout rather than hiding it.
+constexpr uint32_t kShutdownParkMs = 2500;
 
 // Direct connects to the stored address to tolerate before throwing the
 // address away and scanning again. A peer that has simply wandered out of
@@ -106,6 +123,14 @@ volatile int s_failed_connects = 0;
 constexpr char kNvsNamespace[] = "pegasus";
 constexpr char kNvsShutdownCode[] = "ble_sd_code";
 constexpr char kNvsShutdownMs[] = "ble_sd_ms";
+// The park result has to be persisted for the same reason the shutdown result
+// is, and it is not an optimisation: parking happens at shutdown, which is the
+// instant before a reboot, so a value kept only in RAM is wiped by the very
+// event it describes. Left as a boot-local static it could never read anything
+// but "not run" -- which is exactly what it did, on the first board it was
+// asked.
+constexpr char kNvsParkOk[] = "ble_pk_ok";
+constexpr char kNvsParkMs[] = "ble_pk_ms";
 int s_last_shutdown_code = 0;
 uint32_t s_last_shutdown_ms = 0;
 
@@ -119,6 +144,21 @@ void RecordShutdown(int code, uint32_t elapsed_ms) {
     prefs.end();
 }
 
+// Written as soon as the park finishes rather than at the end of the shutdown,
+// because the paths out of BLE_HR_Shutdown() are not all the same and this
+// must survive every one of them.
+void RecordPark(bool ok, uint32_t elapsed_ms) {
+    Preferences prefs;
+    if (!prefs.begin(kNvsNamespace, false)) {
+        return;
+    }
+    // 1 or 2 rather than a bool, so "never written" is distinguishable from
+    // "written, and it timed out".
+    prefs.putUChar(kNvsParkOk, ok ? 2 : 1);
+    prefs.putUInt(kNvsParkMs, elapsed_ms);
+    prefs.end();
+}
+
 // Set when the controller reports the link actually down. This, not
 // isConnected(), is the completion signal: NimBLEClient::disconnect() only
 // calls ble_gap_terminate() and sets m_connStatus = DISCONNECTING, while
@@ -127,6 +167,28 @@ void RecordShutdown(int code, uint32_t elapsed_ms) {
 // on it measured local bookkeeping and reported "clean in 0ms" while the
 // terminate never reached the watch.
 volatile bool s_disconnect_event = false;
+
+// ---- Stopping the supervisor before the stack goes ----
+//
+// BleHrTask runs forever and calls into NimBLE on every pass. BLE_HR_Shutdown
+// used to call NimBLEDevice::deinit(true) straight into that, which deletes
+// every client and server while the task still holds pointers to them -- and
+// the window was not a narrow one, because the disconnect immediately above
+// the deinit is exactly what wakes the task up to try reconnecting.
+//
+// Cooperative rather than vTaskDelete: the task may be inside NimBLE holding
+// its mutex, and deleting it there would leave the stack locked forever.
+volatile bool s_shutdown_requested = false;
+volatile bool s_task_parked = false;
+
+// How long the task took to park, and whether it did. On the settings page
+// beside the disconnect result, because a park that times out means the stack
+// was torn down under a live task after all -- the exact thing this exists to
+// prevent, and otherwise completely invisible.
+uint32_t s_last_park_ms = 0;
+bool s_last_park_ok = false;
+// 0 = never written, 1 = timed out, 2 = parked. Restored from NVS at init.
+uint8_t s_last_park_code = 0;
 
 class ClientCallbacks : public NimBLEClientCallbacks {
     void onDisconnect(NimBLEClient *client, int reason) override {
@@ -186,6 +248,11 @@ bool ConnectAndSubscribe() {
     //
     // The window is the connect timeout at worst (5s), and it closes on every
     // path out of this function.
+    //
+    // The gate is the same rule extended to the second client. Cadence has its
+    // own supervisor on its own backoff, and two connects landing together is
+    // the identical load with no advertisement involved -- see BleRadioGate.h.
+    BleRadioGateHold gate;
     BLE_TBT_PauseAdvertising();
     struct ResumeAdvertising {
         ~ResumeAdvertising() { BLE_TBT_ResumeAdvertising(); }
@@ -255,6 +322,17 @@ void BleHrTask(void *pvParameters) {
     uint32_t backoff_ms = kBackoffStartMs;
 
     for (;;) {
+        // Checked before anything touches NimBLE, so that once the flag is up
+        // this task never enters the stack again. Parking forever rather than
+        // deleting itself: the caller is about to restart or deep sleep, and a
+        // task suspended in its own loop holds no NimBLE mutex.
+        if (s_shutdown_requested) {
+            s_task_parked = true;
+            for (;;) {
+                vTaskDelay(portMAX_DELAY);
+            }
+        }
+
         if (s_connected) {
             // A connected link is never dropped for going quiet.
             //
@@ -282,7 +360,12 @@ void BleHrTask(void *pvParameters) {
             // the peer to be broadcasting inside
             // that window meant a watch woken a moment late would never be
             // found however long it broadcast afterwards.
-            if (DiscoverPeer() && ConnectAndSubscribe()) {
+            bool found;
+            {
+                BleRadioGateHold gate;
+                found = DiscoverPeer();
+            }
+            if (found && ConnectAndSubscribe()) {
                 backoff_ms = kBackoffStartMs;
                 continue;
             }
@@ -366,7 +449,10 @@ void BLE_HR_Init() {
         if (prefs.begin(kNvsNamespace, false)) {
             s_last_shutdown_code = prefs.getInt(kNvsShutdownCode, 0);
             s_last_shutdown_ms = prefs.getUInt(kNvsShutdownMs, 0);
+            s_last_park_code = prefs.getUChar(kNvsParkOk, 0);
+            s_last_park_ms = prefs.getUInt(kNvsParkMs, 0);
             prefs.putInt(kNvsShutdownCode, 0);
+            prefs.putUChar(kNvsParkOk, 0);
             prefs.end();
         }
     }
@@ -394,6 +480,63 @@ void BLE_HR_Start() {
                             kTaskCore);
 }
 
+namespace {
+
+// Asks BleHrTask to stop entering NimBLE, and waits a bounded time for it to
+// say it has. Cuts a discovery scan short on the way, since that is the one
+// thing that would otherwise hold the task for fifteen seconds.
+void ParkSupervisor() {
+    s_shutdown_requested = true;
+
+    // A scan in progress blocks the task inside getResults() for the rest of
+    // kDiscoveryScanMs. Stopping it is safe when none is running.
+    NimBLEScan *scan = NimBLEDevice::getScan();
+    if (scan != nullptr) {
+        scan->stop();
+    }
+
+    // And a connect in progress blocks it for up to kConnectTimeoutMs, which
+    // is twice the park deadline below -- so the one case the deadline was
+    // sized for was also the one case it could not wait out. Tearing the stack
+    // down while the task is inside connect() is a use-after-free that leaves
+    // no other trace.
+    //
+    // Cancelling is the answer rather than waiting longer: lengthening the
+    // deadline to 5s+ would make Restart feel broken on every press to fix a
+    // case that only happens when a peer is mid-handshake. The task rechecks
+    // s_shutdown_requested at the top of its loop, so an aborted connect parks
+    // it on the very next pass. Safe when no connect is in flight -- it
+    // answers false and changes nothing.
+    if (s_client != nullptr) {
+        s_client->cancelConnect();
+    }
+
+    const uint32_t started = millis();
+    while (!s_task_parked && (millis() - started) < kShutdownParkMs) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    s_last_park_ok = s_task_parked;
+    s_last_park_ms = millis() - started;
+    RecordPark(s_last_park_ok, s_last_park_ms);
+}
+
+// Deletes the stack and forgets every pointer into it.
+//
+// The nulling is not tidiness. deinit(true) destroys the client and the
+// server, and both were left dangling -- s_client because only ResetClient()
+// ever cleared it, s_server because nothing ever did. Anything that ran
+// afterwards and checked them for null found a non-null corpse.
+void ReleaseStack() {
+    NimBLEDevice::deinit(true);
+    s_client = nullptr;
+    s_connected = false;
+    s_have_peer = false;
+    BLE_TBT_NoteStackReleased();
+    vTaskDelay(pdMS_TO_TICKS(50));
+}
+
+} // namespace
+
 void BLE_HR_Shutdown() {
     // Say goodbye before the chip restarts.
     //
@@ -408,8 +551,44 @@ void BLE_HR_Shutdown() {
     // however it is reached, including the settings page's Restart button. It
     // cannot cover a power cut or the reset esptool asserts when flashing;
     // nothing running on the chip can.
+    //
+    // ⚠️ It is also not sufficient on its own, and the peer decides that.
+    // Observed 2026-09-15 with a Galaxy Watch 8: a restart left the watch
+    // unfindable, and the only cure was switching broadcasting off on the
+    // watch and restarting again -- which is not something a rider can do at
+    // the roadside, and not something a strap even offers.
+    //
+    // Expect this to be watch-only. A strap's supervision timeout is seconds,
+    // so it works out the link is dead and starts advertising again by itself;
+    // a watch is a whole operating system with a connection manager and
+    // app-level state, and can sit on a phantom link far longer. Untested with
+    // a strap -- see BLE_HR_Client.h for how to test it when one arrives.
+    //
+    // Before changing any timing here, read "Last disconnect on restart" on
+    // the settings page: it is written to NVS below precisely so this question
+    // can be answered rather than guessed at. "clean in NNNms" means the
+    // goodbye reached the peer and the fault is the peer's; "TIMED OUT" means
+    // kShutdownDisconnectMs is too short and this end is at fault.
+    // ---- Stop BOTH supervisors before anything else ----
+    // First, and before the disconnect below rather than after it, because the
+    // disconnect is what would otherwise send the task straight into a
+    // reconnect attempt on a stack that is about to be deleted.
+    //
+    // The cadence supervisor is parked here rather than by its own module
+    // because this function owns the teardown: ReleaseStack() below runs
+    // NimBLEDevice::deinit(true), which destroys every client on the stack.
+    // A cadence task still holding a pointer to one is the exact bug §8
+    // records for the heart-rate task, one sensor along.
+    BLE_CSC_Park();
+    ParkSupervisor();
+
     if (s_client == nullptr || !s_client->isConnected()) {
         RecordShutdown(1, 0);
+        // Still tear the stack down, and still forget the pointers. The old
+        // code returned here, which was survivable before a restart but leaves
+        // the deep-sleep path inconsistent with the connected one for no
+        // reason -- PrepareForSleep() comes through here too.
+        ReleaseStack();
         return;
     }
 
@@ -436,8 +615,7 @@ void BLE_HR_Shutdown() {
     // second half of the bug: it stopped the controller while the terminate
     // was still queued, so the watch never learned the link was gone and
     // therefore never resumed advertising.
-    NimBLEDevice::deinit(true);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    ReleaseStack();
 }
 
 bool BLE_HR_IsConnected() {
@@ -454,6 +632,16 @@ const char *BLE_HR_LastShutdownText() {
                  return text;
         default: return "not run";
     }
+}
+
+const char *BLE_HR_LastParkText() {
+    static char text[32];
+    if (s_last_park_code == 0) {
+        return "not run";
+    }
+    snprintf(text, sizeof(text), "%s in %ums", s_last_park_code == 2 ? "parked" : "TIMED OUT",
+             (unsigned)s_last_park_ms);
+    return text;
 }
 
 const char *BLE_HR_StatusText() {

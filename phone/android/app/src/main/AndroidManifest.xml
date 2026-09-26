@@ -46,8 +46,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.PegasusTBT">
 
+        <!-- adjustResize, not the default: the screen is a scrolling column
+             with two text fields in it, and without this the keyboard is laid
+             over the content rather than shrinking it, so the field being
+             typed into can end up underneath the keyboard. -->
         <activity
             android:name=".MainActivity"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

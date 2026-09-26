@@ -4,6 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "../navigation/RideLog.h"
 #include "DataCenter.h"
 #include "Ascent.h"
 #include "RideStatsCore.h"
@@ -44,10 +45,16 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
         return;
     }
     const GPS_Info_t *gps = (const GPS_Info_t *)data;
-    if (!gps->fix_valid) {
-        // A dropped fix is a gap, not a stop. Forgetting the timestamp means
-        // the next sample starts a fresh interval instead of charging the
-        // average for however long the receiver was lost.
+
+    // No ride, no statistics -- the same rule the odometer follows, and for
+    // the same reason: averages gathered before the rider started anything
+    // turn "new ride" into a report on a ride that never happened.
+    //
+    // Treated exactly like a dropped fix rather than merely skipped, because
+    // the interval bookkeeping matters: forgetting the timestamp means the
+    // first sample after starting opens a fresh interval, instead of charging
+    // the average for however long the device sat disarmed on a desk.
+    if (!gps->fix_valid || !RideLog_IsArmed()) {
         Locked guard;
         s_have_speed = false;
         return;

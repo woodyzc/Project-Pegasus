@@ -25,7 +25,22 @@ constexpr char KEY_BOOT_COUNT[] = "boots";
 constexpr char KEY_SLEEP[] = "sleepen";
 constexpr char KEY_TRACKUP[] = "trackup";
 
-constexpr uint8_t DEFAULT_BRIGHTNESS = 100;
+// 60, not 100. The backlight is the largest single draw on this board while
+// riding -- roughly half of it -- and it is the only one of the big three that
+// costs nothing to turn down: the downclock never fires on a moving bike
+// (PowerManager keeps the screen awake while the GPS reports movement) and the
+// receiver cannot be throttled without costing fixes. On the estimates in
+// CLAUDE.md this is the difference between about six hours and about eight.
+//
+// Only a default. NVS wins if the rider has ever moved the slider, which is
+// the right way round: someone who chose 100 in bright sun chose it knowing
+// what it looked like, and a firmware update must not quietly darken their
+// screen. It therefore does nothing at all on a board that already has a
+// stored value.
+//
+// Unverified in sunlight -- nobody has ridden with this. If 60 turns out to be
+// unreadable outdoors the number is wrong, not the reasoning.
+constexpr uint8_t DEFAULT_BRIGHTNESS = 60;
 constexpr float KM_TO_MILES = 0.621371f;
 
 
@@ -65,7 +80,13 @@ bool s_sleep_enabled = false;
 // Default on: the rider asked for it, and north-up costs a mental rotation at
 // every junction.
 bool s_track_up = true;
+// Kept, and kept false: nothing forces the navigation mode any more. The
+// accessor stays so the settings page compiles, and says so.
 bool s_nav_fell_back = false;
+
+// This boot came up after two unfinished radio bring-ups, so the GATT server
+// and its advertisement are held off. Not persisted -- see where it is set.
+bool s_radios_held_off = false;
 uint8_t s_hr_rest = DEFAULT_HR_REST;
 uint8_t s_hr_max = DEFAULT_HR_MAX;
 const char *s_reset_text = "?";
@@ -154,14 +175,29 @@ void Settings_Init() {
 
     // ---- Reset diagnostics ----
     // Read before anything else can restart us. A genuine power-on starts the
-    // count again, so pulling the USB lead is how you clear it; every other
-    // reason means the previous run ended without being asked to, and the
-    // count is what separates one bad boot from a loop.
+    // count again, so pulling the USB lead is how you clear it; the count is
+    // what separates one bad boot from a loop.
+    //
+    // ⚠️ A deep-sleep wake does NOT count, and that exception is the whole
+    // reason this is not a one-liner. The rule used to be "anything but a
+    // power-on means the previous run ended without being asked to" -- which
+    // was true right up until deep sleep started working, because until then
+    // nothing ever ended a run deliberately. Now a rider who sleeps the device
+    // every night would add a tick every night, and a real reboot loop would
+    // be invisible against that background. Counting only the endings nobody
+    // asked for is what makes the number mean anything.
     const esp_reset_reason_t reason = esp_reset_reason();
     s_reset_text = ResetReasonText(reason, &s_reset_abnormal);
 
     if (s_ready) {
-        s_boot_count = (reason == ESP_RST_POWERON) ? 1 : s_prefs.getUInt(KEY_BOOT_COUNT, 0) + 1;
+        if (reason == ESP_RST_POWERON) {
+            s_boot_count = 1;
+        } else if (reason == ESP_RST_DEEPSLEEP) {
+            // Carried, not raised: the previous run ended exactly as asked.
+            s_boot_count = s_prefs.getUInt(KEY_BOOT_COUNT, 1);
+        } else {
+            s_boot_count = s_prefs.getUInt(KEY_BOOT_COUNT, 0) + 1;
+        }
         s_prefs.putUInt(KEY_BOOT_COUNT, s_boot_count);
     } else {
         s_boot_count = 1;
@@ -187,9 +223,24 @@ void Settings_Init() {
     // removed, because the fallback then moved the heart-rate source to BLE,
     // which was almost always already BLE and so invisible.
     if (s_ready && s_prefs.getUChar(KEY_RADIO_PENDING, 0) >= RADIO_PENDING_LIMIT) {
-        s_nav_fell_back = (s_nav_mode != NAV_MODE_GPX);
-        s_nav_mode = NAV_MODE_GPX;
-        s_prefs.putUChar(KEY_NAV_MODE, (uint8_t)s_nav_mode);
+        // Holds the GATT server and its advertisement off for THIS boot, and
+        // says nothing about the navigation mode.
+        //
+        // It used to force the mode to GPX, which worked only because GPX
+        // happened to start no radio -- a coincidence, and one that cost the
+        // whole phone-position feature the moment it was built, because a
+        // rider in GPX mode then had no GATT server for the phone to write a
+        // fix into and no advertisement for it to find. The two questions
+        // "what navigation do I show" and "do I touch the radio" were never
+        // the same question; they are now asked separately.
+        //
+        // One boot rather than persisted. The specific hangs section 8
+        // records have since been fixed -- the registration order, the paused
+        // advertisement, the parked supervisor -- so this is a net for an
+        // unknown future hazard rather than a known present one, and a net
+        // that permanently disables position is worse than one that retries.
+        // A hang that really does repeat will trip this again two boots later.
+        s_radios_held_off = true;
         s_prefs.putUChar(KEY_RADIO_PENDING, 0);
     }
 
@@ -209,6 +260,10 @@ void Settings_NoteRadioBringUpOk() {
     if (s_ready) {
         s_prefs.putUChar(KEY_RADIO_PENDING, 0);
     }
+}
+
+bool Settings_RadiosHeldOff() {
+    return s_radios_held_off;
 }
 
 bool Settings_DidNavModeFallBack() {

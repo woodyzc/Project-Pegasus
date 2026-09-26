@@ -269,13 +269,13 @@ platform and build-tools).
 While it exists, build with:
 
 ```sh
-K=/private/tmp/claude-501/-Users-woodyzc-Documents-PlatformIO-Projects-Project-Pegasus/\
+K=/private/tmp/claude-501/-Users-woodyzc-Documents-PlatformIO-Projects-Project-Pegasus/34c5b502-2699-4134-a2e5-145eba4d452f/scratchpad/ktool
 b0f68de9-bcba-44c3-8a01-10c0b8603552/scratchpad/ktool
 
 cd phone/android
 JAVA_HOME="$K/jdk-17.0.20.1+1/Contents/Home" \
 GRADLE_USER_HOME="$K/gradle-home" \
-"$K/gradle-8.9/bin/gradle" --offline testDebugUnitTest assembleDebug
+"$K/gradle-8.9/bin/gradle" testDebugUnitTest assembleDebug
 ```
 
 `--offline` matters: the Gradle cache under `gradle-home` already has every

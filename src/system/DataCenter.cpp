@@ -6,9 +6,11 @@
 
 const char *const TOPIC_GPS_INFO = "GPS_Info";
 const char *const TOPIC_HEART_RATE = "Sensor/HeartRate";
+const char *const TOPIC_CADENCE = "Sensor/Cadence";
 const char *const TOPIC_IMU_DATA = "Sensor/IMU";
 const char *const TOPIC_BATTERY = "Sensor/Battery";
 const char *const TOPIC_NAV_TBT = "Nav/TBT";
+const char *const TOPIC_PHONE_ALERT = "Phone/Alert";
 
 Account::Account(const char *id, DataCenter_Callback_t callback, void *user_arg)
     : ID(id), Callback(callback), UserArg(user_arg) {
@@ -29,9 +31,11 @@ struct Topic {
 Topic s_topics[] = {
     {TOPIC_GPS_INFO, sizeof(GPS_Info_t), nullptr, false, {}},
     {TOPIC_HEART_RATE, sizeof(HeartRate_t), nullptr, false, {}},
+    {TOPIC_CADENCE, sizeof(Cadence_t), nullptr, false, {}},
     {TOPIC_IMU_DATA, sizeof(IMU_Data_t), nullptr, false, {}},
     {TOPIC_BATTERY, sizeof(Battery_t), nullptr, false, {}},
     {TOPIC_NAV_TBT, sizeof(TBT_Directive_t), nullptr, false, {}},
+    {TOPIC_PHONE_ALERT, sizeof(Alert_Info_t), nullptr, false, {}},
 };
 constexpr size_t kTopicCount = sizeof(s_topics) / sizeof(s_topics[0]);
 

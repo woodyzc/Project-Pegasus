@@ -23,6 +23,7 @@
 #include "../../src/ui/Overlay_RideSummary.h"
 #include "../../src/ui/Page_Map.h"
 #include "sim_state.h"
+#include "../../src/ui/Overlay_Alert.h"
 
 #define SCREEN_W 240
 #define SCREEN_H 320
@@ -125,6 +126,8 @@ static void RenderGallery(PageDashboard *page, const char *out_dir) {
     g_sim.ascent_m = 4988.0f; // four digits: the widest this cell must take
     g_sim.have_hr = true;
     g_sim.hr.bpm = 151;
+    g_sim.have_cadence = true;
+    g_sim.cadence.rpm = 88;
 
     for (size_t u = 0; u < sizeof(kUnits) / sizeof(kUnits[0]); u++) {
         g_sim.speed_unit = kUnits[u];
@@ -183,6 +186,89 @@ int main(int argc, char **argv) {
 
     if (gallery) {
         RenderGallery(&page, out_dir);
+        return 0;
+    }
+
+    if (argc > 2 && strcmp(argv[2], "--alert") == 0) {
+        // The phone alert banner, over a dashboard mid-ride with a turn on
+        // screen. That background is the whole point: the banner's one design
+        // rule is that it covers the metric cells and never the navigation
+        // region, and the only way to see that is to draw it over a turn.
+        g_sim.have_gps = true;
+        g_sim.gps.fix_valid = true;
+        g_sim.gps.speed = 7.3f;
+        g_sim.gps.num_sv = 11;
+        g_sim.trip_km = 24.6;
+        g_sim.have_hr = true;
+        g_sim.hr.bpm = 148;
+        g_sim.ascent_m = 312.0f;
+        SetTurn(TBT_ICON_TURN_RIGHT, 180, "Massachusetts Avenue", 0, TBT_ICON_TURN_LEFT, 90,
+                8200);
+        Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
+
+        // The real overlay, driven the real way: it polls TOPIC_PHONE_ALERT
+        // on its own timer, so setting the topic and letting the clock run is
+        // exactly what the board does.
+        Overlay_Alert_Init();
+
+        struct Scene {
+            const char *file;
+            uint8_t kind;
+            uint8_t count;
+            const char *name;
+        };
+        static const Scene kScenes[] = {
+            // A call from the address book: the case that also wakes the
+            // screen.
+            {"a1-call-latin", ALERT_KIND_CALL, 1, "Mum"},
+            // A call from a number nobody has saved. The banner still has to
+            // say the phone is ringing.
+            {"a2-call-unknown", ALERT_KIND_CALL, 1, ""},
+            {"a3-sms", ALERT_KIND_SMS, 1, "Alex Whitfield"},
+            // Chinese, which is the reason src/ui/CjkFont.c exists.
+            {"a4-chat-cjk", ALERT_KIND_CHAT, 1, "\xE5\xBC\xA0\xE4\xB8\x89"},
+            // A group chat that said six things while the rider was riding.
+            {"a5-chat-coalesced", ALERT_KIND_CHAT, 6,
+             "\xE5\x91\xA8\xE6\x9C\xAB\xE9\xAA\x91\xE8\xA1\x8C\xE7\xBE\xA4"},
+            // A transliterated foreign name, which hangs on U+00B7 -- a
+            // character GB2312 does not have and tools/gencjkfont.py adds by
+            // hand.
+            {"a6-chat-middot", ALERT_KIND_CHAT, 1,
+             "\xE7\x8E\x9B\xE4\xB8\xBD\xC2\xB7\xE5\x8F\xB2\xE5\xAF\x86\xE6\x96\xAF"},
+            // The longest name the wire format allows, in each script. These
+            // are what FitToBox exists for: they must end in an ellipsis
+            // inside the banner, never run past its bottom edge.
+            {"a7-longest-latin", ALERT_KIND_SMS, 1,
+             "Bartholomew Fitzgerald-Smythe III Esq"},
+            {"a8-longest-cjk", ALERT_KIND_CHAT, 99,
+             "\xE5\x91\xA8\xE6\x9C\xAB\xE9\xAA\x91\xE8\xA1\x8C\xE7\xBE\xA4"
+             "\xE6\x98\x8E\xE5\xA4\xA9\xE4\xB8\x83\xE7\x82\xB9\xE5\x87\xBA"
+             "\xE5\x8F\x91\xE4\xB8\x8D\xE8\xA7\x81\xE4\xB8\x8D\xE6\x95\xA3"},
+            // The only name that can actually overflow the banner, and so the
+            // only one that exercises FitToBox's ellipsis: one Chinese
+            // character forces the CJK face, whose Latin is wider and whose
+            // line box is taller, and the remaining 45 bytes then need four
+            // lines where three fit. Both single-script maxima fit without
+            // trimming -- 48 bytes is 16 hanzi, which is two lines -- so
+            // without this scene that path would ship unrun.
+            {"a9-overflow-mixed", ALERT_KIND_CHAT, 1,
+             "\xE5\xBC\xA0 Wednesday Evening Club Ride Organisers"},
+        };
+
+        uint32_t seq = 0;
+        for (const Scene &scene : kScenes) {
+            g_sim.have_alert = true;
+            memset(&g_sim.alert, 0, sizeof(g_sim.alert));
+            g_sim.alert.seq = ++seq;
+            g_sim.alert.kind = scene.kind;
+            g_sim.alert.count = scene.count;
+            snprintf(g_sim.alert.name, sizeof(g_sim.alert.name), "%s", scene.name);
+
+            snprintf(path, sizeof(path), "%s/%s.ppm", out_dir, scene.file);
+            Render(&page, path);
+        }
         return 0;
     }
 
@@ -287,18 +373,53 @@ int main(int argc, char **argv) {
             12400);
     Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
     Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
-    // A steep climb, so the ELEVATION cell is rendered with its widest
-    // plausible grade rather than the "--" this board will always show.
+    g_sim.have_cadence = true;
+    g_sim.cadence.rpm = 92;
+    Sim_Publish(TOPIC_CADENCE, nullptr, 0);
+    // A grade, which only reaches the second page now that cadence has the
+    // first page's fourth cell. Kept because INCLINE is still rendered from
+    // it, and "--" is what this board shows for want of an IMU.
     g_sim.have_imu = true;
     g_sim.imu.pitch = 7.13f; // about +12.5%
     Sim_Publish(TOPIC_IMU_DATA, nullptr, 0);
     snprintf(path, sizeof(path), "%s/03-mid-ride.ppm", out_dir);
     Render(&page, path);
 
+    // ---- Scene 3a: the rider stops pedalling ----
+    // Zero rpm with the sensor still connected, which is a different state
+    // from no sensor at all and must not look like one. Scene 1 covers the
+    // dashes; this covers the nought.
+    g_sim.cadence.rpm = 0;
+    Sim_Publish(TOPIC_CADENCE, nullptr, 0);
+    snprintf(path, sizeof(path), "%s/03a-coasting.ppm", out_dir);
+    Render(&page, path);
+
+    // Three digits, which is the widest this cell has to hold: the tracker
+    // rejects anything past 250, so "250" is the worst case by construction
+    // rather than by hope.
+    g_sim.cadence.rpm = 250;
+    Sim_Publish(TOPIC_CADENCE, nullptr, 0);
+    snprintf(path, sizeof(path), "%s/03b-cadence-widest.ppm", out_dir);
+    Render(&page, path);
+    g_sim.cadence.rpm = 92;
+    Sim_Publish(TOPIC_CADENCE, nullptr, 0);
+
     // ---- Scene 4: a roundabout, close enough to act on ----
     SetTurn(TBT_ICON_ROUNDABOUT, 25, "A413 Wendover Road", 3, TBT_ICON_STRAIGHT, 800, 11000);
     Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
     snprintf(path, sizeof(path), "%s/04-roundabout-imminent.ppm", out_dir);
+    Render(&page, path);
+
+    // ---- Scene 4a: a street name short enough to keep the biggest font ----
+    // Every other scene here uses a name long enough that SetStreetName drops
+    // to montserrat_14, whose line box is 16px -- and the four navigation rows
+    // happen to fit in that case. A short name keeps montserrat_24 at 27px,
+    // which is 4px more than the column has, and the overflow comes off the
+    // descenders. "Rockingham Road" is the exact name from the photograph that
+    // found it, and the only glyph that shows the bug is the g.
+    SetTurn(TBT_ICON_TURN_LEFT, 97, "Rockingham Road", 0, TBT_ICON_TURN_LEFT, 190, 2900);
+    Sim_Publish(TOPIC_NAV_TBT, nullptr, 0);
+    snprintf(path, sizeof(path), "%s/04a-short-street-name.ppm", out_dir);
     Render(&page, path);
 
     // ---- Scene 5: the worst strings anything has to hold ----
@@ -337,18 +458,95 @@ int main(int argc, char **argv) {
         g_sim.imu.pitch = -4.0f;
         g_sim.have_hr = true;
         g_sim.hr.bpm = 148;
+        g_sim.have_cadence = true;
+        g_sim.cadence.rpm = 84;
         g_sim.battery.percent = 41;
         g_sim.ascent_m = 2140.0f;
         Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
         Sim_Publish(TOPIC_BATTERY, nullptr, 0);
         Sim_Publish(TOPIC_HEART_RATE, nullptr, 0);
+        Sim_Publish(TOPIC_CADENCE, nullptr, 0);
 
         Sim_Publish(TOPIC_IMU_DATA, nullptr, 0);
+
+        // ---- The same ride, both pages, nothing changed between them ----
+        // Rendered as a pair because that is the only way to check the thing
+        // two photographs of the real panel caught: figures that appear on
+        // both pages must agree. They are separate labels fed by separate
+        // code, so agreement is a property to verify, not one to assume --
+        // average speed drifted apart exactly here, and the elevation figure
+        // was two different measurements wearing similar cells.
+        //
+        // Read them side by side: the two TRIP figures, and the two CADENCE
+        // figures -- which are one label copied to another and must never
+        // disagree.
+        snprintf(path, sizeof(path), "%s/06a-first-page-same-ride.ppm", out_dir);
+        Render(&page, path);
 
         Page_Dashboard_ShowSecondPageForTest(true);
         snprintf(path, sizeof(path), "%s/06-second-page.ppm", out_dir);
         Render(&page, path);
+
+        // ---- The same page before the ride has moved ----
+        // A ride armed but not yet under way, which is what a board sitting on
+        // a desk with the phone feeding it actually looks like -- and until a
+        // photograph of one turned up, the state no scene here covered.
+        //
+        // RideStatsCore_AvgSpeedKmh() returns 0.0f to mean "nothing to
+        // average", and this page printed that straight out as "0.0" while
+        // page one showed "--" for the same ride. Both must read "--".
+        //
+        // Max at zero rather than avg is what decides it: max is recorded from
+        // every sample with no threshold, so only a ride that has never seen
+        // any speed at all leaves it here.
+        g_sim.max_kmh = 0.0f;
+        g_sim.avg_kmh = 0.0f;
+        g_sim.moving_seconds = 0.0;
+        g_sim.gps.speed = 0.0f;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        snprintf(path, sizeof(path), "%s/06b-second-page-not-moved.ppm", out_dir);
+        Render(&page, path);
+
         Page_Dashboard_ShowSecondPageForTest(false);
+    }
+
+    // ---- Scene 6c: the trip cell's three fills ----
+    // The loudest thing on the panel, and until now the simulator had never
+    // drawn two of its three states: every scene here records, so every trip
+    // cell ever rendered was amber. Green and red existed only in the code.
+    {
+        g_sim.trip_km = 12.40;
+        g_sim.have_gps = true;
+        g_sim.gps.fix_valid = true;
+        g_sim.gps.num_sv = 9;
+
+        // Green: nothing is being written, and nothing needs to be. Reached
+        // by standing still long enough for the thirty-second movement hold
+        // to lapse -- earlier scenes have been moving, and the cell is
+        // deliberately slow to calm down.
+        g_sim.recording = false;
+        g_sim.gps.speed = 0.0f;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        // Past the hold outright rather than rendering a throwaway frame:
+        // Render() writes whatever path it is handed and has no no-op mode.
+        g_sim.millis += 40000;
+        snprintf(path, sizeof(path), "%s/06c-trip-idle-green.ppm", out_dir);
+        Render(&page, path);
+
+        // Amber: moving, and not one metre of it is being kept. The state the
+        // whole cell exists for -- and, since the colours were swapped, the
+        // quieter of the two fills. Rendered so that is a decision someone
+        // looked at rather than one that happened.
+        g_sim.gps.speed = 24.0f / 3.6f;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        snprintf(path, sizeof(path), "%s/06d-trip-moving-unrecorded-amber.ppm", out_dir);
+        Render(&page, path);
+
+        // Red: writing. Put back so later scenes see what they expect.
+        g_sim.recording = true;
+        Sim_Publish(TOPIC_GPS_INFO, nullptr, 0);
+        snprintf(path, sizeof(path), "%s/06e-trip-recording-red.ppm", out_dir);
+        Render(&page, path);
     }
 
     // ---- Scene 7: the report a ride ends with ----

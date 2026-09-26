@@ -350,8 +350,15 @@ bool FileServer_Start() {
     }
     // The HTTP task and the ride-log writer would otherwise both be inside
     // SD_MMC at once, and the driver does not promise that is safe.
-    if (RideLog_IsRecording()) {
-        SetStatus("a ride is being recorded -- not while it is");
+    //
+    // Armed, not recording, and the difference is the whole bug this replaces.
+    // A ride is armed the moment the rider presses "Start new ride" and only
+    // starts writing when the first valid fix lands, which can be many minutes
+    // later and somewhere else entirely. Gating on "recording" therefore let
+    // the server start in a kitchen, and the writer open its file over the top
+    // of it as the rider reached open sky.
+    if (RideLog_IsArmed()) {
+        SetStatus("a ride is armed -- finish it first");
         return false;
     }
 

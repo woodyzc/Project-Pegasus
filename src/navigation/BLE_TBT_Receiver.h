@@ -53,6 +53,31 @@
 // following a route still wants a clock, and ride files are named from it.
 #define TBT_CLOCK_CHARACTERISTIC_UUID "a3c87504-8ed3-4bdf-8a39-a01bebede295"
 
+// ---- Position, when the head unit has no receiver of its own ----
+//
+// The phone writes a fix here and BLE_TBT_Receiver publishes it to
+// TOPIC_GPS_INFO, exactly as the GNSS reader would. Wire format and the
+// reasoning for it are in src/sensors/GpsFrame.h.
+//
+// ⚠️ The real receiver wins whenever it has one. GPS_Reader publishes even
+// without a fix -- num_sv climbing is how "module present, still acquiring"
+// is told from "no module" -- so the arbitration cannot simply watch for
+// publishes. It asks whether the module has ever produced a VALID fix, and
+// steps aside for good once it has. See GpsSourceCallbacks in the .cpp.
+#define TBT_GPS_CHARACTERISTIC_UUID "a3c87505-8ed3-4bdf-8a39-a01bebede295"
+
+// ---- Calls, texts and chat messages, so the rider can leave the phone alone
+//
+// The phone writes an alert here and BLE_TBT_Receiver publishes it to
+// TOPIC_PHONE_ALERT, where Overlay_Alert draws it over the metric cells. Wire
+// format, and why it carries a name and no message body, are in
+// src/system/AlertFrame.h.
+//
+// Write-only and WRITE_NR: an alert the head unit missed is an alert the
+// rider finds on the phone later, which is the normal state of affairs
+// anyway. Nothing acknowledges it and nothing is stored.
+#define TBT_ALERT_CHARACTERISTIC_UUID "a3c87506-8ed3-4bdf-8a39-a01bebede295"
+
 // Brings up the GATT server and starts advertising, so the phone can find and
 // connect to the device. Preconditions: DataCenter_Init() has run, and NimBLE
 // is initialised (BLE_HR_Init() does this; call that first).
@@ -103,6 +128,15 @@ void BLE_TBT_StartAdvertising();
 // Both are safe no-ops when turn-by-turn was never started (GPX mode), and the
 // pause is deliberately short: a connect attempt times out in 5s, and the
 // phone only loses the chance to discover the head unit for that long.
+// The whole NimBLE stack has just been deinitialised, so forget every pointer
+// into it. Called by BLE_HR_Client's shutdown, which owns the teardown because
+// it owns the disconnect that must come first.
+//
+// Without it the server pointer here outlives the server: deinit(true) deletes
+// it, nothing clears it, and every null check in this module then passes on a
+// corpse.
+void BLE_TBT_NoteStackReleased();
+
 void BLE_TBT_PauseAdvertising();
 void BLE_TBT_ResumeAdvertising();
 

@@ -11,7 +11,9 @@
 #include "navigation/NavRoute.h"
 #include "navigation/RideLog.h"
 #include "navigation/RoadMap.h"
+#include "sensors/BLE_CSC_Client.h"
 #include "sensors/BLE_HR_Client.h"
+#include "sensors/BleRadioGate.h"
 #include "sensors/GPS_Reader.h"
 #include "system/DataCenter.h"
 #include "system/LvglTask.h"
@@ -21,6 +23,7 @@
 #include "system/Settings.h"
 #include "system/RideStats.h"
 #include "system/Trip.h"
+#include "ui/Overlay_Alert.h"
 #include "ui/Page_Dashboard.h"
 #include "ui/Page_Map.h"
 #include "ui/Page_Settings.h"
@@ -45,6 +48,12 @@ void setup() {
 
     lv_init();
     DataCenter_Init();
+
+    // Straight after the bus and before GPS_Init(), because this is what
+    // stamps a fix as having arrived. A publish landing before the
+    // subscription is a fix nothing timed, and the onboard fallback would
+    // treat it as fresh for ever.
+    NavRoute_Init();
 
     Display_Init();
     Touch_Init();
@@ -146,12 +155,43 @@ void setup() {
         }
     }
 
+    // ---- The ride, before any of it can be looked at ----
+    //
+    // These used to sit at the very end of setup(), after the radios. That put
+    // them roughly fifteen seconds after LvglTask_Start() -- because
+    // BLE_HR_Start() blocks for that long -- and the UI is fully interactive
+    // the moment that task exists. A rider who reached the settings page in
+    // those seconds and pressed "new ride" got the odometer cleared and the
+    // ride log refusing to start, because RideLog's queue did not exist yet.
+    // The same gap made the ride buttons draw from an armed flag that had not
+    // been restored from NVS, so they appeared the wrong way round after a
+    // restart and swapped a second later.
+    //
+    // None of the three needs a radio. They need DataCenter and, for the log,
+    // a mounted card -- both of which are already true here.
+    //
+    // Both read GPS through DataCenter, so they are independent of which page
+    // the rider happens to be looking at.
+    Trip_Init();
+    // Beside the odometer and for the same reason: both accumulate from
+    // DataCenter rather than from a redraw, so both keep counting while the
+    // rider is looking at the map or the settings page.
+    RideStats_Init();
+    RideLog_Init();
+
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);
     s_page_manager.Push(PAGE_NAME_DASHBOARD);
 
     // Before the LVGL task, because it creates an LVGL timer and LVGL here has
     // no lock: everything lv_* belongs to that task once it is running.
     PowerManager_Init();
+
+    // Same precondition, same reason: it creates LVGL objects from a timer,
+    // and that timer has to exist before the task that owns LVGL does.
+    //
+    // Independent of the radios below. If the phone never connects this costs
+    // one Pull every 250ms that finds nothing.
+    Overlay_Alert_Init();
 
     // Waits out whatever is left of the two seconds, then hands the screen
     // over. The first frame the LVGL task draws is the dashboard.
@@ -183,7 +223,14 @@ void setup() {
     // a mode that hangs here is caught on the next boot (see Settings.h).
     Settings_NoteRadioBringUpStart();
 
+    // One mutex, shared by both sensor clients, so only one of them is ever
+    // asking the controller to open a link. Created before either.
+    BleRadioGate_Init();
+
     BLE_HR_Init();
+    // Configures scan parameters only, like BLE_HR_Init, so it is safe on this
+    // side of BLE_TBT_Start()'s GATT registration.
+    BLE_CSC_Init();
 
     // ---- This order is load-bearing. Do not swap these two. ----
     // Turn-by-turn shares the NimBLE stack the HR client brings up, and
@@ -203,11 +250,40 @@ void setup() {
     //
     // BLE_HR_Init() is safe to precede this -- it only configures the scan
     // parameters, it does not start scanning.
-    if (Settings_GetNavMode() == NAV_MODE_TBT) {
+    // ---- The server runs whatever the navigation mode is ----
+    // It carries the phone's position (src/sensors/GpsFrame.h) as well as
+    // turn-by-turn, and a head unit with no receiver of its own needs that in
+    // both modes -- GPX navigation is a breadcrumb drawn against a position,
+    // so without one it draws nothing at all.
+    //
+    // Held off only when the watchdog says the last two boots hung here.
+    // Held off only when the watchdog says the last two boots hung here, and
+    // it now covers EVERY radio rather than the GATT server alone.
+    //
+    // It used to skip BLE_TBT_Start() and run the heart-rate client anyway,
+    // which made the escape hatch useless against most of what it guards. A
+    // hang inside BLE_HR_Start() -- a synchronous fifteen-second scan on the
+    // same NimBLE stack, and the half of bring-up with the longer history of
+    // wedging (see CLAUDE.md section 8) -- hung the held-off boot too. The
+    // counter is cleared when the hold fires, so the board settled into a
+    // three-boot cycle of hang, hang, hang-with-the-server-off, for ever,
+    // while the settings page told the rider a restart would try again.
+    //
+    // A boot that is held off starts no radio at all. That is the point of it:
+    // it is the one state in which the rider can reliably reach the settings
+    // page and change the thing that is wedging.
+    const bool radios_ok = !Settings_RadiosHeldOff();
+    if (radios_ok) {
         BLE_TBT_Start();
-    }
 
-    BLE_HR_Start();
+        BLE_HR_Start();
+
+        // After the heart rate, and it only starts a task -- no synchronous
+        // scan. Its first discovery therefore happens once setup() is already
+        // past the blocking part, and it waits on the same gate rather than
+        // racing for the radio.
+        BLE_CSC_Start();
+    }
 
     // Advertising goes last, and the split from BLE_TBT_Start() is the point.
     // Registration had to come before any connection existed; advertising has
@@ -219,22 +295,13 @@ void setup() {
     // -- which the reset does not cancel -- then fires during the re-sync and
     // hits assert(0) in ble_hs_timer_exp. That is a library defect we cannot
     // patch, so the concurrency that provokes it is what has to go.
-    if (Settings_GetNavMode() == NAV_MODE_TBT) {
+    if (radios_ok) {
         BLE_TBT_StartAdvertising();
     }
 
     // Got through radio bring-up: clear the flag so the next boot honours the
     // user's choice instead of falling back to GPX.
     Settings_NoteRadioBringUpOk();
-
-    // Both read GPS through DataCenter, so they are independent of which page
-    // the rider happens to be looking at.
-    Trip_Init();
-    // Beside the odometer and for the same reason: both accumulate from
-    // DataCenter rather than from a redraw, so both keep counting while the
-    // rider is looking at the map or the settings page.
-    RideStats_Init();
-    RideLog_Init();
 
     // TODO(Phase 1 Task 1.3+): remaining Core 0 tasks publishing into
     // DataCenter (GPS_Info, Sensor/IMU) -- Page_Dashboard is already

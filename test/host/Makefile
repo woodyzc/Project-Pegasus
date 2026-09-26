@@ -4,10 +4,24 @@
 # can are deliberately kept dependency-free and covered here:
 #   * test_ble_hr_parse - BLE 0x2A37 measurement parsing (compiles the real
 #                         src/sensors/BleHrParse.c)
+#   * test_csc_parse    - BLE 0x2A5B cadence parsing and the rpm tracker built
+#                         on it (compiles the real src/sensors/BleCscParse.c).
+#                         Both counters on that wire are 16-bit and
+#                         free-running, so every ride wraps them.
+#   * test_gps_frame    - the position fix the phone sends, standing in for a
+#                         GNSS module that has never been fitted (compiles the
+#                         real src/sensors/GpsFrame.c)
+#   * test_alert_frame  - the call/text/chat alert the phone pushes (compiles
+#                         the real src/system/AlertFrame.c). The name in it is
+#                         the only off-device string this firmware draws
+#                         verbatim, so the length handling is the subject.
 #   * test_tbt_parse    - turn-by-turn frame decoding (compiles the real
 #                         src/navigation/TbtParse.c)
 #   * test_ubx_parse    - u-blox NAV-PVT decoding (compiles the real
 #                         src/sensors/UbxParse.c)
+#   * test_nmea_parse   - NMEA GGA/RMC decoding for the ATGM336H actually on
+#                         the bench, which is not a u-blox part and does not
+#                         speak UBX (compiles the real src/sensors/NmeaParse.c)
 #   * test_timezone     - position to POSIX TZ, and the civil-to-epoch maths
 #                         (compiles the real src/system/TimeZone.c)
 #   * test_gpx_parse    - GPX track-point extraction (compiles the real
@@ -71,7 +85,9 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) test_clock_frame$(SUFFIX) \
         test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX) \
         test_idle_policy$(SUFFIX) test_ascent$(SUFFIX) \
-        test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX)
+        test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX) \
+        test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX) test_csc_parse$(SUFFIX) \
+        test_nmea_parse$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -98,10 +114,25 @@ CSRC = $(filter %.c,$^)
 test_ble_hr_parse$(SUFFIX): test_ble_hr_parse.c $(SENSORS)/BleHrParse.c
 	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC)
 
+test_gps_frame$(SUFFIX): test_gps_frame.c $(SENSORS)/GpsFrame.c
+	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
+
+test_csc_parse$(SUFFIX): test_csc_parse.c $(SENSORS)/BleCscParse.c
+	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC)
+
+# The name in this frame is printed straight onto the panel, so the suite is
+# mostly about lengths: the declared one and the delivered one are separate
+# numbers, and believing the first reads past the BLE buffer.
+test_alert_frame$(SUFFIX): test_alert_frame.c $(SYSTEM)/AlertFrame.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
+
 test_tbt_parse$(SUFFIX): test_tbt_parse.c $(NAV)/TbtParse.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC)
 
 test_ubx_parse$(SUFFIX): test_ubx_parse.c $(SENSORS)/UbxParse.c
+	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
+
+test_nmea_parse$(SUFFIX): test_nmea_parse.c $(SENSORS)/NmeaParse.c
 	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
 
 test_timezone$(SUFFIX): test_timezone.c $(SYSTEM)/TimeZone.c

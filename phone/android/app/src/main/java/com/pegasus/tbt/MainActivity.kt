@@ -13,6 +13,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -82,8 +83,19 @@ class MainActivity : AppCompatActivity() {
             } else {
                 "\n\nUNPARSED (${failures.size} distinct):\n" + failures.joinToString("\n") { "· $it" }
             }
+            // Alerts get their own line. They come from a different set of
+            // apps and fail for different reasons, so folding them into the
+            // Maps figures above would make both unreadable -- and "nothing
+            // happened when my phone rang" needs an answer this screen can
+            // give: seen but not classified, classified but folded, or sent
+            // and the head unit was not listening.
+            val alertLine = "\n\nalerts: seen ${MapsNotificationListener.alertsSeen}" +
+                " / sent ${MapsNotificationListener.alertsSent}" +
+                " / folded ${MapsNotificationListener.alertsFolded}" +
+                "\n${MapsNotificationListener.lastAlert}"
+
             parseStatus.text =
-                "$cadence\n${MapsNotificationListener.lastParse}$redactedNote$failureBlock"
+                "$cadence\n${MapsNotificationListener.lastParse}$redactedNote$failureBlock$alertLine"
             // 200ms rather than a second: this line is the only window onto
             // what the parser is doing, and a second of lag makes a working
             // parser look broken while you watch it.
@@ -232,9 +244,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        setContentView(LinearLayout(this).apply {
+        // Fourteen controls in a column, on a phone, with a soft keyboard that
+        // covers the bottom third whenever a token or a destination is being
+        // typed. A bare LinearLayout simply clipped everything past the fold:
+        // the buttons existed, were laid out, and could not be reached.
+        //
+        // The padding stays on the column rather than moving to the ScrollView,
+        // so the bottom inset is scrolled *to* instead of being a dead margin
+        // the last button hides behind.
+        val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 48, 48, 48)
+            // Without this the first EditText takes focus as the screen opens
+            // and the ScrollView helpfully jumps to it, so the activity starts
+            // halfway down its own content.
+            isFocusableInTouchMode = true
             addView(status)
             addView(parseStatus)
             addView(notifButton)
@@ -249,6 +273,19 @@ class MainActivity : AppCompatActivity() {
             addView(saveTokenButton)
             addView(clearTokenButton)
             addView(powerButton)
+        }
+
+        setContentView(ScrollView(this).apply {
+            // Short content still fills the screen, so the background does not
+            // stop partway down on a tall phone.
+            isFillViewport = true
+            addView(
+                column,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
         })
 
         requestRuntimePermissions()

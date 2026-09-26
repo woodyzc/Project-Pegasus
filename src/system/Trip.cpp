@@ -5,6 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "../navigation/RideLog.h"
 #include "TripAccum.h"
 
 namespace {
@@ -65,6 +66,23 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
         return;
     }
     const GPS_Info_t *gps = (const GPS_Info_t *)data;
+
+    // ---- The odometer belongs to the ride ----
+    //
+    // It used to accumulate from the moment a fix existed, whether or not the
+    // rider had started anything. That was visibly wrong the day the phone
+    // began supplying fixes: the dashboard's TRIP cell sat amber, saying
+    // nothing was being recorded, with a number climbing inside it. It also
+    // made "new ride" pop up a summary of a ride that had never been started,
+    // because the distance it had quietly gathered made RideSummary_IsEmpty()
+    // false.
+    //
+    // Armed, not recording: a rider who has pressed start and is waiting on a
+    // first fix is on their ride, and the metres they cover getting one are
+    // theirs. The fix-validity check inside TripAccum_AddFix still applies.
+    if (!RideLog_IsArmed()) {
+        return;
+    }
 
     Locked guard;
     s_unsaved_m += TripAccum_AddFix(&s_accum, gps->fix_valid, gps->lat, gps->lon);

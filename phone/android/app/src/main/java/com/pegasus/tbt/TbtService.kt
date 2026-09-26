@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
@@ -33,6 +34,7 @@ import androidx.core.content.ContextCompat
 class TbtService : Service() {
 
     companion object {
+        private const val TAG = "PegasusService"
         private const val CHANNEL_ID = "pegasus_tbt_link"
         private const val NOTIFICATION_ID = 1
 
@@ -48,6 +50,16 @@ class TbtService : Service() {
          */
         @Volatile
         var routeSource: RouteSource? = null
+            private set
+
+        /**
+         * This phone's own position, lent to a head unit whose receiver has
+         * never been fitted. Beside the others for the same reason: it must
+         * outlive any Activity, because a ride is spent with the phone in a
+         * pocket.
+         */
+        @Volatile
+        var locationSource: LocationSource? = null
             private set
 
         private const val PREFS = "pegasus_tbt"
@@ -158,6 +170,61 @@ class TbtService : Service() {
      * the Google Maps notification path does not need this and must keep
      * working without it.
      */
+    /**
+     * Starts lending the head unit this phone's position.
+     *
+     * Separate from ensureRouteSource() on purpose: routing is opt-in and
+     * unbuilt by default, while this must work on the build that actually
+     * ships. Tying them together would mean the head unit has no fix on
+     * exactly the configuration that works today.
+     *
+     * Silent when permission is missing. The rider may grant it later and this
+     * is called on every connect, so nothing needs to watch for that.
+     */
+    /**
+     * Whether this service actually holds the location foreground-service
+     * type, as opposed to merely holding the permission for it. API 34 grants
+     * the two separately and only the first one lets location run.
+     */
+    private var locationTypeHeld = false
+
+    private fun ensureLocation() {
+        // Without the location foreground-service type, Android delivers no
+        // updates to a backgrounded app -- silently, with no error and no
+        // callback. Starting the source anyway would look like a receiver
+        // that has never got a fix, which is the single most confusing state
+        // this project has, so say so instead.
+        //
+        // Recovered by onStartCommand calling this again on every start:
+        // opening the app starts the service from the foreground, where the
+        // type is granted, and that pass gets past this guard.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            !locationTypeHeld && hasLocationPermission()
+        ) {
+            status = "Bluetooth only; open the app to send position"
+            notifyStatus(status)
+            return
+        }
+
+        val source = locationSource ?: LocationSource(applicationContext).also {
+            locationSource = it
+        }
+        var sent = 0L
+        var refused = 0L
+        source.onFrame = { frame ->
+            // The head unit ignores this outright once its own receiver has
+            // had a fix, so there is nothing to arbitrate here.
+            if (link?.sendGps(frame) == true) sent++ else refused++
+            // A refusal is usually the GATT queue being busy, not the head
+            // unit saying no -- and a steady stream of them means the
+            // characteristic is absent, which is what old firmware looks like.
+            if ((sent + refused) % 30L == 0L) {
+                android.util.Log.i("PegasusGps", "sent=$sent refused=$refused")
+            }
+        }
+        source.start()
+    }
+
     private fun ensureRouteSource() {
         if (routeSource != null) return
         val source = RouteSources.create(applicationContext) ?: return
@@ -193,11 +260,42 @@ class TbtService : Service() {
             // refusal on API 34, it is a SecurityException -- so declaring
             // both unconditionally would mean that denying location crashes
             // the Bluetooth link, which does not need location at all.
-            var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            val connectedDevice = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            var types = connectedDevice
             if (hasLocationPermission()) {
                 types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
             }
-            startForeground(NOTIFICATION_ID, notification, types)
+
+            // ---- Holding the location type is not ours to decide ----
+            // Permission is necessary and NOT sufficient. Location is a
+            // while-in-use type, and API 34 refuses to let one start from the
+            // background however many permissions are held -- with a
+            // SecurityException out of validateForegroundServiceType, which
+            // kills the process.
+            //
+            // That is not a hypothetical. This service is started from
+            // MapsNotificationListener.onListenerConnected(), which the system
+            // calls when it binds the listener after a reboot or a reinstall,
+            // and the app is in the background by definition at that moment.
+            // The crash-loop that follows is answered by Android with a
+            // thirty-minute restart backoff, so a phone that reboots in a car
+            // park has no link, no position and no alerts until someone opens
+            // the app by hand -- which is exactly what that automatic start
+            // exists to avoid.
+            //
+            // There is no API for "may I claim this type right now". Attempt
+            // and fall back is the documented shape, and the fallback must
+            // succeed: startForegroundService has already promised Android a
+            // startForeground within five seconds, and connectedDevice is not
+            // a while-in-use type, so it is always allowed.
+            try {
+                startForeground(NOTIFICATION_ID, notification, types)
+                locationTypeHeld = types != connectedDevice
+            } catch (e: Exception) {
+                startForeground(NOTIFICATION_ID, notification, connectedDevice)
+                locationTypeHeld = false
+                Log.w(TAG, "location foreground type refused, Bluetooth only: ${e.message}")
+            }
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -225,6 +323,21 @@ class TbtService : Service() {
 
         ensureLink()
 
+        // Deliberately NOT inside ensureLink(), which returns early once the
+        // link exists and therefore runs its body once per process.
+        //
+        // Whether location may run is decided above, in this method, on every
+        // start -- and the answer changes. A service first started from the
+        // background cannot hold the location type; the same service started
+        // again once the user opens the app can. Behind ensureLink() that
+        // second pass never happened, so a process that came up in the
+        // background stayed position-less for its whole life, which is
+        // precisely the recovery its comment claimed to provide.
+        //
+        // Safe to repeat: LocationSource.start() returns immediately if it is
+        // already listening.
+        ensureLocation()
+
         // Restart if Android reclaims us under memory pressure: a dropped link
         // mid-ride is the failure this service exists to prevent.
         return START_STICKY
@@ -236,6 +349,12 @@ class TbtService : Service() {
         // is being torn down.
         routeSource?.stop()
         routeSource = null
+        // Before the link, and not optional: LocationManager keeps the GNSS
+        // running for as long as a listener is registered, and a service that
+        // died without removing it would leave the phone burning its battery
+        // on fixes with nowhere to go.
+        locationSource?.stop()
+        locationSource = null
         link?.stop()
         link = null
         status = "Stopped"

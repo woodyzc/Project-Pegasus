@@ -15,6 +15,8 @@ import com.mapbox.navigation.base.route.NavigationRouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.core.MapboxNavigation
 import com.mapbox.navigation.core.MapboxNavigationProvider
+import com.mapbox.navigation.core.directions.session.RoutesExtra
+import com.mapbox.navigation.core.directions.session.RoutesObserver
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
@@ -23,19 +25,24 @@ import com.mapbox.navigation.core.trip.session.RouteProgressObserver
  * The only file in this app that touches the Mapbox SDK.
  *
  * ---------------------------------------------------------------------------
- * THIS FILE IS NOT COMPILED BY DEFAULT AND HAS NEVER BEEN COMPILED HERE.
+ * COMPILED, AGAINST navigationcore 3.6.0. NOT YET RUN ON A ROUTE.
  * ---------------------------------------------------------------------------
+ * It was written from the published API long before anyone could build it, and
+ * it now compiles against the real SDK -- so the signatures below are checked,
+ * and nothing about the behaviour is. What the compiler cannot tell you is
+ * whether the maneuvers map sensibly, whether the reroute path fires when a
+ * rider actually leaves the line, or whether the geometry precision is what
+ * the route says it is.
+ *
  * The Navigation SDK is served from Mapbox's own Maven repository, which
- * refuses anonymous access, so building it needs a Mapbox account: a secret
- * token with the DOWNLOADS:READ scope for Gradle. The public token the app
- * routes with is not a build input at all -- it is entered on the phone, see
- * MapboxToken. Neither existed on the machine this was written on, so every
- * SDK call below is written from the published API and has not been checked by
- * a compiler, let alone run. Treat it as a starting point that will need
- * adjusting against whatever version you actually resolve -- the SDK's shape
- * changed at v3, and it will change again.
+ * refuses anonymous access, so building it needs a secret token with the
+ * DOWNLOADS:READ scope for Gradle. The public token the app routes with is not
+ * a build input at all -- it is entered on the phone, see MapboxToken.
  *
  * Build it with:  ./gradlew -PwithMapbox=true assembleDebug
+ *
+ * Pin the version when reading this against the SDK docs: the shape changed at
+ * v3 and will change again.
  *
  * Everything that could be written without the SDK was: the maneuver mapping
  * is in MapboxManeuver, the route model in PlannedRoute, the wire format in
@@ -90,20 +97,103 @@ class MapboxRouteSource(private val context: Context) : RouteSource {
         }
     }
 
+    /**
+     * The geometry of the route last handed to the head unit, so the same one
+     * is not uploaded twice.
+     *
+     * The upload is a chunked BLE transfer of the whole polyline, slow enough
+     * that MainActivity shows a percentage for it. The SDK is entitled to
+     * announce a route set for reasons that do not change the line, and
+     * re-sending several kilobytes over BLE each time would compete with the
+     * turns for the same link.
+     */
+    private var uploadedGeometry: String? = null
+
+    /**
+     * Every change to the route the SDK is actually navigating, including the
+     * ones it makes by itself.
+     *
+     * This is what keeps the head unit's cached route honest. The SDK reroutes
+     * on its own when the rider leaves the line, and before this observer
+     * existed nothing noticed: onRoutePlanned was wired only to the callback
+     * of an explicit requestRoutes, so it fired once, for the route the rider
+     * asked for, and never again. The head unit kept the original polyline for
+     * the rest of the ride.
+     *
+     * That is worse than it sounds, because the head unit does not merely
+     * display the cached route -- it navigates from it whenever the phone goes
+     * quiet, and its off-route threshold is 50m. A reroute that runs near the
+     * old line therefore lets it snap to the obsolete polyline and announce a
+     * turn with no hint that anything is wrong. A red arrow would at least be
+     * honest.
+     *
+     * The initial route comes through here too, which is why requestRoutes'
+     * own callback no longer uploads: one path, exercised on every ride,
+     * rather than a common one and a rare one that can drift apart.
+     */
+    private val routesObserver = RoutesObserver { result ->
+        // REFRESH carries new traffic or annotations for the same geometry,
+        // and ALTERNATIVE changes only the routes that were not chosen.
+        // Neither moves the line the head unit is following.
+        val reason = result.reason
+        if (reason != RoutesExtra.ROUTES_UPDATE_REASON_NEW &&
+            reason != RoutesExtra.ROUTES_UPDATE_REASON_REROUTE
+        ) {
+            return@RoutesObserver
+        }
+
+        // An empty list is the route being cleared. Nothing to upload, and the
+        // head unit ages its turns out on its own; what matters here is
+        // forgetting the geometry, so the same route re-planned later is sent
+        // again rather than suppressed as a duplicate.
+        val primary = result.navigationRoutes.firstOrNull()
+        if (primary == null) {
+            uploadedGeometry = null
+            return@RoutesObserver
+        }
+
+        val route = primary.directionsRoute
+        val geometry = route.geometry()
+        if (geometry != null && geometry == uploadedGeometry) {
+            return@RoutesObserver
+        }
+        uploadedGeometry = geometry
+
+        Log.i(TAG, "uploading route to the head unit, reason=$reason")
+        onRoutePlanned?.invoke(toPlannedRoute(route))
+    }
+
     private val progressObserver = RouteProgressObserver { progress ->
         val legProgress = progress.currentLegProgress ?: return@RouteProgressObserver
         val stepProgress = legProgress.currentStepProgress ?: return@RouteProgressObserver
-        val maneuver = stepProgress.step?.maneuver()
+        // A step's maneuver happens at its START -- the same convention
+        // PlannedRoute.fromSteps is built on -- so the turn the rider is
+        // riding TOWARDS belongs to the upcoming step, not the current one.
+        //
+        // This used to read stepProgress.step.maneuver(), which is the turn
+        // already taken, while distanceRemaining below counts down to the end
+        // of the current step, ie. to the NEXT turn. So the arrow and street
+        // name sat one maneuver behind a countdown that was correct: the panel
+        // ticked down accurately to a junction while naming the wrong turn for
+        // it, then flipped to the turn just completed as each one was passed.
+        //
+        // upcomingStep is null only on the final step, whose own maneuver is
+        // the arrival -- which is exactly what belongs on screen there.
+        val maneuverStep = legProgress.upcomingStep ?: stepProgress.step
+        val maneuver = maneuverStep?.maneuver()
 
         val icon = MapboxManeuver.toIcon(maneuver?.type(), maneuver?.modifier())
 
         onInstruction?.invoke(
             NavigationInstruction(
                 iconId = icon,
-                // distanceRemaining is a Float of metres to the next maneuver,
-                // which is exactly what the head unit counts down.
+                // distanceRemaining is a Float of metres to the end of the
+                // current step, which is where that maneuver happens -- so it
+                // is exactly what the head unit counts down.
                 distanceMetres = stepProgress.distanceRemaining.toInt().coerceAtLeast(0),
-                streetName = stepProgress.step?.name().orEmpty(),
+                // The road the maneuver puts the rider ON, for the same
+                // reason: "turn onto X" names the far side of the junction.
+                streetName = maneuverStep?.name().orEmpty(),
                 exitNumber = maneuver?.exit()?.toInt() ?: 0,
                 remainingMetres = progress.distanceRemaining.toInt(),
             )
@@ -165,6 +255,7 @@ class MapboxRouteSource(private val context: Context) : RouteSource {
             navigation = nav
             nav.registerRouteProgressObserver(progressObserver)
             nav.registerLocationObserver(locationObserver)
+            nav.registerRoutesObserver(routesObserver)
         }
 
         // Without this the SDK emits no location and no route progress at all,
@@ -181,10 +272,16 @@ class MapboxRouteSource(private val context: Context) : RouteSource {
         navigation?.let { nav ->
             nav.unregisterRouteProgressObserver(progressObserver)
             nav.unregisterLocationObserver(locationObserver)
+            nav.unregisterRoutesObserver(routesObserver)
             nav.stopTripSession()
         }
         navigation = null
         lastKnown = null
+        // Forgotten with the session. The head unit keeps nothing across a
+        // restart of this service either -- its route lives in PSRAM -- so
+        // remembering a geometry here would suppress the upload that the head
+        // unit is waiting for.
+        uploadedGeometry = null
         // Releases the native engine and the location subscription with it.
         if (MapboxNavigationProvider.isCreated()) {
             MapboxNavigationProvider.destroy()
@@ -240,9 +337,12 @@ class MapboxRouteSource(private val context: Context) : RouteSource {
 
         nav.requestRoutes(options, object : NavigationRouterCallback {
             override fun onRoutesReady(routes: List<NavigationRoute>, routerOrigin: String) {
-                val first = routes.firstOrNull() ?: return
+                if (routes.isEmpty()) return
+                // The upload is not done here. setNavigationRoutes fires the
+                // RoutesObserver above, which is the single place a route
+                // reaches the head unit -- the SDK's own reroutes arrive the
+                // same way, and two upload paths would drift apart.
                 nav.setNavigationRoutes(routes)
-                onRoutePlanned?.invoke(toPlannedRoute(first.directionsRoute))
             }
 
             override fun onFailure(reasons: List<RouterFailure>, routeOptions: RouteOptions) {
