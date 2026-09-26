@@ -82,6 +82,32 @@ static char s_dbg_probe[64] = "";
 // announcing them in a layout we cannot read.
 static uint32_t s_dbg_int_low = 0;
 
+// Set by the interrupt, consumed by the LVGL read.
+//
+// The vendor driver reads the panel ONLY from here -- its Touch_Loop() is
+// `if (Touch_interrupts) { ... read ... }` and nothing else ever touches the
+// registers. That is the piece this driver was missing all along: polling
+// 0xD005 asynchronously returns whatever the controller happens to be holding
+// mid-scan, which decodes as a contact roughly a quarter of the time at
+// coordinates that are not on the panel. It is why the UI has been navigating
+// itself.
+//
+// RISING, and INPUT with no pull-up, both copied from the vendor
+// (`#define interrupt RISING`). An earlier attempt here gated on the LOW
+// *level* and added a pull-up, which is neither of those things.
+volatile bool s_irq = false;
+
+void IRAM_ATTR TouchISR() {
+    s_irq = true;
+}
+
+// What the last interrupt-driven read found. LVGL polls far faster than the
+// panel reports, so every poll between interrupts answers from here rather
+// than going near the bus.
+static bool s_pressed = false;
+static uint16_t s_cached_x = 0;
+static uint16_t s_cached_y = 0;
+
 // Raw-panel-to-display orientation mapping, against Display_Init()'s
 // tft.setRotation(0). The CST328 is configured by the panel module itself
 // with the glass's native 240x320 resolution and reports in those
@@ -202,7 +228,7 @@ void Touch_Init() {
     //
     // The comment on this line has said "open-drain" since the port was
     // written, next to a pinMode that could not honour it.
-    pinMode(TOUCH_INT_PIN, INPUT_PULLUP); // active-low, open-drain; also the deep-sleep wake source (see PowerManager)
+    pinMode(TOUCH_INT_PIN, INPUT); // as the vendor does; also the deep-sleep wake source (see PowerManager)
     pinMode(TOUCH_RST_PIN, OUTPUT);
 
     // Vendor reset sequence, timings included. It starts by driving RST high
@@ -271,6 +297,8 @@ void Touch_Init() {
         s_signature = (uint16_t)(((uint16_t)info[11] << 8) | info[10]);
     }
     WriteReg(REG_NORMAL_MODE, nullptr, 0);
+
+    attachInterrupt(digitalPinToInterrupt(TOUCH_INT_PIN), TouchISR, RISING);
 
     // Start from a clean latch. Otherwise a press that happened during
     // bring-up is still sitting in the count register, and the boot splash --
@@ -348,19 +376,33 @@ bool Touch_IsPressed() {
 }
 
 void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
-    uint16_t raw_x = 0;
-    uint16_t raw_y = 0;
-    if (!ReadContact(&raw_x, &raw_y)) {
+    // The bus is touched only on an interrupt. A release raises one too --
+    // the count register reads zero -- so the cached state below follows the
+    // finger up as well as down.
+    if (s_irq) {
+        s_irq = false;
+        s_dbg_int_low++;
+        uint16_t rx = 0;
+        uint16_t ry = 0;
+        if (ReadContact(&rx, &ry)) {
+            s_pressed = true;
+            s_cached_x = rx;
+            s_cached_y = ry;
+            s_dbg_presses++;
+            s_dbg_last_x = rx;
+            s_dbg_last_y = ry;
+        } else {
+            s_pressed = false;
+        }
+    }
+
+    if (!s_pressed) {
         data->state = LV_INDEV_STATE_REL;
         return;
     }
 
-    s_dbg_presses++;
-    s_dbg_last_x = raw_x;
-    s_dbg_last_y = raw_y;
-
-    uint16_t x = raw_x;
-    uint16_t y = raw_y;
+    uint16_t x = s_cached_x;
+    uint16_t y = s_cached_y;
     if (TOUCH_SWAP_XY) {
         uint16_t t = x;
         x = y;
