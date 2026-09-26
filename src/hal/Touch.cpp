@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <stdio.h>
 #include <string.h>
 #include "../system/PowerManager.h"
 
@@ -66,6 +67,15 @@ static uint16_t s_dbg_last_y = 0;
 // and the kernel driver's offsets were derived for its siblings.
 static uint8_t s_dbg_frame[8] = {0};
 static uint8_t s_dbg_hit[8] = {0};
+
+// One-shot bring-up probe: does this part take a 16-bit register address or
+// an 8-bit one? The kernel's CST3xx driver uses 16-bit, but Espressif's
+// CST3530 component hides the register layer inside a proprietary Hynitron
+// blob, and Hynitron's own CST816 family uses 8-bit -- so the width is an
+// assumption, not a fact, and every read so far has come back as an undriven
+// bus. Reports the ACK code of each register write as well as the bytes,
+// because a NAK on the second address byte would explain everything.
+static char s_dbg_probe[64] = "";
 
 // Raw-panel-to-display orientation mapping, against Display_Init()'s
 // tft.setRotation(0). The CST328 is configured by the panel module itself
@@ -209,6 +219,36 @@ void Touch_Init() {
         return; // nothing on the bus; every accessor below is a no-op
     }
     s_controller_found = true;
+
+    {
+        uint8_t w2[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+        uint8_t w1[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+
+        // 16-bit register address, D0 00 -- what the code does today.
+        TOUCH_BUS.beginTransmission(s_addr);
+        TOUCH_BUS.write((uint8_t)0xD0);
+        TOUCH_BUS.write((uint8_t)0x00);
+        const int e2 = TOUCH_BUS.endTransmission(false);
+        if (TOUCH_BUS.requestFrom((int)s_addr, 4) == 4) {
+            for (int i = 0; i < 4; i++) {
+                w2[i] = (uint8_t)TOUCH_BUS.read();
+            }
+        }
+
+        // 8-bit register address, 0x00 -- the CST816-family shape.
+        TOUCH_BUS.beginTransmission(s_addr);
+        TOUCH_BUS.write((uint8_t)0x00);
+        const int e1 = TOUCH_BUS.endTransmission(false);
+        if (TOUCH_BUS.requestFrom((int)s_addr, 4) == 4) {
+            for (int i = 0; i < 4; i++) {
+                w1[i] = (uint8_t)TOUCH_BUS.read();
+            }
+        }
+
+        snprintf(s_dbg_probe, sizeof(s_dbg_probe),
+                 "16b e%d %02X%02X%02X%02X | 8b e%d %02X%02X%02X%02X", e2, w2[0],
+                 w2[1], w2[2], w2[3], e1, w1[0], w1[1], w1[2], w1[3]);
+    }
 
     // Drop into debug mode and read the info block. Bytes 10..11 of the block
     // at 0xD1F4 read back as 0xCACA on a CST328.
@@ -411,5 +451,11 @@ void Touch_DebugFrame(uint8_t *latest, uint8_t *latched, size_t len) {
     }
     if (latched != nullptr) {
         memcpy(latched, s_dbg_hit, n);
+    }
+}
+
+void Touch_DebugProbe(char *out, size_t len) {
+    if (out != nullptr && len > 0) {
+        snprintf(out, len, "%s", s_dbg_probe);
     }
 }

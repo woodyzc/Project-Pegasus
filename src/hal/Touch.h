@@ -75,3 +75,9 @@ void Touch_DebugIdentity(uint8_t *addr, uint16_t *signature);
 // produced first phantom contacts and then none at all -- at which point
 // reading the actual bytes is cheaper than a third guess.
 void Touch_DebugFrame(uint8_t *latest, uint8_t *latched, size_t len);
+
+// Result of the one-shot register-width probe run at init: the ACK code and
+// first bytes for a 16-bit register address and for an 8-bit one. `e0` means
+// the write was acknowledged; anything else means it was not, which is itself
+// the answer.
+void Touch_DebugProbe(char *out, size_t len);

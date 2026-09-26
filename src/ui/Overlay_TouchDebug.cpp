@@ -84,6 +84,9 @@ void Refresh(lv_timer_t *timer) {
                        : (addr == 0)    ? "NONE"
                                         : "?";
 
+    char s_probe[64] = "";
+    Touch_DebugProbe(s_probe, sizeof(s_probe));
+
     uint8_t now[8] = {0};
     uint8_t hit[8] = {0};
     Touch_DebugFrame(now, hit, sizeof(now));
@@ -92,10 +95,11 @@ void Refresh(lv_timer_t *timer) {
         s_label,
         "%s @%02X sig%04X rd%lu pr%lu xy %d,%d\n"
         "now %02X %02X %02X %02X %02X %02X %02X %02X\n"
-        "hit %02X %02X %02X %02X %02X %02X %02X %02X",
+        "hit %02X %02X %02X %02X %02X %02X %02X %02X\n%s",
         part, (int)addr, (int)sig, (unsigned long)reads, (unsigned long)presses,
         (int)x, (int)y, now[0], now[1], now[2], now[3], now[4], now[5], now[6],
-        now[7], hit[0], hit[1], hit[2], hit[3], hit[4], hit[5], hit[6], hit[7]);
+        now[7], hit[0], hit[1], hit[2], hit[3], hit[4], hit[5], hit[6], hit[7],
+        s_probe);
     lv_obj_set_style_text_color(s_label,
                                 lv_color_hex((found && presses > 0) ? COLOR_OK : COLOR_WARN), 0);
 }
