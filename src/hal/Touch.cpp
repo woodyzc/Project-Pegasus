@@ -213,7 +213,16 @@ void Touch_Init() {
     // flex, with whatever pull-ups the FPC provides.
     TOUCH_BUS.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL, 100000);
 
-    pinMode(TOUCH_INT_PIN, INPUT); // active-low, open-drain; the deep-sleep wake source (see PowerManager)
+    // INPUT_PULLUP, not INPUT. The line is active-low **open-drain**: the
+    // controller can pull it down and nothing can pull it up, so without a
+    // pull-up it floats -- and it floated low, which read as "a contact is
+    // waiting" on every single poll. The read counter and the interrupt
+    // counter came back exactly equal, 190/190 and 315/315, which is what
+    // that looks like from outside.
+    //
+    // The comment on this line has said "open-drain" since the port was
+    // written, next to a pinMode that could not honour it.
+    pinMode(TOUCH_INT_PIN, INPUT_PULLUP); // active-low, open-drain; also the deep-sleep wake source (see PowerManager)
     pinMode(TOUCH_RST_PIN, OUTPUT);
 
     // Vendor reset sequence, timings included. It starts by driving RST high
