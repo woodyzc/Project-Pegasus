@@ -77,6 +77,11 @@ static uint8_t s_dbg_hit[8] = {0};
 // because a NAK on the second address byte would explain everything.
 static char s_dbg_probe[64] = "";
 
+// How many polls found the interrupt line asserted. If this never moves, the
+// controller is not announcing contacts -- which is a different fault from
+// announcing them in a layout we cannot read.
+static uint32_t s_dbg_int_low = 0;
+
 // Raw-panel-to-display orientation mapping, against Display_Init()'s
 // tft.setRotation(0). The CST328 is configured by the panel module itself
 // with the glass's native 240x320 resolution and reports in those
@@ -305,6 +310,24 @@ static void AckTouchBlock() {
 // this protocol -- Hynitron ships no register appendix for the part.
 static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
     if (s_addr == CST3530_I2C_ADDR) {
+        // Only while the controller says it has something.
+        //
+        // This is the difference between the init probe and every live read.
+        // The probe runs once, straight after reset, with the part idle, and
+        // has returned byte-identical data on every boot and at both clock
+        // speeds. The live reads poll asynchronously about thirty times a
+        // second and come back different every time -- because they sample
+        // the registers while the controller is rewriting them.
+        //
+        // Linux's driver is interrupt-driven: it reads in response to INT,
+        // never on a timer. Polling a part designed that way is reading a
+        // frame that is being written underneath you, and no register map
+        // would have made those bytes decode.
+        if (digitalRead(TOUCH_INT_PIN) != LOW) {
+            return false;
+        }
+        s_dbg_int_low++;
+
         // Seven bytes, not the kernel's twenty-eight.
         //
         // Two photos ten seconds apart settled this. The one-shot probe's
@@ -475,6 +498,10 @@ void Touch_DebugFrame(uint8_t *latest, uint8_t *latched, size_t len) {
     if (latched != nullptr) {
         memcpy(latched, s_dbg_hit, n);
     }
+}
+
+uint32_t Touch_DebugIntLow() {
+    return s_dbg_int_low;
 }
 
 void Touch_DebugProbe(char *out, size_t len) {

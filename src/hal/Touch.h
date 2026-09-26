@@ -81,3 +81,8 @@ void Touch_DebugFrame(uint8_t *latest, uint8_t *latched, size_t len);
 // the write was acknowledged; anything else means it was not, which is itself
 // the answer.
 void Touch_DebugProbe(char *out, size_t len);
+
+// How many polls found the touch interrupt asserted. Zero while touching
+// means the controller is not announcing contacts at all -- a different
+// fault, and a more basic one, than a frame we cannot decode.
+uint32_t Touch_DebugIntLow();
