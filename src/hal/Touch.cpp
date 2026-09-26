@@ -8,7 +8,28 @@
 // driver needs. Addresses are 16-bit and go out big-endian -- the single
 // biggest difference from the FT6336G this replaces, and the one that makes
 // the controller look dead if you get it wrong.
+// Two parts, two addresses, one protocol.
+//
+// This board family ships either a **CST328 at 0x1A** (V1) or a **CST3530 at
+// 0x58** (V2), and the label on the back is the only outward difference.
+// Hynitron's mutual-capacitance parts default to one or the other. They share
+// the 16-bit big-endian register map, so the whole of the rest of this driver
+// is common to both and only the address has to be decided.
+//
+// Decided by probing rather than by a build flag, because the alternative is
+// a firmware that silently does nothing on half the boards it is flashed to --
+// which is exactly what happened here on 2026-09-26: a V2 board, a driver
+// hard-coded to 0x1A, and a panel that looked wired wrong. An I2C scan of the
+// bus found one device at 0x58 and settled it in a single bench round.
 static constexpr uint8_t CST328_I2C_ADDR = 0x1A;
+static constexpr uint8_t CST3530_I2C_ADDR = 0x58;
+
+// Resolved by Touch_Init(). Zero means nothing on the bus answered.
+static uint8_t s_addr = 0;
+
+// The info-block signature the controller reported, recorded for the bring-up
+// readout. 0 means the block was never read.
+static uint16_t s_signature = 0;
 static constexpr uint16_t REG_TOUCH_COUNT = 0xD005;  // low nibble = points, and the latch that must be cleared
 static constexpr uint16_t REG_TOUCH_XY = 0xD000;     // 27 bytes: status + up to 5 packed points
 static constexpr uint16_t REG_DEBUG_MODE = 0xD101;   // enter debug/info mode
@@ -85,13 +106,16 @@ static uint16_t MapAxis(uint16_t raw, uint16_t raw_min, uint16_t raw_max, uint16
 
 // A read is: write the two register-address bytes (no stop), then read `len`.
 static bool ReadReg(uint16_t reg, uint8_t *buf, uint8_t len) {
-    TOUCH_BUS.beginTransmission(CST328_I2C_ADDR);
+    if (s_addr == 0) {
+        return false;
+    }
+    TOUCH_BUS.beginTransmission(s_addr);
     TOUCH_BUS.write((uint8_t)(reg >> 8));
     TOUCH_BUS.write((uint8_t)(reg & 0xFF));
     if (TOUCH_BUS.endTransmission(true) != 0) {
         return false;
     }
-    if (TOUCH_BUS.requestFrom((int)CST328_I2C_ADDR, (int)len) != len) {
+    if (TOUCH_BUS.requestFrom((int)s_addr, (int)len) != len) {
         return false;
     }
     for (uint8_t i = 0; i < len; i++) {
@@ -103,7 +127,10 @@ static bool ReadReg(uint16_t reg, uint8_t *buf, uint8_t len) {
 // `len` of 0 writes the register address alone, which is how the mode
 // registers are poked.
 static bool WriteReg(uint16_t reg, const uint8_t *buf, uint8_t len) {
-    TOUCH_BUS.beginTransmission(CST328_I2C_ADDR);
+    if (s_addr == 0) {
+        return false;
+    }
+    TOUCH_BUS.beginTransmission(s_addr);
     TOUCH_BUS.write((uint8_t)(reg >> 8));
     TOUCH_BUS.write((uint8_t)(reg & 0xFF));
     for (uint8_t i = 0; i < len; i++) {
@@ -118,6 +145,13 @@ static bool WriteReg(uint16_t reg, const uint8_t *buf, uint8_t len) {
 static void ClearTouchLatch() {
     const uint8_t zero = 0;
     WriteReg(REG_TOUCH_COUNT, &zero, 1);
+}
+
+// Does anything acknowledge this address? A bare address probe, so it asks
+// only "is a device electrically present" without assuming a register map.
+static bool AddressAcks(uint8_t addr) {
+    TOUCH_BUS.beginTransmission(addr);
+    return TOUCH_BUS.endTransmission(true) == 0;
 }
 
 void Touch_Init() {
@@ -135,14 +169,31 @@ void Touch_Init() {
     digitalWrite(TOUCH_RST_PIN, HIGH);
     delay(50);
 
-    // Drop into debug mode, read the info block, and check the signature the
-    // vendor driver checks. Bytes 10..11 of the block at 0xD1F4 read back as
-    // 0xCACA on a healthy controller.
+    // Which part is fitted, asked rather than assumed. After the reset, so the
+    // controller is awake enough to acknowledge.
+    if (AddressAcks(CST328_I2C_ADDR)) {
+        s_addr = CST328_I2C_ADDR;
+    } else if (AddressAcks(CST3530_I2C_ADDR)) {
+        s_addr = CST3530_I2C_ADDR;
+    } else {
+        s_addr = 0;
+        return; // nothing on the bus; every accessor below is a no-op
+    }
+    s_controller_found = true;
+
+    // Drop into debug mode and read the info block. Bytes 10..11 of the block
+    // at 0xD1F4 read back as 0xCACA on a CST328.
+    //
+    // This is recorded, NOT used to decide whether a controller is present --
+    // that decision now belongs to the address probe above. Hynitron publishes
+    // no register appendix for the CST3530, so whether it carries the same
+    // signature is unknown, and a driver that refused to talk to a part that
+    // had just acknowledged its own address would be choosing an undocumented
+    // magic number over an ACK.
     uint8_t info[24];
     WriteReg(REG_DEBUG_MODE, nullptr, 0);
     if (ReadReg(REG_INFO_TP_NTX, info, sizeof(info))) {
-        const uint16_t signature = ((uint16_t)info[11] << 8) | info[10];
-        s_controller_found = (signature == 0xCACA);
+        s_signature = (uint16_t)(((uint16_t)info[11] << 8) | info[10]);
     }
     WriteReg(REG_NORMAL_MODE, nullptr, 0);
 
@@ -248,5 +299,14 @@ void Touch_DebugCounters(uint32_t *reads, uint32_t *presses, uint16_t *last_x,
     }
     if (last_y != nullptr) {
         *last_y = s_dbg_last_y;
+    }
+}
+
+void Touch_DebugIdentity(uint8_t *addr, uint16_t *signature) {
+    if (addr != nullptr) {
+        *addr = s_addr;
+    }
+    if (signature != nullptr) {
+        *signature = s_signature;
     }
 }

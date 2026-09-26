@@ -75,10 +75,20 @@ void Refresh(lv_timer_t *timer) {
     // reads climb for as long as the bus keeps answering. A found controller
     // with a frozen read count is a bus that died after bring-up, which is a
     // different fault from one that never started.
+    uint8_t addr = 0;
+    uint16_t sig = 0;
+    Touch_DebugIdentity(&addr, &sig);
+
+    const char *part = (addr == 0x1A)   ? "CST328"
+                       : (addr == 0x58) ? "CST3530"
+                       : (addr == 0)    ? "NONE"
+                                        : "?";
+
     lv_label_set_text_fmt(s_label,
-                          "CST328 %s  rd%lu pr%lu @%d,%d\n"
-                          "touch bus(1/3): %s\nsensor bus(11/10): %s",
-                          found ? "ok" : "NOT FOUND", (unsigned long)reads,
+                          "%s @%02X sig%04X  rd%lu pr%lu\n"
+                          "xy %d,%d\n"
+                          "bus1(1/3): %s   bus0(11/10): %s",
+                          part, (int)addr, (int)sig, (unsigned long)reads,
                           (unsigned long)presses, (int)x, (int)y, s_touch_scan,
                           s_sensor_scan);
     lv_obj_set_style_text_color(s_label,

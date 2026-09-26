@@ -53,3 +53,13 @@ bool Touch_IsPressed();
 // pointer may be null.
 void Touch_DebugCounters(uint32_t *reads, uint32_t *presses, uint16_t *last_x,
                          uint16_t *last_y);
+
+// Which part answered, and what its info block said.
+//
+// `addr` is the 7-bit address that acknowledged -- 0x1A for a CST328 (V1
+// board), 0x58 for a CST3530 (V2), or 0 if nothing answered at all. The two
+// revisions are outwardly identical apart from a label, so this is the only
+// way the firmware can say which one it is talking to. `signature` is the
+// 0xCACA the CST328's info block carries; the CST3530 is undocumented and may
+// not, so it is reported rather than required. Either pointer may be null.
+void Touch_DebugIdentity(uint8_t *addr, uint16_t *signature);
