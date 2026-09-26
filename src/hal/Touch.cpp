@@ -305,22 +305,33 @@ static void AckTouchBlock() {
 // this protocol -- Hynitron ships no register appendix for the part.
 static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
     if (s_addr == CST3530_I2C_ADDR) {
-        // The whole block in one transaction. The count is byte 5 of it, so
-        // the separate read of 0xD005 the CST328 path does is not merely
-        // redundant here -- it reads a frame the controller has not finished
-        // publishing, which is half of why an untouched panel reported a
-        // contact in three reads out of four.
-        uint8_t buf[28];
+        // Seven bytes, not the kernel's twenty-eight.
+        //
+        // Two photos ten seconds apart settled this. The one-shot probe's
+        // 4-byte reads came back identical in both, and identical again to
+        // the run before at 400kHz -- stable, reproducible data. Meanwhile
+        // the read counter advanced by 19 in ten seconds against an LVGL
+        // poll rate of about 33 a second, so roughly nineteen of every twenty
+        // 28-byte reads were failing outright and the survivors returned
+        // zeros.
+        //
+        // Short reads work and long ones do not, which is a length limit
+        // rather than the signal-integrity problem the changing bytes looked
+        // like. Everything this driver needs is in the first seven bytes:
+        // coordinates at 1..3, count at 5, check value at 6. The rest of the
+        // kernel's 28 carry contacts two through five, which this UI has no
+        // use for.
+        uint8_t buf[7];
         if (!ReadReg(REG_TOUCH_XY, buf, sizeof(buf))) {
             return false;
         }
         s_dbg_reads++;
-        memcpy(s_dbg_frame, buf, sizeof(s_dbg_frame));
+        memcpy(s_dbg_frame, buf, sizeof(buf));
         // Latched separately so a tap is still readable afterwards -- holding
         // a finger on the glass and photographing the panel at the same time
         // is not a thing one pair of hands does well.
         if ((buf[5] & CST3XX_TOUCH_COUNT_MASK) != 0 || (buf[0] & 0x0F) != 0) {
-            memcpy(s_dbg_hit, buf, sizeof(s_dbg_hit));
+            memcpy(s_dbg_hit, buf, sizeof(buf));
         }
 
         // Byte 6 is a fixed check value. The other half of the phantom
