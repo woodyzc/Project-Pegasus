@@ -31,7 +31,15 @@ static uint8_t s_addr = 0;
 // readout. 0 means the block was never read.
 static uint16_t s_signature = 0;
 static constexpr uint16_t REG_TOUCH_COUNT = 0xD005;  // low nibble = points, and the latch that must be cleared
-static constexpr uint16_t REG_TOUCH_XY = 0xD000;     // 27 bytes: status + up to 5 packed points
+static constexpr uint16_t REG_TOUCH_XY = 0xD000;     // the touch block: status, count and up to 5 packed points
+
+// CST3xx constants, from Linux's drivers/input/touchscreen/hynitron_cstxxx.c.
+// That driver is the only published description of this protocol; the part
+// has no register appendix from Hynitron. Its register constants look
+// byte-swapped against ours (0x00d0 vs 0xD000) only because it writes them
+// little-endian -- the bytes on the wire are D0 00 either way.
+static constexpr uint8_t CST3XX_CHK_VAL = 0xAB;          // byte 6 of a valid frame, and the ack payload
+static constexpr uint8_t CST3XX_TOUCH_COUNT_MASK = 0x7F; // GENMASK(6, 0)
 static constexpr uint16_t REG_DEBUG_MODE = 0xD101;   // enter debug/info mode
 static constexpr uint16_t REG_NORMAL_MODE = 0xD109;  // back to reporting touches
 static constexpr uint16_t REG_INFO_TP_NTX = 0xD1F4;  // 24-byte info block; bytes 10..11 are the 0xCACA signature
@@ -207,33 +215,67 @@ bool Touch_ControllerFound() {
     return s_controller_found;
 }
 
-bool Touch_IsPressed() {
-    uint8_t count = 0;
-    if (!ReadReg(REG_TOUCH_COUNT, &count, 1)) {
-        // An I2C read that failed is not a press. Reporting one would let a
-        // loose connector skip the splash on every boot.
-        return false;
-    }
-    ClearTouchLatch();
-    return (count & 0x0F) != 0;
+// Acknowledges the touch block the way a CST3xx expects: the three bytes
+// D0 00 AB, which is the kernel driver's CST3XX_TOUCH_DATA_STOP_CMD written
+// little-endian. Without it the controller keeps handing back the same frame.
+static void AckTouchBlock() {
+    const uint8_t ab = CST3XX_CHK_VAL;
+    WriteReg(REG_TOUCH_XY, &ab, 1);
 }
 
-void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
+// One poll of the panel: true when a finger is down, with the raw coordinates
+// the controller reported.
+//
+// The two parts need different handling here, which the shared register map
+// did not advertise. The CST3530 path follows Linux's hynitron_cstxxx.c
+// (drivers/input/touchscreen), which is the only published description of
+// this protocol -- Hynitron ships no register appendix for the part.
+static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
+    if (s_addr == CST3530_I2C_ADDR) {
+        // The whole block in one transaction. The count is byte 5 of it, so
+        // the separate read of 0xD005 the CST328 path does is not merely
+        // redundant here -- it reads a frame the controller has not finished
+        // publishing, which is half of why an untouched panel reported a
+        // contact in three reads out of four.
+        uint8_t buf[28];
+        if (!ReadReg(REG_TOUCH_XY, buf, sizeof(buf))) {
+            return false;
+        }
+        s_dbg_reads++;
+
+        // Byte 6 is a fixed check value. The other half of the phantom
+        // contacts: with no validity test, a stale or half-written frame
+        // decodes as a press at whatever coordinates happen to be in it --
+        // which is exactly what 1075,2563 was on a 240x320 panel.
+        if (buf[6] != CST3XX_CHK_VAL) {
+            AckTouchBlock();
+            return false;
+        }
+
+        const uint8_t count = buf[5] & CST3XX_TOUCH_COUNT_MASK;
+        AckTouchBlock();
+        if (count == 0) {
+            return false;
+        }
+
+        // First contact only; this UI has no multi-touch gesture. Byte 3
+        // carries X's low nibble in its high half and Y's in its low half.
+        *raw_x = (uint16_t)(((uint16_t)buf[1] << 4) | ((buf[3] >> 4) & 0x0F));
+        *raw_y = (uint16_t)(((uint16_t)buf[2] << 4) | (buf[3] & 0x0F));
+        return true;
+    }
+
+    // ---- CST328 (V1 board), as the vendor demo describes it. Untested: no
+    // V1 board has ever been on this bench. ----
     uint8_t count = 0;
     if (!ReadReg(REG_TOUCH_COUNT, &count, 1)) {
-        data->state = LV_INDEV_STATE_REL;
-        return;
+        return false;
     }
-    // Counted after the read succeeded, so this rises only while the I2C link
-    // is actually answering -- which is the first of the three things bring-up
-    // needs to tell apart.
     s_dbg_reads++;
     count &= 0x0F;
-
     if (count == 0) {
         ClearTouchLatch();
-        data->state = LV_INDEV_STATE_REL;
-        return;
+        return false;
     }
 
     // buf[0] is left for the status byte the vendor driver keeps at index 1 of
@@ -241,16 +283,30 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     uint8_t buf[28];
     if (!ReadReg(REG_TOUCH_XY, &buf[1], 27)) {
         ClearTouchLatch();
-        data->state = LV_INDEV_STATE_REL;
-        return;
+        return false;
     }
     ClearTouchLatch();
 
-    // Only the first contact matters -- this UI has no multi-touch gesture.
-    // Point 0 is three bytes: X high 8, Y high 8, then a byte carrying X's low
-    // nibble in the high half and Y's low nibble in the low half.
-    const uint16_t raw_x = (uint16_t)(((uint16_t)buf[2] << 4) | ((buf[4] & 0xF0) >> 4));
-    const uint16_t raw_y = (uint16_t)(((uint16_t)buf[3] << 4) | (buf[4] & 0x0F));
+    *raw_x = (uint16_t)(((uint16_t)buf[2] << 4) | ((buf[4] & 0xF0) >> 4));
+    *raw_y = (uint16_t)(((uint16_t)buf[3] << 4) | (buf[4] & 0x0F));
+    return true;
+}
+
+bool Touch_IsPressed() {
+    uint16_t x = 0;
+    uint16_t y = 0;
+    // An I2C read that failed is not a press. Reporting one would let a
+    // loose connector skip the splash on every boot.
+    return ReadContact(&x, &y);
+}
+
+void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
+    uint16_t raw_x = 0;
+    uint16_t raw_y = 0;
+    if (!ReadContact(&raw_x, &raw_y)) {
+        data->state = LV_INDEV_STATE_REL;
+        return;
+    }
 
     s_dbg_presses++;
     s_dbg_last_x = raw_x;
