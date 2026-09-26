@@ -194,7 +194,19 @@ static bool AddressAcks(uint8_t addr) {
 }
 
 void Touch_Init() {
-    TOUCH_BUS.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL, 400000);
+    // 100kHz, not the vendor's 400kHz.
+    //
+    // At 400kHz this part acknowledged its address on every boot -- detection
+    // never once failed -- and then returned bytes that changed at random
+    // from read to read: FF FF FF EF for a while, then noise. A slave that
+    // ACKs reliably but cannot hold a multi-byte read together is the
+    // signature of marginal signal integrity rather than a protocol fault.
+    // The address byte is short enough to survive; a 28-byte read is not.
+    //
+    // The sensor bus runs 400kHz happily, which is not a counter-argument:
+    // its two devices sit on the board while this one is across the panel's
+    // flex, with whatever pull-ups the FPC provides.
+    TOUCH_BUS.begin(TOUCH_I2C_SDA, TOUCH_I2C_SCL, 100000);
 
     pinMode(TOUCH_INT_PIN, INPUT); // active-low, open-drain; the deep-sleep wake source (see PowerManager)
     pinMode(TOUCH_RST_PIN, OUTPUT);
