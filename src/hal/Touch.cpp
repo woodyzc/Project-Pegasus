@@ -207,6 +207,54 @@ static void ClearTouchLatch() {
     WriteReg(REG_TOUCH_COUNT, &zero, 1);
 }
 
+// ---- CST3530 (V2 board), from Waveshare's Touch_CST3530.cpp ----
+//
+// A different protocol from the CST328, not a variant of it. Its registers
+// are **32-bit** and go out most-significant byte first, which is why every
+// attempt built on the CST328's 16-bit addressing read an undriven bus: the
+// part was being sent half an address.
+//
+// The end-of-read command is a register address with no payload at all -- the
+// 0xAB lives in the address itself, not in a data byte, which is the other
+// thing the kernel-derived attempt got wrong.
+static constexpr uint32_t CST3530_DATA_REG = 0xD0070000u;
+static constexpr uint32_t CST3530_END_READ_REG = 0xD00002ABu;
+
+static bool Read32(uint32_t reg, uint8_t *buf, uint32_t len) {
+    if (s_addr == 0) {
+        return false;
+    }
+    TOUCH_BUS.beginTransmission(s_addr);
+    TOUCH_BUS.write((uint8_t)(reg >> 24));
+    TOUCH_BUS.write((uint8_t)(reg >> 16));
+    TOUCH_BUS.write((uint8_t)(reg >> 8));
+    TOUCH_BUS.write((uint8_t)(reg & 0xFF));
+    // Repeated START for reads, STOP for writes -- the vendor's CST3530 code
+    // differs from its CST328 code here too.
+    if (TOUCH_BUS.endTransmission(false) != 0) {
+        return false;
+    }
+    if (TOUCH_BUS.requestFrom((int)s_addr, (int)len) != (int)len) {
+        return false;
+    }
+    for (uint32_t i = 0; i < len; i++) {
+        buf[i] = (uint8_t)TOUCH_BUS.read();
+    }
+    return true;
+}
+
+static bool Write32(uint32_t reg) {
+    if (s_addr == 0) {
+        return false;
+    }
+    TOUCH_BUS.beginTransmission(s_addr);
+    TOUCH_BUS.write((uint8_t)(reg >> 24));
+    TOUCH_BUS.write((uint8_t)(reg >> 16));
+    TOUCH_BUS.write((uint8_t)(reg >> 8));
+    TOUCH_BUS.write((uint8_t)(reg & 0xFF));
+    return TOUCH_BUS.endTransmission(true) == 0;
+}
+
 // Does anything acknowledge this address? A bare address probe, so it asks
 // only "is a device electrically present" without assuming a register map.
 static bool AddressAcks(uint8_t addr) {
@@ -240,56 +288,12 @@ void Touch_Init() {
     digitalWrite(TOUCH_RST_PIN, HIGH);
     delay(50);
 
-    // Which part is fitted, asked rather than assumed. After the reset, so the
-    // controller is awake enough to acknowledge.
-    if (AddressAcks(CST328_I2C_ADDR)) {
-        s_addr = CST328_I2C_ADDR;
-    } else if (AddressAcks(CST3530_I2C_ADDR)) {
-        s_addr = CST3530_I2C_ADDR;
-    } else {
-        s_addr = 0;
-        return; // nothing on the bus; every accessor below is a no-op
-    }
-
-    {
-        uint8_t w2[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-        uint8_t w1[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-
-        // 16-bit register address, D0 00 -- what the code does today.
-        TOUCH_BUS.beginTransmission(s_addr);
-        TOUCH_BUS.write((uint8_t)0xD0);
-        TOUCH_BUS.write((uint8_t)0x00);
-        const int e2 = TOUCH_BUS.endTransmission(false);
-        if (TOUCH_BUS.requestFrom((int)s_addr, 4) == 4) {
-            for (int i = 0; i < 4; i++) {
-                w2[i] = (uint8_t)TOUCH_BUS.read();
-            }
-        }
-
-        // 8-bit register address, 0x00 -- the CST816-family shape.
-        TOUCH_BUS.beginTransmission(s_addr);
-        TOUCH_BUS.write((uint8_t)0x00);
-        const int e1 = TOUCH_BUS.endTransmission(false);
-        if (TOUCH_BUS.requestFrom((int)s_addr, 4) == 4) {
-            for (int i = 0; i < 4; i++) {
-                w1[i] = (uint8_t)TOUCH_BUS.read();
-            }
-        }
-
-        snprintf(s_dbg_probe, sizeof(s_dbg_probe),
-                 "16b e%d %02X%02X%02X%02X | 8b e%d %02X%02X%02X%02X", e2, w2[0],
-                 w2[1], w2[2], w2[3], e1, w1[0], w1[1], w1[2], w1[3]);
-    }
-
-    // Drop into debug mode and read the info block. Bytes 10..11 of the block
-    // at 0xD1F4 read back as 0xCACA on a CST328.
-    //
-    // This is recorded, NOT used to decide whether a controller is present --
-    // that decision now belongs to the address probe above. Hynitron publishes
-    // no register appendix for the CST3530, so whether it carries the same
-    // signature is unknown, and a driver that refused to talk to a part that
-    // had just acknowledged its own address would be choosing an undocumented
-    // magic number over an ACK.
+    // Which part is fitted, decided the way the V2 demo decides it: try the
+    // CST328 and its 0xCACA signature first, and on failure reset again and
+    // probe for a CST3530 at 0x58. The two boards are outwardly identical
+    // apart from a label, and V1 was discontinued in June 2026, so a V2 is
+    // now the likely board rather than the exception.
+    s_addr = CST328_I2C_ADDR;
     uint8_t info[24];
     WriteReg(REG_DEBUG_MODE, nullptr, 0);
     if (ReadReg(REG_INFO_TP_NTX, info, sizeof(info))) {
@@ -297,25 +301,31 @@ void Touch_Init() {
     }
     WriteReg(REG_NORMAL_MODE, nullptr, 0);
 
-    // The vendor's own gate, restored: Touch_Init() there returns false and
-    // prints "Touch initialization failed!" unless this reads 0xCACA. It is a
-    // fixed constant in the part, not a mode or a measurement, so it either
-    // comes back or the link to the controller is not working.
-    //
-    // Honouring it matters for more than honesty. Without it the driver
-    // decodes whatever the bus returns, and garbage decodes as contacts at
-    // coordinates off the panel -- which is the board pressing its own
-    // buttons and walking through the settings pages on its own. A head unit
-    // that does nothing is usable; one that presses "Start new ride" by
-    // itself is not.
-    s_controller_found = (s_signature == 0xCACA);
+    if (s_signature == 0xCACA) {
+        s_controller_found = true;
+        ClearTouchLatch(); // CST328 only: it latches its count until cleared
+    } else {
+        // The CST3530's own reset timing, which is not the CST328's: low for
+        // 100ms then high for 500ms, against high/50, low/5, high/50.
+        digitalWrite(TOUCH_RST_PIN, LOW);
+        delay(100);
+        digitalWrite(TOUCH_RST_PIN, HIGH);
+        delay(500);
+
+        s_addr = CST3530_I2C_ADDR;
+        s_controller_found = AddressAcks(CST3530_I2C_ADDR);
+        if (!s_controller_found) {
+            s_addr = 0;
+        }
+        // No signature check here, and that is the vendor's choice too:
+        // TOUCH2_Init() probes the address and nothing more. The 0xCACA
+        // constant belongs to the CST328 -- gating a CST3530 on it was my
+        // mistake, and it is what made a working part look like dead
+        // hardware.
+    }
 
     attachInterrupt(digitalPinToInterrupt(TOUCH_INT_PIN), TouchISR, RISING);
 
-    // Start from a clean latch. Otherwise a press that happened during
-    // bring-up is still sitting in the count register, and the boot splash --
-    // which skips on the first touch it sees -- skips itself.
-    ClearTouchLatch();
 }
 
 bool Touch_ControllerFound() {
@@ -341,6 +351,34 @@ static bool ReadContact(uint16_t *raw_x, uint16_t *raw_y) {
     // No verified controller, no touch reports. See Touch_Init.
     if (!s_controller_found) {
         return false;
+    }
+
+    if (s_addr == CST3530_I2C_ADDR) {
+        // Nine bytes from 0xD0070000, then the end-of-read command whatever
+        // the outcome -- the vendor sends it on every path, valid or not.
+        uint8_t buf[9];
+        if (!Read32(CST3530_DATA_REG, buf, sizeof(buf))) {
+            return false;
+        }
+        s_dbg_reads++;
+        memcpy(s_dbg_frame, buf, sizeof(s_dbg_frame));
+
+        // Two validity conditions, both the vendor's: a zero count in the low
+        // nibble of byte 3, or a zero high nibble of byte 8, means no contact.
+        const uint8_t count = buf[3] & 0x0F;
+        if (count == 0 || (buf[8] & 0xF0) == 0 || count > 5) {
+            Write32(CST3530_END_READ_REG);
+            return false;
+        }
+        Write32(CST3530_END_READ_REG);
+        memcpy(s_dbg_hit, buf, sizeof(s_dbg_hit));
+
+        // Packed quite differently from the CST328: the low byte of each axis
+        // is its own byte, and byte 7 carries both high nibbles -- X's in the
+        // low half, Y's in the high half.
+        *raw_x = (uint16_t)(((uint16_t)(buf[7] & 0x0F) << 8) | buf[4]);
+        *raw_y = (uint16_t)(((uint16_t)(buf[7] & 0xF0) << 4) | buf[5]);
+        return true;
     }
 
     // Waveshare's own Touch_CST328.cpp, followed step for step: read the
