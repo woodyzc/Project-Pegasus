@@ -35,9 +35,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Core MCU & Display**: Waveshare ESP32-S3-Touch-LCD-2.8 V1 (ESP32-S3R8, dual-core 240MHz, 16MB Flash, 8MB octal PSRAM, 2.8" 240×320 **ST7789T3** IPS LCD on SPI).
   - MOSI 45, SCLK 40, CS 42, DC 41, **RST 39** (a real reset line, unlike the stand-in), backlight 5 active-high. Vendor drives the panel at 80MHz.
-- **Touch**: **CST328** (Hynitron), I2C address `0x1A`, on its **own bus** — SDA 1 / SCL 3, INT 4, RST 2.
-  - *Not an FT6336G with different pins.* 16-bit big-endian register addresses, two 12-bit coordinates packed into three bytes, and a touch-count register that latches until written back to zero. `src/hal/Touch.cpp` is a rewrite, not a re-pin.
-  - A V2 of this board exists with a **CST3530** instead. If touch never answers, check which one is fitted before checking the wiring.
+- **Touch**: bus is SDA 1 / SCL 3, INT 4, RST 2 — its **own** bus, separate from the sensor bus. **Which controller is on it depends on the board revision, and they are different protocols, not variants.** `src/hal/Touch.cpp` probes for both.
+  - **This bench board is a V2: CST3530 at `0x58`** — verified working 2026-09-26. V1 was discontinued 2026-06-05, so V2 is now the default expectation.
+  - ⚠️ **Get the V2 demo, not the V1 one.** The archive linked from the wiki's main page is V1 and contains no CST3530 code at all; the V2 archive is a separate download
+    (`ESP32-S3-Touch-LCD-2.8-V2-Demo.zip`, from the Resources page) and carries
+    `Touch_CST3530.cpp`. Porting the V1 driver to a V2 chip cost most of a day.
+  - **CST3530 protocol** (V2): **32-bit register addresses, MSB first** — this is the one that matters; send a 16-bit address and the part ACKs and then clocks out nothing, so every read is an undriven bus that looks like a decode problem. Data is **9 bytes from `0xD0070000`**. No contact when `(buf[3] & 0x0F) == 0` or `(buf[8] & 0xF0) == 0`; count is `buf[3] & 0x0F`. `x = ((buf[7] & 0x0F) << 8) | buf[4]`, `y = ((buf[7] & 0xF0) << 4) | buf[5]`, strength `buf[6]`. End every read — valid or not — by writing register `0xD00002AB` **with no payload**; the 0xAB is part of the address. Reads take a **repeated START**, writes a STOP. Reset is **low 100ms, high 500ms**. There is **no ID register**: the vendor probes the address and stops.
+  - **CST328 protocol** (V1, untested here): 16-bit addresses, count at `0xD005` then 27 bytes at `0xD000`, `x = (buf[2] << 4) | (buf[4] >> 4)`, `y = (buf[3] << 4) | (buf[4] & 0x0F)`, clear by writing 0 to `0xD005`, reads take a STOP, reset is high 50 / low 5 / high 50, and it identifies itself with **`0xCACA`** at bytes 10..11 of the 24-byte block at `0xD1F4`.
+  - ⚠️ **`0xCACA` is a CST328 constant. Do not gate a CST3530 on it** — it reads `0x0000`, and treating that as a fault turned a working panel into a diagnosis of dead hardware.
+  - **Read only from the interrupt.** Both parts are designed for it and the vendor never polls. Polling the data registers asynchronously returns frames caught mid-write, which decode as contacts at coordinates off the panel — i.e. the board presses its own buttons and walks through its own settings pages. Every phantom-touch episode during bring-up was this.
+  - A **V3** would presumably bring a third part. The probe-and-dispatch shape in `Touch.cpp` is there so that costs one branch, not a rewrite.
 - **GNSS Module**: via UART1 on **RX 18 / TX 15** — the only two genuinely spare GPIOs on the board, both on the 12-pin external connector.
   - ⚠️ **The module on the bench is an ATGM336H (中科微电子 GPS+BD), not the
     MAX-M10S this spec asks for** — the M10 still has not arrived. Different
