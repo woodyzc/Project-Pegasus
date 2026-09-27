@@ -226,12 +226,21 @@ void setup() {
     // over. The first frame the LVGL task draws is the dashboard.
     Splash_Dismiss();
 
-    LvglTask_Start(); // Core 1: lv_timer_handler() loop (CLAUDE.md §4)
-
-    // Bring-up only, and compiled out by -D PEGASUS_TOUCH_DEBUG=0. After
-    // LvglTask_Start() because it creates an LVGL timer, and this board's
-    // touch controller is a CST328 whose driver has never run on hardware.
+    // Bring-up only, and compiled out by -D PEGASUS_TOUCH_DEBUG=0.
+    //
+    // BEFORE LvglTask_Start(), not after. It builds LVGL objects, and LVGL
+    // here has no lock (CLAUDE.md §4) -- so anything that creates widgets
+    // once the render task is running is racing it, exactly as the pages
+    // would be if they were pushed late. This call sat after the task for
+    // several builds and got away with it only because it was quick.
+    //
+    // Adding the I2C bus scan broke that: ~100ms of probing now sits between
+    // creating the label and filling it in, and the render task walks a
+    // half-built object tree for that whole window. The screen came up with
+    // the background painted, the overlay drawn, and the dashboard missing.
     TouchDebug_Show();
+
+    LvglTask_Start(); // Core 1: lv_timer_handler() loop (CLAUDE.md §4)
 
     // Core 0 power monitoring. Started before the radios because it is cheap
     // and independent -- if a radio mode stalls below, the battery reading is
