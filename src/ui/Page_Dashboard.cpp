@@ -1696,6 +1696,27 @@ void OnDashboardGesture(lv_event_t *e) {
 }
 
 
+// lv_label_set_text invalidates unconditionally -- it never compares against
+// what the label already holds. RenderPage2 runs on the 100ms tick and writes
+// thirteen labels, several of them large figures, so the second page was
+// re-rasterising every number ten times a second for values that change at
+// most once. Measured cost: 25fps at 40% CPU, against 33fps at 5% for the
+// first page, which is where that eightfold difference came from.
+//
+// Page one avoids this by accident rather than design -- its renderers are
+// driven by publishes and a one-second tick -- so this helper is the thing to
+// reach for anywhere a label is written on a fast timer.
+static void SetTextIfChanged(lv_obj_t *label, const char *text) {
+    if (label == nullptr || text == nullptr) {
+        return;
+    }
+    const char *current = lv_label_get_text(label);
+    if (current != nullptr && strcmp(current, text) == 0) {
+        return;
+    }
+    lv_label_set_text(label, text);
+}
+
 void RenderPage2() {
     if (s_page2 == nullptr) {
         return;
@@ -1709,20 +1730,22 @@ void RenderPage2() {
     // rule at a time. This way the two pages are the same number by
     // construction, colour included.
     if (s_speed_label != nullptr) {
-        lv_label_set_text(s_p2_speed, lv_label_get_text(s_speed_label));
+        SetTextIfChanged(s_p2_speed, lv_label_get_text(s_speed_label));
     }
-    lv_label_set_text(s_p2_speed_unit, Settings_SpeedUnitLabel());
-    lv_label_set_text(s_p2_avgspeed_unit, Settings_SpeedUnitLabel());
+    SetTextIfChanged(s_p2_speed_unit, Settings_SpeedUnitLabel());
+    SetTextIfChanged(s_p2_avgspeed_unit, Settings_SpeedUnitLabel());
     // The one number on this page that was formatted a second time instead of
     // being copied, and it drifted exactly the way the note above predicts:
     // page one showed "--" before the first movement while this showed "0.0".
     // Same ride, two answers, which teaches a rider that neither is worth
     // reading.
     if (SpeedStatsUnknown()) {
-        lv_label_set_text(s_p2_avgspeed, "--");
+        SetTextIfChanged(s_p2_avgspeed, "--");
     } else {
-        lv_label_set_text_fmt(s_p2_avgspeed, "%.1f",
-                              (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
+        char avg[16];
+        snprintf(avg, sizeof(avg), "%.1f",
+                 (double)Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()));
+        SetTextIfChanged(s_p2_avgspeed, avg);
     }
 
     if (s_hr_label != nullptr) {
@@ -1730,16 +1753,22 @@ void RenderPage2() {
         // takes the saturated original for whatever zone the live reading is
         // in -- copying the pixel colour out of the other cell would drag its
         // dark-on-white ink onto a dark background.
-        lv_label_set_text(s_p2_hr, lv_label_get_text(s_hr_label));
-        lv_obj_set_style_text_color(
-            s_p2_hr, lv_color_hex(s_hr_zone >= 0 ? ZONE_COLORS[s_hr_zone] : COLOR_VALUE), 0);
+        SetTextIfChanged(s_p2_hr, lv_label_get_text(s_hr_label));
+        // Guarded too: setting a style invalidates exactly as setting text
+        // does, and the zone changes far more slowly than this tick.
+        static int drawn_zone = -2;
+        if (drawn_zone != s_hr_zone) {
+            drawn_zone = s_hr_zone;
+            lv_obj_set_style_text_color(
+                s_p2_hr, lv_color_hex(s_hr_zone >= 0 ? ZONE_COLORS[s_hr_zone] : COLOR_VALUE), 0);
+        }
     }
 
     // The short form here, the full one on the ride summary: that panel has
     // the width for seconds and this cell does not.
     char buf[RIDE_SUMMARY_SHORT_TIME_MAX];
     if (RideSummary_FormatDurationShort((uint32_t)RideStats_MovingSeconds(), buf, sizeof(buf))) {
-        lv_label_set_text(s_p2_ridetime, buf);
+        SetTextIfChanged(s_p2_ridetime, buf);
     }
 
     // The same climb page one shows as GAIN, from the same accumulator.
@@ -1750,7 +1779,9 @@ void RenderPage2() {
     // there looked like one figure disagreeing with itself rather than two
     // different measurements. Climbing is the one riders actually talk about,
     // so both pages now show it and they agree by construction.
-    lv_label_set_text_fmt(s_p2_ascent, "%d", (int)(RideStats_AscentM() + 0.5f));
+    char ascent[16];
+    snprintf(ascent, sizeof(ascent), "%d", (int)(RideStats_AscentM() + 0.5f));
+    SetTextIfChanged(s_p2_ascent, ascent);
 
     // Copied from the first page's cell, like speed and heart rate above, and
     // for the same reason: "--" for no sensor and 0 for a rider coasting are
@@ -1760,16 +1791,18 @@ void RenderPage2() {
     // is violet with dark ink, so taking its colour would paint the figure
     // very nearly the background.
     if (s_cadence_label != nullptr) {
-        lv_label_set_text(s_p2_cadence, lv_label_get_text(s_cadence_label));
+        SetTextIfChanged(s_p2_cadence, lv_label_get_text(s_cadence_label));
     }
 
     // "--" with no IMU, which is every day on this board: the per-cent sign
     // stays on the caption row either way, so the cell still says what it
     // would be showing.
     if (s_have_grade) {
-        lv_label_set_text_fmt(s_p2_incline, "%+.1f", (double)s_grade_pct);
+        char incline[16];
+        snprintf(incline, sizeof(incline), "%+.1f", (double)s_grade_pct);
+        SetTextIfChanged(s_p2_incline, incline);
     } else {
-        lv_label_set_text(s_p2_incline, "--");
+        SetTextIfChanged(s_p2_incline, "--");
     }
 
     // The trip, in the cell the battery used to hold. Its colours belong to
@@ -1780,10 +1813,12 @@ void RenderPage2() {
         // needed, then one. Here it is a 90px column rather than a 108px one,
         // which is why the font is a step smaller -- see where it is built.
         const float trip = Settings_DistanceFromKm((float)Trip_Km());
-        lv_label_set_text_fmt(s_p2_trip, (trip >= 100.0f) ? "%.1f" : "%.2f", trip);
+        char tripbuf[16];
+        snprintf(tripbuf, sizeof(tripbuf), (trip >= 100.0f) ? "%.1f" : "%.2f", (double)trip);
+        SetTextIfChanged(s_p2_trip, tripbuf);
     }
     if (s_p2_trip_unit != nullptr) {
-        lv_label_set_text(s_p2_trip_unit, Settings_DistanceUnitLabel());
+        SetTextIfChanged(s_p2_trip_unit, Settings_DistanceUnitLabel());
     }
 }
 
