@@ -47,7 +47,12 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // A publish without a valid fix carries no speed worth integrating --
     // GPS_Reader publishes anyway so a climbing num_sv can distinguish
     // "acquiring" from "no module" (CLAUDE.md §8).
-    if (!gps->fix_valid || !Barometer_HaveAltitude()) {
+    // Fresh, not HaveAltitude: the latter never goes false once the sensor has
+    // read once, so a BMP580 that falls off the bus mid-ride would freeze the
+    // altitude while distance kept advancing -- and rise-over-run with a
+    // frozen rise is a confident +0.0% on a climb. Blanking is the honest
+    // answer (Barometer.h).
+    if (!gps->fix_valid || !Barometer_AltitudeFresh()) {
         Locked guard;
         s_have_fix = false;
         return;

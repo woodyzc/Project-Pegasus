@@ -91,8 +91,26 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // silently reverting to a source whose numbers mean something different,
     // which would leave one ride's total built from two incompatible scales
     // with nothing on the panel to say so.
-    const float alt_m = Barometer_HaveAltitude() ? Barometer_AltitudeM() : gps->alt;
-    Ascent_Feed(&s_ascent, alt_m, now);
+    // ⚠️ This asks Barometer_Found(), the same question AltitudeSource() asks,
+    // and that agreement is the point. It used to ask HaveAltitude() here and
+    // Found() there, so a barometer that answered at boot and then never read
+    // -- a loose jumper, which happened on 2026-09-27 -- installed the
+    // barometric 1m band and then fed it GNSS altitude. Several metres of
+    // receiver wander through a band sized for a tenth of that counts fake
+    // climb for the whole ride, which is the precise failure the split tuning
+    // exists to prevent.
+    //
+    // A fitted-but-silent sensor is therefore fed nothing at all. The climb
+    // total stops rising, deliberately: a visible failure beats reverting to a
+    // source whose numbers mean something different and leaving one ride's
+    // total built from two scales.
+    if (Barometer_Found()) {
+        if (Barometer_AltitudeFresh()) {
+            Ascent_Feed(&s_ascent, Barometer_AltitudeM(), now);
+        }
+    } else {
+        Ascent_Feed(&s_ascent, gps->alt, now);
+    }
 }
 
 void OnHeartRatePublished(const char *topic, const void *data, uint32_t size, void *user_arg) {

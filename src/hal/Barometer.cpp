@@ -84,6 +84,7 @@ constexpr uint8_t DEEP_DISABLE = 0x80;
 //
 // Temperature is left bypassed: it is a display curiosity here and nothing
 // integrates it.
+constexpr uint8_t IIR_PRESS_MSK = 0x38;
 constexpr uint8_t IIR_PRESS_COEFF_15 = (0x04 << 3);
 
 // DSP_CONFIG bit 5, and this is the one that is easy to miss. It selects
@@ -259,10 +260,26 @@ void Barometer_Init() {
     if (!WriteReg(REG_ODR_CONFIG, DEEP_DISABLE | PWR_STANDBY)) {
         return;
     }
-    if (!WriteReg(REG_DSP_IIR, IIR_PRESS_COEFF_15)) {
+    // Read-modify-write, not a blind write. Bosch's set_iir_config reads both
+    // DSP registers and edits bit slices, and these two carry fields this
+    // driver has no business clearing -- the out-of-range detector, the forced
+    // IIR flush, the FIFO's own filter selects. Writing a bare constant here
+    // happens to work today only because their reset values are zero.
+    uint8_t iir = 0;
+    if (!ReadRegs(REG_DSP_IIR, &iir, 1)) {
         return;
     }
-    if (!WriteReg(REG_DSP_CONFIG, SHDW_SEL_IIR_PRESS)) {
+    iir = (uint8_t)((iir & (uint8_t)~IIR_PRESS_MSK) | IIR_PRESS_COEFF_15);
+    if (!WriteReg(REG_DSP_IIR, iir)) {
+        return;
+    }
+
+    // Coefficient first, then select its output into the data registers.
+    uint8_t dsp = 0;
+    if (!ReadRegs(REG_DSP_CONFIG, &dsp, 1)) {
+        return;
+    }
+    if (!WriteReg(REG_DSP_CONFIG, (uint8_t)(dsp | SHDW_SEL_IIR_PRESS))) {
         return;
     }
     if (!WriteReg(REG_ODR_CONFIG, DEEP_DISABLE | ODR_10HZ | PWR_NORMAL)) {
@@ -275,10 +292,11 @@ void Barometer_Init() {
     // is invisible in the data. This is reported on the settings page so the
     // question "is the filter actually on, on this silicon" has an answer that
     // is not a guess.
-    uint8_t dsp = 0;
-    uint8_t iir = 0;
+    dsp = 0;
+    iir = 0;
     s_filtered = ReadRegs(REG_DSP_CONFIG, &dsp, 1) && ReadRegs(REG_DSP_IIR, &iir, 1) &&
-                 ((dsp & SHDW_SEL_IIR_PRESS) != 0) && ((iir & 0x38) == IIR_PRESS_COEFF_15);
+                 ((dsp & SHDW_SEL_IIR_PRESS) != 0) &&
+                 ((iir & IIR_PRESS_MSK) == IIR_PRESS_COEFF_15);
 
     s_found = true;
 }
@@ -331,6 +349,18 @@ bool Barometer_Read(float *pressure_pa, float *temperature_c) {
 float Barometer_AltitudeM() { return s_altitude_m; }
 bool Barometer_HaveAltitude() { return s_have_altitude; }
 
+bool Barometer_AltitudeFresh() {
+    if (!s_have_altitude) {
+        return false;
+    }
+    // Age matters more than the value. Without this the sensor can fall off
+    // the bus and every accessor above goes on answering with the last good
+    // sample for the rest of the boot -- which is not a stopped reading but a
+    // confidently wrong one. Same rule as every live reading on the dashboard
+    // (CLAUDE.md §8).
+    return (uint32_t)(millis() - s_last_ms) <= STALE_MS;
+}
+
 void Barometer_StartMonitor() {
     if (!s_found) {
         return;
@@ -339,15 +369,7 @@ void Barometer_StartMonitor() {
 }
 
 bool Barometer_Reading(float *pressure_pa, float *temperature_c) {
-    if (!s_have_altitude) {
-        return false;
-    }
-    // Age matters more than the value. A cached reading with no expiry would
-    // have quietly hidden the loose jumper this cache was written during: the
-    // sensor stops answering, the settings page keeps showing the last good
-    // pressure, and the panel reads healthy for the rest of the boot. Same
-    // rule as every live reading on the dashboard (CLAUDE.md §8).
-    if ((uint32_t)(millis() - s_last_ms) > STALE_MS) {
+    if (!Barometer_AltitudeFresh()) {
         return false;
     }
     if (pressure_pa != nullptr) {

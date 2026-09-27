@@ -103,7 +103,20 @@ bool Barometer_Reading(float *pressure_pa, float *temperature_c);
 // compare against a map. `Barometer_HaveAltitude()` says whether it means
 // anything yet.
 float Barometer_AltitudeM();
+
+// ⚠️ These two ask different questions and the difference is load-bearing.
+//
+// Barometer_HaveAltitude() is "has this sensor EVER produced a reading". It
+// never goes false again. Barometer_AltitudeFresh() is "is the reading above
+// current", and it goes false a few seconds after the part stops answering.
+//
+// Anything showing a live figure to the rider wants Fresh. HaveAltitude taken
+// for freshness is how a sensor that fell off the bus mid-ride went on being
+// believed: the altitude froze, and because grade is rise over run with a run
+// that keeps advancing, INCLINE read a confident +0.0% on a climb instead of
+// blanking. A frozen input produces a wrong answer, not a missing one.
 bool Barometer_HaveAltitude();
+bool Barometer_AltitudeFresh();
 
 // Spawns the Core 0 sampling task (CLAUDE.md §4). Preconditions:
 // Barometer_Init() has run. A no-op when no sensor was found.
