@@ -431,10 +431,21 @@ bool Touch_IsPressed() {
 }
 
 void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
-    // The bus is touched only on an interrupt. A release raises one too --
-    // the count register reads zero -- so the cached state below follows the
-    // finger up as well as down.
-    if (s_irq) {
+    // Interrupt to begin a touch; poll while one is in progress.
+    //
+    // Reading only on the interrupt is what the vendor does, and it is right
+    // for the idle case -- it is what keeps a panel nobody is touching off
+    // the bus entirely. But it samples a moving finger only as often as the
+    // controller raises an edge, and LVGL needs several *moving* positions
+    // inside a gesture's window to call it a swipe. With the frame rate
+    // measured at 33fps/5%CPU, sparse sampling is the only thing left that
+    // explains a swipe being hard to land.
+    //
+    // So while a contact is down, every LVGL read (30ms) goes and asks. That
+    // cannot bring the phantom touches back: those were the 16-bit register
+    // address returning garbage that decoded as contacts, not polling as
+    // such, and a poll that finds no contact now simply reports none.
+    if (s_irq || s_pressed) {
         s_irq = false;
         s_dbg_int_low++;
         uint16_t rx = 0;
