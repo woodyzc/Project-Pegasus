@@ -23,6 +23,7 @@
 #include "ui/Splash.h"
 #include "system/PowerManager.h"
 #include "system/Settings.h"
+#include "system/GradeTracker.h"
 #include "system/RideStats.h"
 #include "system/Trip.h"
 #include "ui/Overlay_Alert.h"
@@ -212,6 +213,12 @@ void setup() {
     // DataCenter rather than from a redraw, so both keep counting while the
     // rider is looking at the map or the settings page.
     RideStats_Init();
+    // The INCLINE cell's source. Also a DataCenter subscriber, and
+    // deliberately not gated on the ride being armed -- grade is a live
+    // reading of the road, like SPEED, rather than a ride statistic
+    // (GradeTracker.h). Before the dashboard's Push() below, because a cached
+    // page reads the world once at load (CLAUDE.md §8).
+    GradeTracker_Init();
     RideLog_Init();
 
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);

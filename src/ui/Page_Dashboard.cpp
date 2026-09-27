@@ -14,6 +14,7 @@
 #include "../system/RideStats.h"
 #include "../system/RideSummary.h"
 #include "../system/Settings.h"
+#include "../system/GradeTracker.h"
 #include "../system/Trip.h"
 #include "../navigation/GpxTrack.h"
 #include "../navigation/TbtParse.h"
@@ -405,7 +406,6 @@ uint32_t s_clock_drawn_ms = 0;
 volatile bool s_gps_dirty = false;
 volatile bool s_hr_dirty = false;
 volatile bool s_cadence_dirty = false;
-volatile bool s_imu_dirty = false;
 volatile bool s_battery_dirty = false;
 volatile bool s_tbt_dirty = false;
 
@@ -435,13 +435,6 @@ bool s_has_speed = false;
 uint32_t s_gps_last_ms = 0;
 constexpr uint32_t GPS_STALE_MS = 5000;
 
-// The grade, kept as a number rather than only as the string the first page
-// draws. Both pages show it and they format it differently -- one appends the
-// per-cent sign to the figure, the other puts it on the caption row -- so
-// copying the label text between them, which is what speed and heart rate do,
-// would put two per-cent signs on the second page.
-float s_grade_pct = 0.0f;
-bool s_have_grade = false;
 
 // DataCenter callbacks -- may run on Core 0 (whichever core published). Must
 // NOT touch any LVGL object; only ever set a flag for the Core-1 refresh
@@ -468,14 +461,6 @@ void OnCadencePublished(const char *topic, const void *data, uint32_t size, void
     (void)size;
     (void)user_arg;
     s_cadence_dirty = true;
-}
-
-void OnImuPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
-    (void)topic;
-    (void)data;
-    (void)size;
-    (void)user_arg;
-    s_imu_dirty = true;
 }
 
 void OnBatteryPublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
@@ -1511,26 +1496,18 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     // the moment it appears.
     RenderPage2();
 
-    if (s_imu_dirty) {
-        s_imu_dirty = false;
-        IMU_Data_t imu;
-        if (DataCenter_Pull(TOPIC_IMU_DATA, &imu, sizeof(imu))) {
-            // Grade as a percentage of rise over run, from the IMU's pitch.
-            const float grade = tanf(imu.pitch * (float)M_PI / 180.0f) * 100.0f;
-            s_grade_pct = grade;
-            s_have_grade = true;
-            // Stored, not drawn. Grade and ascent both live on the second page
-            // now that cadence has this page's fourth cell, and RenderPage2
-            // reads these two variables rather than being pushed to.
-            //
-            // The climb fill went with them. It set a dark background behind
-            // the grade on a real climb, and it had never once run: it needs
-            // an IMU publishing, and this board has none. Its replacement, if
-            // the Waveshare ever arrives, belongs on whichever cell shows the
-            // grade -- and must set background and ink in one place, which is
-            // the bug the old one was carrying unseen.
-        }
-    }
+    // The grade used to be computed here, from the IMU's pitch, and it was
+    // never right even in principle: an accelerometer measures specific force
+    // and cannot separate gravity from the rider's own acceleration, so a
+    // gentle pull away from a light reads as a 10% climb. It also never once
+    // ran, because no board in this project has ever published TOPIC_IMU_DATA.
+    // GradeTracker owns the figure now and derives it from the barometer;
+    // src/system/Grade.h has the arithmetic and the reasoning.
+    //
+    // The climb fill went with the old path. It set a dark background behind
+    // the grade on a real climb and had likewise never run. Its replacement
+    // belongs on whichever cell shows the grade, and must set background and
+    // ink in one place -- the bug the old one was carrying unseen.
 }
 
 void OnMapClicked(lv_event_t *e) {
@@ -1561,7 +1538,6 @@ void OnMapClicked(lv_event_t *e) {
 Account s_gps_account("Page_Dashboard/GPS", OnGpsPublished);
 Account s_hr_account("Page_Dashboard/HeartRate", OnHeartRatePublished);
 Account s_cadence_account("Page_Dashboard/Cadence", OnCadencePublished);
-Account s_imu_account("Page_Dashboard/IMU", OnImuPublished);
 Account s_battery_account("Page_Dashboard/Battery", OnBatteryPublished);
 Account s_tbt_account("Page_Dashboard/TBT", OnTbtPublished);
 
@@ -1794,12 +1770,13 @@ void RenderPage2() {
         SetTextIfChanged(s_p2_cadence, lv_label_get_text(s_cadence_label));
     }
 
-    // "--" with no IMU, which is every day on this board: the per-cent sign
-    // stays on the caption row either way, so the cell still says what it
-    // would be showing.
-    if (s_have_grade) {
+    // "--" until the barometer is reading, fixes are arriving and 30m of
+    // ground has been covered to divide by -- so a stationary board shows it,
+    // and so does one with no BMP580 fitted. The per-cent sign stays on the
+    // caption row either way, so the cell still says what it would be showing.
+    if (GradeTracker_Have()) {
         char incline[16];
-        snprintf(incline, sizeof(incline), "%+.1f", (double)s_grade_pct);
+        snprintf(incline, sizeof(incline), "%+.1f", (double)GradeTracker_Pct());
         SetTextIfChanged(s_p2_incline, incline);
     } else {
         SetTextIfChanged(s_p2_incline, "--");
@@ -2277,8 +2254,8 @@ void PageDashboard::onViewLoad() {
     // same anatomy and font as TRIP opposite: it is one number, it is at most
     // three digits, and 32pt in this 92px column is what TRIP already proves
     // fits. The elevation pair did not lose a home -- the second page carries
-    // both ASCENT and INCLINE, and this board has no IMU to produce a grade
-    // with anyway.
+    // both ASCENT and INCLINE, and INCLINE now has a real source there: the
+    // barometer, through GradeTracker.
     lv_obj_t *cadence_cell = MakeCell(parent, COL2, ROW2, SEC_W, CELL_H, "CADENCE");
     // 40pt, the same as SPEED and HEART RATE, rather than the 32 TRIP takes
     // beside it. TRIP is at 32 because "188.4" is five glyphs; cadence is
@@ -2506,7 +2483,6 @@ void PageDashboard::onViewLoad() {
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
     DataCenter_Subscribe(TOPIC_HEART_RATE, &s_hr_account);
     DataCenter_Subscribe(TOPIC_CADENCE, &s_cadence_account);
-    DataCenter_Subscribe(TOPIC_IMU_DATA, &s_imu_account);
     DataCenter_Subscribe(TOPIC_BATTERY, &s_battery_account);
     DataCenter_Subscribe(TOPIC_NAV_TBT, &s_tbt_account);
 
@@ -2532,7 +2508,6 @@ void PageDashboard::onViewUnload() {
 
     DataCenter_Unsubscribe(TOPIC_GPS_INFO, &s_gps_account);
     DataCenter_Unsubscribe(TOPIC_HEART_RATE, &s_hr_account);
-    DataCenter_Unsubscribe(TOPIC_IMU_DATA, &s_imu_account);
     DataCenter_Unsubscribe(TOPIC_BATTERY, &s_battery_account);
     DataCenter_Unsubscribe(TOPIC_NAV_TBT, &s_tbt_account);
 
