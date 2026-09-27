@@ -442,21 +442,22 @@ bool Touch_IsPressed() {
 }
 
 void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
-    // Interrupt to begin a touch; poll while one is in progress.
+    // Polled on every LVGL read, with no interrupt gate, because that is what
+    // the vendor does. Lvgl_Touchpad_Read in the V2 demo's LVGL_Driver.cpp
+    // calls Touch_Read_Data() unconditionally and uses the result; the ISR
+    // and Touch_Loop() there feed a separate printf path, not LVGL.
     //
-    // Reading only on the interrupt is what the vendor does, and it is right
-    // for the idle case -- it is what keeps a panel nobody is touching off
-    // the bus entirely. But it samples a moving finger only as often as the
-    // controller raises an edge, and LVGL needs several *moving* positions
-    // inside a gesture's window to call it a swipe. With the frame rate
-    // measured at 33fps/5%CPU, sparse sampling is the only thing left that
-    // explains a swipe being hard to land.
+    // Gating the LVGL read on the interrupt was my invention and it is what
+    // made swipes need five attempts. A press could only begin on an edge and
+    // ended the moment one read found no contact, after which another edge
+    // was needed to resume -- so a single 300ms swipe was seen as a handful
+    // of 2-to-5-sample fragments (#94 n2, #97 n5 on the panel) instead of one
+    // continuous press, and LVGL had nothing to accumulate a gesture from.
     //
-    // So while a contact is down, every LVGL read (30ms) goes and asks. That
-    // cannot bring the phantom touches back: those were the 16-bit register
-    // address returning garbage that decoded as contacts, not polling as
-    // such, and a poll that finds no contact now simply reports none.
-    if (s_irq || s_pressed) {
+    // Polling is safe now for the reason it always would have been with the
+    // right protocol: the phantom contacts came from a 16-bit register
+    // address on a 32-bit part returning noise, not from asking too often.
+    {
         s_irq = false;
         s_dbg_int_low++;
         uint16_t rx = 0;
