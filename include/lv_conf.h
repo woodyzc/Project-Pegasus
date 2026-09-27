@@ -61,12 +61,13 @@
 /*=======================
  * FEATURE CONFIGURATION
  *=======================*/
-/* FPS + CPU%% in the bottom-right corner. On while the sluggish UI reported on
- * 2026-09-26 is being chased: it is the only way to tell "slow to draw" from
- * "slow to sample touch", which need opposite fixes. Far cheaper than the
- * touch overlay was -- one small label LVGL already maintains internally.
- * Set back to 0 once the frame rate is settled. */
-#define LV_USE_PERF_MONITOR 1
+/* FPS + CPU%% in the bottom-right corner. Off, but reach for it first when
+ * anything feels slow: on 2026-09-26 it was the reading "33fps at 5% CPU"
+ * that proved the renderer was fine and sent the search to the touch path,
+ * and later "90% whenever the screen moves" that found the per-pixel byte
+ * swap. It is one small label LVGL maintains internally -- cheap enough to
+ * leave on while diagnosing, unlike a hand-rolled overlay. */
+#define LV_USE_PERF_MONITOR 0
 #define LV_USE_MEM_MONITOR 0
 #define LV_USE_LOG 0
 

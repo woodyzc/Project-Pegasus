@@ -44,6 +44,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - **CST328 protocol** (V1, untested here): 16-bit addresses, count at `0xD005` then 27 bytes at `0xD000`, `x = (buf[2] << 4) | (buf[4] >> 4)`, `y = (buf[3] << 4) | (buf[4] & 0x0F)`, clear by writing 0 to `0xD005`, reads take a STOP, reset is high 50 / low 5 / high 50, and it identifies itself with **`0xCACA`** at bytes 10..11 of the 24-byte block at `0xD1F4`.
   - ⚠️ **`0xCACA` is a CST328 constant. Do not gate a CST3530 on it** — it reads `0x0000`, and treating that as a fault turned a working panel into a diagnosis of dead hardware.
   - **Read only from the interrupt.** Both parts are designed for it and the vendor never polls. Polling the data registers asynchronously returns frames caught mid-write, which decode as contacts at coordinates off the panel — i.e. the board presses its own buttons and walks through its own settings pages. Every phantom-touch episode during bring-up was this.
+  - **Read the panel on EVERY LVGL read, with no interrupt gate.** The
+    vendor's `Lvgl_Touchpad_Read` calls `Touch_Read_Data()` unconditionally;
+    its ISR and `Touch_Loop()` feed a separate printf demo, not the input
+    device. Gating LVGL's read on the interrupt makes a press begin only on an
+    edge and end on the first empty read, so a 300ms swipe arrives as several
+    2-to-5-sample fragments and no gesture can accumulate — it reads as
+    "swipes need five tries", not as broken touch.
+  - **The rule this chase earned:** when a vendor driver exists, match it
+    completely and confirm it works *before* improving any part of it. Three
+    separate symptoms here — the noise, the phantom contacts, and the stiff
+    swipes — were each a deviation of mine from that driver, not a fault in
+    the part, and each cost rounds to diagnose as though it were.
   - A **V3** would presumably bring a third part. The probe-and-dispatch shape in `Touch.cpp` is there so that costs one branch, not a rewrite.
 - **GNSS Module**: via UART1 on **RX 18 / TX 15** — the only two genuinely spare GPIOs on the board, both on the 12-pin external connector.
   - ⚠️ **The module on the bench is an ATGM336H (中科微电子 GPS+BD), not the
@@ -666,6 +678,40 @@ it — treat every item below as reasoned, not measured.
   are **15 and 18** — plus UART0's 43/44, which the serial item above says to
   keep. So GNSS is RX 18 / TX 15 and there is no second choice; anything else
   that wants a pin on this board has to take one away from something.
+
+## 8a. Making the UI feel right (all four found on 2026-09-26)
+
+`LV_USE_PERF_MONITOR` in `include/lv_conf.h` puts FPS and CPU% on screen.
+Reach for it first: "33fps at 5%" is what proved the renderer innocent, and
+"90% whenever the screen moves" is what found the byte swap. Guessing at
+performance cost four rounds before anyone measured.
+
+- **Draw buffers belong in INTERNAL RAM, not PSRAM.** Two full-screen buffers
+  in PSRAM is cheap on memory and ruinous on bandwidth: every pixel is written
+  to PSRAM by the renderer and read back by the flush, ~300KB of slow-bus
+  traffic per frame. One 40-line partial buffer (19KB) in
+  `MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL` is the standard arrangement and took
+  the dashboard to 33fps at 5% CPU. Single, not double: `tft.pushColors` is
+  blocking, so there is no DMA completion to overlap against.
+- **`LV_COLOR_16_SWAP` and `Display_Flush`'s `pushColors(..., swap)` are one
+  decision in two files.** With the swap off in LVGL and on in the flush,
+  TFT_eSPI byte-swaps all 76,800 pixels in software per full redraw — the CPU
+  sat at 90% during any motion. Swap in LVGL (`1`) and pass `false`. Either
+  alone gives visibly wrong colours. This is the 16-bit word's endianness and
+  is **not** `TFT_RGB_ORDER`, which is the R/B channel order; the panel needs
+  both set.
+- ⚠️ **A scrollable object suppresses gestures completely.** `indev_gesture()`
+  opens with `if (proc->types.pointer.scroll_obj) return;`, so once a drag has
+  latched onto anything scrollable, no gesture is ever emitted — the velocity
+  and distance thresholds below it are never even read. `lv_obj_create()` sets
+  `LV_OBJ_FLAG_SCROLLABLE` by default, exactly as it sets `CLICKABLE`, and
+  `MapView`'s container missing it meant the top 184px of the dashboard
+  silently ate swipes.
+- **Suppress the unwanted click, not the wanted gesture.** The dashboard used
+  to discard swipes over the navigation tile so a flick could not open the
+  ROUTE page. That threw away 57% of the panel. LVGL still delivers `CLICKED`
+  on release after a gesture, so the fix is for the click handler to check
+  `lv_indev_get_gesture_dir() != LV_DIR_NONE` and ignore it.
 
 ## 9. WiFi File Transfer
 
