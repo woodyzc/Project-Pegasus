@@ -27,7 +27,13 @@
 
 namespace {
 
-HardwareSerial s_uart(1); // UART1: UART0 is reserved for debug
+// The UART1 *peripheral*, driven out on GPIO43/44 through the pin matrix --
+// which are UART0's default pads and the board's silkscreened UART header.
+// Not "because UART0 is reserved for debug": Serial here is the USB CDC
+// (ARDUINO_USB_CDC_ON_BOOT=1), so nothing competes for those pins. UART1 is
+// used so the ROM bootloader's own UART0 chatter has no peripheral of ours
+// attached to it.
+HardwareSerial s_uart(1);
 NmeaParser_t s_parser;
 
 volatile bool s_has_fix = false;

@@ -116,6 +116,10 @@ void IRAM_ATTR TouchISR() {
 // panel reports, so every poll between interrupts answers from here rather
 // than going near the bus.
 static bool s_pressed = false;
+
+// Set when a press arrives on a dark screen, cleared when the finger lifts.
+// Not a per-poll sample: see the wake handling in Touch_Read.
+static bool s_swallow_press = false;
 static uint16_t s_cached_x = 0;
 static uint16_t s_cached_y = 0;
 
@@ -287,7 +291,14 @@ void Touch_Init() {
     //
     // The comment on this line has said "open-drain" since the port was
     // written, next to a pinMode that could not honour it.
-    pinMode(TOUCH_INT_PIN, INPUT); // as the vendor does; also the deep-sleep wake source (see PowerManager)
+    // So: INPUT_PULLUP, deliberately unlike the vendor, and this is the one
+    // place this driver knowingly deviates. The vendor reads INT for a printf
+    // demo and never for LVGL; nothing here reads it at all any more (the
+    // final model polls unconditionally). What it still feeds is ext0 deep
+    // sleep wake, where a floating-low line is a permanent instant wake --
+    // though that path needs rtc_gpio_pullup_en() as well, because the RTC
+    // mux does not inherit this. See EnterSleep().
+    pinMode(TOUCH_INT_PIN, INPUT_PULLUP);
     pinMode(TOUCH_RST_PIN, OUTPUT);
 
     // Vendor reset sequence, timings included. It starts by driving RST high
@@ -343,13 +354,13 @@ bool Touch_ControllerFound() {
     return s_controller_found;
 }
 
-// Acknowledges the touch block the way a CST3xx expects: the three bytes
-// D0 00 AB, which is the kernel driver's CST3XX_TOUCH_DATA_STOP_CMD written
-// little-endian. Without it the controller keeps handing back the same frame.
-static void AckTouchBlock() {
-    const uint8_t ab = CST3XX_CHK_VAL;
-    WriteReg(REG_TOUCH_XY, &ab, 1);
-}
+// AckTouchBlock() lived here: the kernel driver's three-byte D0 00 AB stop
+// command, written little-endian. It was never called. The working path is
+// ClearTouchLatch(), which sends 0xD00002AB as a 32-bit register address with
+// no payload -- the vendor's arrangement, where the 0xAB is part of the
+// address rather than a payload byte. Two spellings of the same idea, one of
+// them from a different driver for a different part, is how the CST3530 came
+// to look dead; keeping the unused one around invites picking the wrong one.
 
 // One poll of the panel: true when a finger is down, with the raw coordinates
 // the controller reported.
@@ -508,6 +519,8 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     }
 
     if (!s_pressed) {
+        // The finger is up, so the next press is a real one.
+        s_swallow_press = false;
         data->state = LV_INDEV_STATE_REL;
         return;
     }
@@ -529,10 +542,22 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
     // A press on a dark screen spends itself waking the screen up, and LVGL
     // never sees it. Otherwise the first touch after the backlight times out
     // lands on whatever button happens to be under the finger, which on this
-    // firmware could be "Start new ride" or the file server.
-    const bool was_off = PowerManager_ScreenIsOff();
+    // firmware could be "Start new ride" -- which resets the odometer -- or
+    // the file server.
+    //
+    // ⚠️ Latched until the finger lifts, and it has to be. This was a single
+    // `was_off` sample, which swallowed exactly one poll:
+    // PowerManager_NoteActivity() clears the screen-off flag *synchronously*,
+    // so 30ms later (LV_INDEV_DEF_READ_PERIOD) the same unbroken press read
+    // as a fresh one and LVGL delivered it to the widget under the finger. A
+    // normal 80-150ms tap spans three to five polls, so the guard protected
+    // against nothing slower than a 30ms tap -- while reading, in the code
+    // and the comment above, exactly as though it worked.
+    if (PowerManager_ScreenIsOff()) {
+        s_swallow_press = true;
+    }
     PowerManager_NoteActivity();
-    if (was_off) {
+    if (s_swallow_press) {
         data->state = LV_INDEV_STATE_REL;
         return;
     }

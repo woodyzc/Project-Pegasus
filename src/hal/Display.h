@@ -3,7 +3,7 @@
 #include <lvgl.h>
 
 // Bring up the ST7789 SPI panel (Waveshare ESP32-S3-Touch-LCD-2.8) and
-// register it as an LVGL display driver with a double, PSRAM-backed draw
+// register it as an LVGL display driver with a single 40-line internal-RAM draw
 // buffer. Same 240x320 geometry as the board before it, so nothing above this
 // layer -- lv_conf.h, the fonts, every page's layout -- changed with the port.
 // Must be called once from setup() before any LVGL widget/task code runs.

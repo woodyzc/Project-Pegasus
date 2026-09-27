@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <SD_MMC.h>
 #include <driver/gpio.h>
+#include <driver/rtc_io.h>
 #include <esp_sleep.h>
 
 #include "../hal/Display.h"
@@ -193,16 +194,47 @@ void EnterSleep() {
     PrepareForSleep();
     Display_SetBrightness(0);
 
-    // The touch controller is the only way back. Two pins matter:
+    // ⚠️ THE POWER LATCH COMES FIRST, and on battery nothing else here
+    // matters without it. The rail is a soft latch held closed only by
+    // firmware driving PWR_LATCH_PIN high (hal/BoardPower.h); deep sleep
+    // releases every pin that is not explicitly held, so without this line
+    // the latch opens and the board does not sleep -- it switches OFF, with
+    // no wake source able to bring it back.
+    //
+    // This was missed for a long time because it is invisible on USB, where
+    // the host holds the rail up regardless. CLAUDE.md §8's "deep sleep and
+    // its wake source work, verified 2026-09-17" was measured on USB, which
+    // is the one configuration that cannot see this. A test that can only
+    // pass is not a test.
+    gpio_hold_en((gpio_num_t)PWR_LATCH_PIN);
+
+    // The touch controller is the only way back. Two more pins matter:
     //
     //   INT is the wake source, active-low, so ext0 waits for a 0.
     //   RST must stay high, or the ESP32 releasing every non-RTC pin resets
-    //   the CST328 on the way into sleep and nothing is left to interrupt us.
+    //   the controller on the way into sleep and nothing is left to
+    //   interrupt us.
     //
-    // Both are within the RTC-capable range on the S3 (GPIO0-21), which is
-    // what makes either possible at all.
+    // All three are within the RTC-capable range on the S3 (GPIO0-21), which
+    // is what makes any of this possible.
     gpio_hold_en((gpio_num_t)TOUCH_RST_PIN);
     gpio_deep_sleep_hold_en();
+
+    // ⚠️ And INT must be pulled up in the RTC domain, which is a different
+    // thing from the pinMode in Touch_Init(). Deep sleep hands these pads to
+    // the RTC mux, and Arduino's pinMode does not reach it -- so the internal
+    // pull has to be asked for here or the pad floats.
+    //
+    // That is not hypothetical on this hardware. The line is open-drain and
+    // was *measured* floating low during touch bring-up: the read and
+    // interrupt counters came back exactly equal, 190/190 and 315/315, which
+    // is what "asserted on every poll" looks like from outside. ext0 waits
+    // for a 0, so a floating-low INT is a wake the instant we sleep, for
+    // ever. Fixing the latch above without this trades "switches off" for
+    // "never stays asleep", which is not an improvement.
+    rtc_gpio_pullup_en((gpio_num_t)TOUCH_INT_PIN);
+    rtc_gpio_pulldown_dis((gpio_num_t)TOUCH_INT_PIN);
+
     esp_sleep_enable_ext0_wakeup((gpio_num_t)TOUCH_INT_PIN, 0);
 
     esp_deep_sleep_start();

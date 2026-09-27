@@ -65,7 +65,7 @@ void BatteryTask(void *pv) {
 } // namespace
 
 void Battery_Init() {
-    // 12-bit at 11dB attenuation: the divider puts a 4.2V pack at ~2.1V on the
+    // 12-bit at 11dB attenuation: the 3:1 divider puts a 4.2V pack at ~1.4V on the
     // pin, which needs the widest range to stay off the top of the scale.
     analogReadResolution(12);
     analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);

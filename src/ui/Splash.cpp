@@ -37,7 +37,12 @@ void Splash_Show() {
     // answer is already known by the time this draws.
     if (!Touch_ControllerFound()) {
         lv_obj_t *warn = lv_label_create(lv_layer_top());
-        lv_label_set_text(warn, "touch: CST328 did not answer");
+        // Part-neutral on purpose: Touch_ControllerFound() is false when
+        // NEITHER 0x1A (CST328, V1) nor 0x58 (CST3530, V2) answered, and this
+        // bench board is a V2. Naming one part here told the owner the wrong
+        // chip was missing, which is how a V1 driver came to be ported onto V2
+        // silicon and cost most of a day.
+        lv_label_set_text(warn, "touch: no controller answered");
         lv_obj_set_style_text_color(warn, lv_color_hex(0xFFD166), 0); // the palette's amber
         lv_obj_set_style_bg_color(warn, lv_color_hex(0x101820), 0);
         lv_obj_set_style_bg_opa(warn, LV_OPA_80, 0);
