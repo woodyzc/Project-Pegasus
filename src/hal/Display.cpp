@@ -22,7 +22,11 @@ static void Display_Flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
 
     tft.startWrite();
     tft.setAddrWindow(area->x1, area->y1, w, h);
-    tft.pushColors((uint16_t *)color_p, w * h, true);
+    // swap=false: LVGL already renders in the panel's byte order
+    // (LV_COLOR_16_SWAP 1 in lv_conf.h). Passing true here would make
+    // TFT_eSPI byte-swap every pixel in software, which is what pinned the
+    // CPU at 90% during any redraw. The two settings must agree.
+    tft.pushColors((uint16_t *)color_p, w * h, false);
     tft.endWrite();
 
     lv_disp_flush_ready(drv);
