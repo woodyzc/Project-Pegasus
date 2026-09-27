@@ -51,6 +51,17 @@ void Barometer_Init();
 // True once a BMP580 answered and returned a chip ID this driver recognises.
 bool Barometer_Found();
 
+// True when the part's own IIR filter was configured AND read back as
+// configured, with its output selected into the data registers.
+//
+// Worth reporting rather than assuming. The filter is what stops 1..10Hz
+// pressure events -- gusts, passing traffic -- from aliasing into the slow
+// band when the sampler reads at 2Hz, and it is enabled by two separate bits
+// in two registers, either of which can be silently ignored if the part is
+// not in standby when they are written. A wrong answer here looks exactly
+// like a correct one in the data.
+bool Barometer_Filtered();
+
 // The 7-bit address that answered: 0x47, 0x46, or 0 when nothing did.
 uint8_t Barometer_Address();
 

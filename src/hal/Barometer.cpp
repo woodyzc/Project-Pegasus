@@ -25,6 +25,8 @@ constexpr uint8_t ADDR_LOW = 0x46;
 constexpr uint8_t REG_CHIP_ID = 0x01;
 constexpr uint8_t REG_TEMP_XLSB = 0x1D; // 0x1D..0x1F temp, 0x20..0x22 press
 constexpr uint8_t REG_STATUS = 0x28;
+constexpr uint8_t REG_DSP_CONFIG = 0x30;
+constexpr uint8_t REG_DSP_IIR = 0x31;
 constexpr uint8_t REG_OSR_CONFIG = 0x36;
 constexpr uint8_t REG_ODR_CONFIG = 0x37;
 
@@ -42,11 +44,54 @@ constexpr uint8_t OSR_PRESS_EN = 0x40;
 constexpr uint8_t OSR_PRESS_X4 = (0x02 << 3);
 constexpr uint8_t OSR_TEMP_X2 = 0x01;
 
-// ODR_CONFIG: power mode in bits 0..1, output data rate in bits 2..6.
-// Normal mode is 1. ODR 0x1A is ~5Hz, which is far more often than a climb
-// total needs and keeps the filter in BaroAltitude fed.
+// ODR_CONFIG: power mode in bits 0..1, output data rate in bits 2..6, and
+// deep-standby disable in bit 7.
+constexpr uint8_t PWR_STANDBY = 0x00;
 constexpr uint8_t PWR_NORMAL = 0x01;
-constexpr uint8_t ODR_5HZ = (0x1A << 2);
+
+// 0x17 is BMP5_ODR_10_HZ. This was 0x1A with a comment claiming ~5Hz, and
+// 0x1A is BMP5_ODR_03_HZ -- 3Hz. Worth spelling out because the mistake is
+// invisible: Bosch's names run 15, 10, 05, 04, 03, 02 for 0x16..0x1B, so
+// "05" is 5Hz and 0.5Hz is spelled BMP5_ODR_0_5_HZ. Off by one line in the
+// header and the part quietly runs at a third of the intended rate.
+//
+// 10Hz is chosen against the 2Hz read below so the hardware IIR has samples
+// to work with. 4x pressure oversampling needs about 10ms, so 100ms per
+// output is comfortable.
+constexpr uint8_t ODR_10HZ = (0x17 << 2);
+
+// Bit 7, and it must be set. Bosch: an IIR coefficient other than bypass
+// "without disabling deep-standby mode makes powermode invalid". It has never
+// been set here, which was harmless only for as long as the filter was
+// bypassed.
+constexpr uint8_t DEEP_DISABLE = 0x80;
+
+// ---- The anti-aliasing filter ----
+//
+// The task below reads every 500ms, so Nyquist is 1Hz and anything faster in
+// the pressure signal folds down into the slow band and stays there. That
+// band is the one a climb lives in, and no software filter can separate the
+// two after the fact -- which matters here because the dominant error on a
+// bicycle is not sensor noise but moving air. A gust or a passing lorry is a
+// 1..10Hz pressure event worth tens of pascals, and 12 Pa is a metre.
+//
+// So the filtering has to happen before the sampling, on the part itself.
+//
+// DSP_IIR: pressure coefficient in bits 3..5, temperature in bits 0..2.
+// Coefficient 15 at 10Hz is roughly a 1.5s time constant -- about -20dB at
+// 1Hz and -33dB at 5Hz, against a climb whose own signal is well under
+// 0.05Hz. The lag it adds is small beside Grade.h's 30m window.
+//
+// Temperature is left bypassed: it is a display curiosity here and nothing
+// integrates it.
+constexpr uint8_t IIR_PRESS_COEFF_15 = (0x04 << 3);
+
+// DSP_CONFIG bit 5, and this is the one that is easy to miss. It selects
+// whether the data registers hand back the IIR OUTPUT or the unfiltered
+// sample. Without it the filter runs correctly and nothing ever reads it --
+// no error, no symptom, just the raw signal with a configured filter beside
+// it. Exactly the silent wrong answer CLAUDE.md §8 keeps warning about.
+constexpr uint8_t SHDW_SEL_IIR_PRESS = 0x20;
 
 // How hard the smoother works. At ~2Hz sampling this settles a step in a few
 // seconds, which is slower than a rider climbs and much faster than weather
@@ -56,6 +101,7 @@ constexpr float SMOOTH_ALPHA = 0.20f;
 uint8_t s_addr = 0;
 uint8_t s_chip_id = 0;
 bool s_found = false;
+bool s_filtered = false;
 
 BaroSmoother_t s_smoother;
 volatile float s_altitude_m = 0.0f;
@@ -204,14 +250,41 @@ void Barometer_Init() {
     if (!WriteReg(REG_OSR_CONFIG, OSR_PRESS_EN | OSR_PRESS_X4 | OSR_TEMP_X2)) {
         return;
     }
-    if (!WriteReg(REG_ODR_CONFIG, ODR_5HZ | PWR_NORMAL)) {
+
+    // Four writes in this order, which is Bosch's own sequence and not
+    // negotiable: the IIR registers are writable ONLY in standby (per the
+    // datasheet, via bmp5_set_iir_config), and reaching standby means leaving
+    // deep standby first. Configure the filter over the top of a running
+    // sensor and the writes are simply ignored.
+    if (!WriteReg(REG_ODR_CONFIG, DEEP_DISABLE | PWR_STANDBY)) {
         return;
     }
+    if (!WriteReg(REG_DSP_IIR, IIR_PRESS_COEFF_15)) {
+        return;
+    }
+    if (!WriteReg(REG_DSP_CONFIG, SHDW_SEL_IIR_PRESS)) {
+        return;
+    }
+    if (!WriteReg(REG_ODR_CONFIG, DEEP_DISABLE | ODR_10HZ | PWR_NORMAL)) {
+        return;
+    }
+
+    // Read the filter configuration back rather than trusting the ack. An I2C
+    // write to a register the part declines to change acks exactly like one it
+    // accepts, and the whole point of the shadow bit is that getting it wrong
+    // is invisible in the data. This is reported on the settings page so the
+    // question "is the filter actually on, on this silicon" has an answer that
+    // is not a guess.
+    uint8_t dsp = 0;
+    uint8_t iir = 0;
+    s_filtered = ReadRegs(REG_DSP_CONFIG, &dsp, 1) && ReadRegs(REG_DSP_IIR, &iir, 1) &&
+                 ((dsp & SHDW_SEL_IIR_PRESS) != 0) && ((iir & 0x38) == IIR_PRESS_COEFF_15);
 
     s_found = true;
 }
 
 bool Barometer_Found() { return s_found; }
+bool Barometer_Filtered() { return s_filtered; }
 uint8_t Barometer_Address() { return s_addr; }
 uint8_t Barometer_ChipId() { return s_chip_id; }
 

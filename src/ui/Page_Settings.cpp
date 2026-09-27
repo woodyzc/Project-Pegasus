@@ -1290,8 +1290,15 @@ void PageSettings::onViewLoad() {
         float pa = 0.0f;
         float degc = 0.0f;
         if (Barometer_Reading(&pa, &degc)) {
-            snprintf(buf, sizeof(buf), "0x%02X, %.0f Pa, %.0f m, %.0fC", (unsigned)Barometer_Address(),
-                     (double)pa, (double)Barometer_AltitudeM(), (double)degc);
+            // "IIR" is the part's own filter, read back rather than assumed:
+            // it is what keeps gusts and passing traffic from aliasing into
+            // the slow band the climb lives in, it takes two bits in two
+            // registers that are only writable in standby, and getting it
+            // wrong produces no symptom at all in the numbers. "no IIR" means
+            // the readings are raw and INCLINE will be twitchy in wind.
+            snprintf(buf, sizeof(buf), "0x%02X, %.0f Pa, %.0f m, %.0fC, %s",
+                     (unsigned)Barometer_Address(), (double)pa, (double)Barometer_AltitudeM(),
+                     (double)degc, Barometer_Filtered() ? "IIR" : "no IIR");
         } else {
             snprintf(buf, sizeof(buf), "0x%02X, found but not reading", (unsigned)Barometer_Address());
         }
