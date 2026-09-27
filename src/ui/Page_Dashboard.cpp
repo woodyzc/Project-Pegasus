@@ -600,6 +600,7 @@ lv_obj_t *MakeCell(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, l
 lv_obj_t *MakeSeparator(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
                         lv_coord_t h) {
     lv_obj_t *line = lv_obj_create(parent);
+    lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE); // see MapView_Create: a scrollable object suppresses gestures
     lv_obj_set_size(line, w, h);
     lv_obj_set_pos(line, x, y);
     lv_obj_set_style_bg_color(line, lv_color_hex(COLOR_CELL_BORDER), 0);
@@ -2338,6 +2339,7 @@ void PageDashboard::onViewLoad() {
         const lv_coord_t rules[3] = {P2_TALL_H, 2 * P2_TALL_H, 2 * P2_TALL_H + P2_SHORT_H};
         for (int r = 0; r < 3; r++) {
             lv_obj_t *line = lv_obj_create(s_page2);
+    lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE); // see MapView_Create: a scrollable object suppresses gestures
             lv_obj_remove_style_all(line);
             lv_obj_set_pos(line, 0, rules[r] - 1);
             lv_obj_set_size(line, SCREEN_W, 1);
@@ -2346,6 +2348,7 @@ void PageDashboard::onViewLoad() {
         }
         // Every row is split now, so it runs the full height.
         lv_obj_t *vline = lv_obj_create(s_page2);
+    lv_obj_clear_flag(vline, LV_OBJ_FLAG_SCROLLABLE); // see MapView_Create: a scrollable object suppresses gestures
         lv_obj_remove_style_all(vline);
         lv_obj_set_pos(vline, P2_LIVE_W - 1, 0);
         lv_obj_set_size(vline, 1, P2_H);
