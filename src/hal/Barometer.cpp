@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 #include "../system/BaroAltitude.h"
@@ -60,6 +61,47 @@ BaroSmoother_t s_smoother;
 volatile float s_altitude_m = 0.0f;
 volatile bool s_have_altitude = false;
 
+// The last good sample and when it arrived, for anyone who wants a number
+// without touching the bus. The timestamp is not optional -- see
+// Barometer_Reading() in the header.
+volatile float s_last_pa = 0.0f;
+volatile float s_last_c = 0.0f;
+volatile uint32_t s_last_ms = 0;
+
+// Six sample periods. Long enough that a single missed transfer does not
+// flicker the panel, short enough that a wire falling out is visible while the
+// board is still in your hands.
+constexpr uint32_t STALE_MS = 3000;
+
+// One owner at a time. Arduino's Wire is not thread-safe and this is the only
+// module driving the sensor bus -- but "only module" is not "only task": the
+// Core 0 sampler and anything calling from the UI are two, and two concurrent
+// transactions corrupt each other.
+//
+// Added pre-emptively rather than after a failure, which is worth recording
+// honestly: the "found but not reading" this went in alongside was a loose
+// jumper, diagnosed as this race and blamed on the settings page before the
+// wire was checked. The lock is still right -- the two callers existed and the
+// bus has no arbitration -- but nothing here has ever been observed to
+// corrupt, and the next person reading this should not go looking for the
+// symptom that proved it.
+SemaphoreHandle_t s_lock = nullptr;
+
+struct BusLock {
+    BusLock() {
+        if (s_lock != nullptr) {
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+        }
+    }
+    ~BusLock() {
+        if (s_lock != nullptr) {
+            xSemaphoreGive(s_lock);
+        }
+    }
+    BusLock(const BusLock &) = delete;
+    BusLock &operator=(const BusLock &) = delete;
+};
+
 bool WriteReg(uint8_t reg, uint8_t value) {
     if (s_addr == 0) {
         return false;
@@ -103,6 +145,9 @@ void BaroTask(void *pv) {
         float pa = 0.0f;
         float c = 0.0f;
         if (Barometer_Read(&pa, &c)) {
+            s_last_pa = pa;
+            s_last_c = c;
+            s_last_ms = millis();
             const float raw = BaroAltitude_MetresFromPa(pa);
             s_altitude_m = BaroSmoother_Push(&s_smoother, raw, SMOOTH_ALPHA);
             s_have_altitude = true;
@@ -116,6 +161,9 @@ void BaroTask(void *pv) {
 } // namespace
 
 void Barometer_Init() {
+    if (s_lock == nullptr) {
+        s_lock = xSemaphoreCreateMutex();
+    }
     Wire.begin(SENSOR_I2C_SDA, SENSOR_I2C_SCL, SENSOR_I2C_HZ);
     BaroSmoother_Reset(&s_smoother);
 
@@ -172,6 +220,8 @@ bool Barometer_Read(float *pressure_pa, float *temperature_c) {
         return false;
     }
 
+    BusLock guard;
+
     // Six bytes in one transfer, temperature first: 0x1D..0x1F then
     // 0x20..0x22, each little-endian XLSB/LSB/MSB.
     uint8_t buf[6];
@@ -213,4 +263,25 @@ void Barometer_StartMonitor() {
         return;
     }
     xTaskCreatePinnedToCore(BaroTask, "baro", 3072, nullptr, 1, nullptr, 0);
+}
+
+bool Barometer_Reading(float *pressure_pa, float *temperature_c) {
+    if (!s_have_altitude) {
+        return false;
+    }
+    // Age matters more than the value. A cached reading with no expiry would
+    // have quietly hidden the loose jumper this cache was written during: the
+    // sensor stops answering, the settings page keeps showing the last good
+    // pressure, and the panel reads healthy for the rest of the boot. Same
+    // rule as every live reading on the dashboard (CLAUDE.md §8).
+    if ((uint32_t)(millis() - s_last_ms) > STALE_MS) {
+        return false;
+    }
+    if (pressure_pa != nullptr) {
+        *pressure_pa = s_last_pa;
+    }
+    if (temperature_c != nullptr) {
+        *temperature_c = s_last_c;
+    }
+    return true;
 }

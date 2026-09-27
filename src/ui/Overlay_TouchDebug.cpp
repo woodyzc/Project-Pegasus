@@ -83,7 +83,7 @@ void Refresh(lv_timer_t *timer) {
     // is a figure to take differences of, not to check against a map.
     float pa = 0.0f;
     float degc = 0.0f;
-    const bool live = Barometer_Read(&pa, &degc);
+    const bool live = Barometer_Reading(&pa, &degc);
 
     lv_label_set_text_fmt(s_label,
                           "BMP580 @%02X id%02X %s\n%.0f Pa  %.1fC  %.1f m\n#%lu n%lu mv%lu st%lu",

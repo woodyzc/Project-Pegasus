@@ -1289,7 +1289,7 @@ void PageSettings::onViewLoad() {
     if (Barometer_Found()) {
         float pa = 0.0f;
         float degc = 0.0f;
-        if (Barometer_Read(&pa, &degc)) {
+        if (Barometer_Reading(&pa, &degc)) {
             snprintf(buf, sizeof(buf), "0x%02X, %.0f Pa, %.0f m, %.0fC", (unsigned)Barometer_Address(),
                      (double)pa, (double)Barometer_AltitudeM(), (double)degc);
         } else {

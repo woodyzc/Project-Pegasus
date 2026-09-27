@@ -60,12 +60,29 @@ uint8_t Barometer_Address();
 // silently treating as a barometer.
 uint8_t Barometer_ChipId();
 
-// Reads one pressure/temperature sample.
+// Reads one pressure/temperature sample **from the bus**.
+//
+// Takes the driver's lock, so it is safe to call from any task -- but it
+// blocks for the length of an I2C transfer, so it does not belong on the
+// render path. The UI wants Barometer_Reading() below.
 //
 // Returns false when no sensor is fitted, the transfer fails, or the pressure
 // is outside the part's own 30..125kPa range -- the last of which is a failed
 // read rather than weather, and must not reach an accumulator.
 bool Barometer_Read(float *pressure_pa, float *temperature_c);
+
+// The last *recent* good sample, cached by the sampling task. No bus traffic
+// and no blocking, which is what the UI should use: a screen wanting a number
+// should read the number the sampler already has rather than opening its own
+// transaction on a bus another task is driving.
+//
+// Returns false until the first successful read, **and again once the newest
+// sample goes stale**. That second half is the important one. A loose jumper
+// on the bench put "found but not reading" on the settings page and that is
+// how the wiring fault was found; a cache without an expiry would have shown
+// the last good pressure indefinitely and reported a dead sensor as healthy.
+// Ages out for the same reason the dashboard's readings do (CLAUDE.md §8).
+bool Barometer_Reading(float *pressure_pa, float *temperature_c);
 
 // Smoothed altitude in metres above the standard-atmosphere sea level, from
 // the most recent successful read. Zero when nothing has been read yet.
