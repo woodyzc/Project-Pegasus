@@ -185,6 +185,25 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->pan_locked = false;
 
     view->container = lv_obj_create(parent);
+    // Not scrollable, and this is what made swipes on the dashboard fail.
+    //
+    // lv_obj_create() sets LV_OBJ_FLAG_SCROLLABLE by default -- the same
+    // default that made this layer's sibling swallow every tap until
+    // CLICKABLE was cleared (see RoadView_Attach). The consequence here is
+    // subtler: LVGL's indev_gesture() begins with
+    //
+    //     if (proc->types.pointer.scroll_obj) return;
+    //
+    // so once a drag has latched onto any scrollable object, gesture
+    // detection does not run at all. In GPX mode this container IS the top
+    // 184px of the dashboard, so a swipe that started on the map was decided
+    // to be a scroll and no page change ever followed. Swipes that began on
+    // the metric cells worked, because those clear the flag -- which is
+    // exactly what "stiff, works sometimes" felt like.
+    //
+    // Panning is unaffected: it runs off LV_EVENT_PRESSING and
+    // lv_indev_get_vect (Page_Map's OnMapPressing), never off LVGL scrolling.
+    lv_obj_clear_flag(view->container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(view->container, w, h);
     lv_obj_set_pos(view->container, x, y);
     lv_obj_set_style_bg_color(view->container, lv_color_hex(COLOR_MAP_BG), 0);
@@ -227,6 +246,7 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // and carries real information at a junction -- which way am I pointing
     // relative to the line I am supposed to be following.
     view->marker = lv_obj_create(view->container);
+    lv_obj_clear_flag(view->marker, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_pos(view->marker, 0, 0);
     lv_obj_set_size(view->marker, w, h);
     lv_obj_set_style_bg_opa(view->marker, LV_OPA_TRANSP, 0);

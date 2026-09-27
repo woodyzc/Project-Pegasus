@@ -575,6 +575,54 @@ These were each discovered the slow way. They are not optional trivia.
   This gave the exact assert and the full backtrace for the bug above, after
   three rounds of guessing had failed. Reach for it first, not last.
 
+## 8a. Making the UI feel right
+
+> Found on the Waveshare board on 2026-09-26 and brought here unchanged:
+> every one of these is LVGL or TFT_eSPI behaviour, not board-specific, so
+> the same costs were being paid on this board too and simply never measured.
+> The figures quoted are the Waveshare's.
+
+`LV_USE_PERF_MONITOR` in `include/lv_conf.h` puts FPS and CPU% on screen.
+Reach for it first: "33fps at 5%" is what proved the renderer innocent, and
+"90% whenever the screen moves" is what found the byte swap. Guessing at
+performance cost four rounds before anyone measured.
+
+- **Draw buffers belong in INTERNAL RAM, not PSRAM.** Two full-screen buffers
+  in PSRAM is cheap on memory and ruinous on bandwidth: every pixel is written
+  to PSRAM by the renderer and read back by the flush, ~300KB of slow-bus
+  traffic per frame. One 40-line partial buffer (19KB) in
+  `MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL` is the standard arrangement and took
+  the dashboard to 33fps at 5% CPU. Single, not double: `tft.pushColors` is
+  blocking, so there is no DMA completion to overlap against.
+- **`LV_COLOR_16_SWAP` and `Display_Flush`'s `pushColors(..., swap)` are one
+  decision in two files.** With the swap off in LVGL and on in the flush,
+  TFT_eSPI byte-swaps all 76,800 pixels in software per full redraw — the CPU
+  sat at 90% during any motion. Swap in LVGL (`1`) and pass `false`. Either
+  alone gives visibly wrong colours. This is the 16-bit word's endianness and
+  is **not** `TFT_RGB_ORDER`, which is the R/B channel order; the panel needs
+  both set.
+- **`lv_label_set_text` invalidates unconditionally** — it never compares
+  against what the label already holds. Anything writing labels on a fast
+  timer must compare first (`SetTextIfChanged` in `Page_Dashboard.cpp`).
+  The dashboard's second page wrote thirteen labels on the 100ms tick and so
+  re-rasterised every figure ten times a second for values that change at
+  most once: 25fps/40% against the first page's 33fps/5%. The first page was
+  only fast by accident — its renderers are driven by publishes and the
+  one-second tick. Setting a **style** invalidates the same way, so guard
+  colour changes too.
+- ⚠️ **A scrollable object suppresses gestures completely.** `indev_gesture()`
+  opens with `if (proc->types.pointer.scroll_obj) return;`, so once a drag has
+  latched onto anything scrollable, no gesture is ever emitted — the velocity
+  and distance thresholds below it are never even read. `lv_obj_create()` sets
+  `LV_OBJ_FLAG_SCROLLABLE` by default, exactly as it sets `CLICKABLE`, and
+  `MapView`'s container missing it meant the top 184px of the dashboard
+  silently ate swipes.
+- **Suppress the unwanted click, not the wanted gesture.** The dashboard used
+  to discard swipes over the navigation tile so a flick could not open the
+  ROUTE page. That threw away 57% of the panel. LVGL still delivers `CLICKED`
+  on release after a gesture, so the fix is for the click handler to check
+  `lv_indev_get_gesture_dir() != LV_DIR_NONE` and ignore it.
+
 ## 9. WiFi File Transfer
 
 `src/system/FileServer.h` turns the board into a WPA2 access point serving the

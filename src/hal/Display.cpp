@@ -22,7 +22,11 @@ static void Display_Flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
 
     tft.startWrite();
     tft.setAddrWindow(area->x1, area->y1, w, h);
-    tft.pushColors((uint16_t *)color_p, w * h, true);
+    // swap=false: LVGL already renders in the panel's byte order
+    // (LV_COLOR_16_SWAP 1 in lv_conf.h). Passing true here would make
+    // TFT_eSPI byte-swap every pixel in software, which is what pinned the
+    // CPU at 90% during any redraw. The two settings must agree.
+    tft.pushColors((uint16_t *)color_p, w * h, false);
     tft.endWrite();
 
     lv_disp_flush_ready(drv);
@@ -60,23 +64,45 @@ void Display_Init() {
 
     Backlight_Init();
 
-    // Double buffer sized for a full-frame flush (240*320*2 bytes each ==
-    // ~150KB/buffer). Trivial against the board's 8MB PSRAM, and a full
-    // frame buffer keeps the flush logic simple for a live dashboard UI.
-    // Allocated with MALLOC_CAP_SPIRAM so LVGL's rendering does not compete
-    // with the ~512KB of internal SRAM the rest of the firmware needs.
-    const size_t buf_pixels = TFT_WIDTH * TFT_HEIGHT;
-    s_buf1 = (lv_color_t *)heap_caps_malloc(buf_pixels * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    s_buf2 = (lv_color_t *)heap_caps_malloc(buf_pixels * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    if (s_buf1 == nullptr || s_buf2 == nullptr) {
-        // Out of PSRAM -- nothing sensible to render without a frame buffer.
-        Serial.println("[Display] FATAL: PSRAM allocation for LVGL draw buffers failed");
-        while (true) {
-            vTaskDelay(portMAX_DELAY);
+    // ---- One partial buffer, in INTERNAL RAM ----
+    //
+    // This was two full-screen buffers in PSRAM (240*320*2 == 150KB each),
+    // chosen because PSRAM is plentiful and a whole frame keeps the flush
+    // simple. It is also why the UI is sluggish: every pixel is written into
+    // PSRAM by the renderer and then read back out of PSRAM by the flush, and
+    // PSRAM here is several times slower than internal SRAM and contends with
+    // instruction fetches on the same bus. 300KB of PSRAM traffic per frame
+    // is the cost, and it lands squarely on the frame rate.
+    //
+    // A partial buffer in internal RAM is the standard arrangement for LVGL
+    // on an ESP32: 40 lines is 19KB, so the renderer and the SPI push both
+    // work out of fast memory and the frame is sent in eight chunks instead
+    // of one. MALLOC_CAP_DMA because that memory is what TFT_eSPI hands to
+    // the SPI peripheral.
+    //
+    // Single, not double. The flush here is blocking (tft.pushColors returns
+    // when the bytes are out), so a second buffer buys nothing -- there is no
+    // DMA completion to overlap rendering against. Two would only halve the
+    // lines per chunk for the same memory.
+    const size_t buf_pixels = TFT_WIDTH * 40;
+    s_buf1 = (lv_color_t *)heap_caps_malloc(buf_pixels * sizeof(lv_color_t),
+                                            MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if (s_buf1 == nullptr) {
+        // Fall back to the old PSRAM full-frame arrangement rather than
+        // refusing to boot: slow beats blank, and the panel is this board's
+        // only way to tell anyone what went wrong (CLAUDE.md §8).
+        const size_t full_pixels = TFT_WIDTH * TFT_HEIGHT;
+        s_buf1 = (lv_color_t *)heap_caps_malloc(full_pixels * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+        if (s_buf1 == nullptr) {
+            Serial.println("[Display] FATAL: draw buffer allocation failed");
+            while (true) {
+                vTaskDelay(portMAX_DELAY);
+            }
         }
+        lv_disp_draw_buf_init(&s_draw_buf, s_buf1, nullptr, full_pixels);
+    } else {
+        lv_disp_draw_buf_init(&s_draw_buf, s_buf1, nullptr, buf_pixels);
     }
-
-    lv_disp_draw_buf_init(&s_draw_buf, s_buf1, s_buf2, buf_pixels);
 
     lv_disp_drv_init(&s_disp_drv);
     s_disp_drv.hor_res = TFT_WIDTH;
