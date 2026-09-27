@@ -1534,6 +1534,21 @@ void RefreshTimerCallback(lv_timer_t *timer) {
 }
 
 void OnMapClicked(lv_event_t *e) {
+    // A swipe that crossed this tile still ends in a CLICKED here, because a
+    // gesture does not cancel the click LVGL sends on release. Without this
+    // test, flicking across the map would change the page and open the ROUTE
+    // page at the same time.
+    //
+    // This is the other half of removing the gesture exclusion in
+    // OnDashboardGesture: suppress the unwanted click rather than the wanted
+    // swipe. lv_indev_get_gesture_dir reports what was recognised during the
+    // press that is now ending, so a tap -- which recognises nothing --
+    // still reads LV_DIR_NONE and still opens the map.
+    lv_indev_t *indev = lv_indev_get_act();
+    if (indev != nullptr && lv_indev_get_gesture_dir(indev) != LV_DIR_NONE) {
+        return;
+    }
+
     PageDashboard *self = (PageDashboard *)lv_event_get_user_data(e);
     if (self != nullptr && self->_Manager != nullptr) {
         self->_Manager->Push(PAGE_NAME_MAP);
@@ -1643,15 +1658,17 @@ void OnDashboardGesture(lv_event_t *e) {
         return;
     }
 
-    if (s_nav_cell != nullptr && !s_on_page2 && indev != nullptr) {
-        lv_point_t p;
-        lv_indev_get_point(indev, &p);
-        lv_area_t nav;
-        lv_obj_get_coords(s_nav_cell, &nav);
-        if (_lv_area_is_point_on(&nav, &p, 0)) {
-            return;
-        }
-    }
+    // The navigation tile used to be excluded here, so that a flick over the
+    // map could not change pages. That is 184 of the panel's 320 rows -- 57%
+    // of the screen silently ignoring swipes, which is most of what "swiping
+    // is stiff" turned out to be: it worked in the bottom third and nowhere
+    // else, so it felt intermittent rather than absent.
+    //
+    // The exclusion was aimed at the wrong event. A swipe over the tile is
+    // unwanted only because LVGL will ALSO deliver a CLICKED on release and
+    // open the ROUTE page; the gesture itself was never the problem. So the
+    // click is suppressed instead (see OnMapClicked), and the whole panel is
+    // swipeable.
 
     // Three places on one strip: settings, then the two data pages.
     //
