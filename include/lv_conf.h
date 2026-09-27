@@ -17,7 +17,22 @@
    COLOR SETTINGS
  *====================*/
 #define LV_COLOR_DEPTH 16
-#define LV_COLOR_16_SWAP 0   /* TFT_eSPI pushColors() expects native (non-swapped) RGB565; flip to 1 if colors look byte-swapped on real hardware */
+/* 1, so LVGL renders pixels in the byte order the panel wants and the flush
+ * is a straight memory-to-SPI stream.
+ *
+ * This was 0, with Display_Flush passing swap=true to tft.pushColors() --
+ * which makes TFT_eSPI byte-swap every pixel in software on the way out.
+ * That is 76,800 per-pixel operations for a full-screen redraw, on the CPU,
+ * every frame the screen moves, and it is where "CPU jumps to 90% whenever
+ * the screen moves" comes from. Swapping during rendering costs essentially
+ * nothing: LVGL is composing those pixels anyway.
+ *
+ * Display_Flush must pass swap=FALSE to match. The two settings are one
+ * decision in two files; changing either alone shows visibly wrong colours.
+ * Note this is the 16-bit word's ENDIANNESS, which is a different thing from
+ * TFT_RGB_ORDER (the R/B channel order) set in platformio.ini -- both are
+ * needed and they are not alternatives. */
+#define LV_COLOR_16_SWAP 1
 #define LV_COLOR_SCREEN_TRANSP 0
 
 /*=========================
@@ -46,6 +61,12 @@
 /*=======================
  * FEATURE CONFIGURATION
  *=======================*/
+/* FPS + CPU%% in the bottom-right corner. Off, but reach for it first when
+ * anything feels slow: on 2026-09-26 it was the reading "33fps at 5% CPU"
+ * that proved the renderer was fine and sent the search to the touch path,
+ * and later "90% whenever the screen moves" that found the per-pixel byte
+ * swap. It is one small label LVGL maintains internally -- cheap enough to
+ * leave on while diagnosing, unlike a hand-rolled overlay. */
 #define LV_USE_PERF_MONITOR 0
 #define LV_USE_MEM_MONITOR 0
 #define LV_USE_LOG 0
