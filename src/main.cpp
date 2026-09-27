@@ -72,6 +72,27 @@ void setup() {
     lv_indev_drv_init(&s_indev_drv);
     s_indev_drv.type = LV_INDEV_TYPE_POINTER;
     s_indev_drv.read_cb = Touch_Read;
+
+    // Why swipes were stiff, and it is not the touch driver.
+    //
+    // LVGL accumulates gesture travel, but resets the accumulator to ZERO on
+    // any sample that moved less than gesture_min_velocity (lv_indev.c, the
+    // test just above the sum). The default is 3px, and with a 30ms read
+    // period that means the finger has to sustain better than 100px/s for the
+    // WHOLE swipe: every natural slow moment -- the start, the end, a pause
+    // mid-drag -- throws away everything accumulated so far, and the 50px
+    // limit is never reached.
+    //
+    // 1px asks only that the finger be moving at all (a stationary sample
+    // still reads 0 and still resets, which is what the test is for). Jitter
+    // cannot fake a swipe with it either: noise is not directional, so it
+    // does not accumulate 50px one way.
+    //
+    // gesture_limit stays at 50. On a 240px-wide panel that is a fifth of the
+    // screen -- a deliberate movement, which is what it should be next to a
+    // tap.
+    s_indev_drv.gesture_min_velocity = 1;
+
     lv_indev_drv_register(&s_indev_drv);
 
     // Every page's root object needs this, and without it nothing lays out.
