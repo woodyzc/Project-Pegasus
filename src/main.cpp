@@ -2,6 +2,7 @@
 #include <lvgl.h>
 
 #include "hal/Battery.h"
+#include "hal/Barometer.h"
 #include "hal/BoardPower.h"
 #include "hal/Display.h"
 #include "hal/LvglFs.h"
@@ -59,6 +60,11 @@ void setup() {
     Display_Init();
     Touch_Init();
     Battery_Init();
+
+    // Before the UI is built, so the bus scan and the first reading are done
+    // by the time anything wants to draw them. It begins the sensor bus and
+    // is safe with nothing fitted.
+    Barometer_Init();
     GPS_Init();
 
     // Before anything slow. Everything below this -- the card, the road
@@ -246,6 +252,10 @@ void setup() {
     // and independent -- if a radio mode stalls below, the battery reading is
     // already publishing.
     Battery_StartMonitor();
+
+    // Core 0, beside the battery monitor, and a no-op when no sensor
+    // answered.
+    Barometer_StartMonitor();
 
     // Core 0 GNSS reader. Independent of the heart-rate radios below, so it
     // starts first: a stall in radio bring-up should not cost the position

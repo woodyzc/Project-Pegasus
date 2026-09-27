@@ -50,6 +50,11 @@
 #   * test_ride_summary - what a ride amounted to, and the three shapes its
 #                         duration takes (compiles the real
 #                         src/system/RideSummary.c)
+#   * test_baro_altitude - pressure to altitude, and the filter in front of the
+#                        climb total. Catches an inverted exponent (which puts
+#                        sea level at 44km while still drawing a smooth curve)
+#                        and a filter seeded from zero (which invents a minute
+#                        of climbing at every power-on).
 #   * test_ascent       - total climbing from noisy GNSS altitude (compiles the
 #                         real src/system/Ascent.c)
 #   * test_idle_policy  - when the screen dims, blanks and sleeps (compiles the
@@ -85,6 +90,7 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) test_clock_frame$(SUFFIX) \
         test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX) \
         test_idle_policy$(SUFFIX) test_ascent$(SUFFIX) \
+        test_baro_altitude$(SUFFIX) \
         test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX) \
         test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX) test_csc_parse$(SUFFIX) \
         test_nmea_parse$(SUFFIX)
@@ -134,6 +140,9 @@ test_ubx_parse$(SUFFIX): test_ubx_parse.c $(SENSORS)/UbxParse.c
 
 test_nmea_parse$(SUFFIX): test_nmea_parse.c $(SENSORS)/NmeaParse.c
 	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
+
+test_baro_altitude$(SUFFIX): test_baro_altitude.c $(SYSTEM)/BaroAltitude.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC) -lm
 
 test_timezone$(SUFFIX): test_timezone.c $(SYSTEM)/TimeZone.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)

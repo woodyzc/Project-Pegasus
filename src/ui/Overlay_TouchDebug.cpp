@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../hal/Barometer.h"
 #include "../hal/Touch.h"
 
 namespace {
@@ -66,22 +67,31 @@ void Refresh(lv_timer_t *timer) {
     // overlay reformatted three lines at 4Hz and made the whole UI sluggish;
     // a label left alone costs nothing, and these numbers only change on a
     // release anyway.
+    // No early return on an unchanged press any more: the barometer figures
+    // move on their own, so this label is refreshed on the timer. It is one
+    // small label at 4Hz, not the three-line block that made the whole UI
+    // sluggish -- but it is still a bring-up cost, and goes with the flag.
     static uint32_t shown_seq = 0xFFFFFFFFu;
+    (void)shown_seq;
     uint32_t samples = 0, moves = 0, still = 0;
     int32_t dx = 0, dy = 0;
     uint16_t maxstep = 0;
     const uint32_t seq = Touch_DebugPress(&samples, &moves, &still, &dx, &dy, &maxstep);
-    if (seq == shown_seq) {
-        return;
-    }
-    shown_seq = seq;
 
-    // The scan line stays: it is the answer to "did I wire it right", and it
-    // must not be scrolled away by a stray touch.
-    lv_label_set_text_fmt(s_label, "sensor bus %d/%d: %s\n#%lu n%lu mv%lu st%lu d%ld,%ld mx%u",
-                          SENSOR_I2C_SCL, SENSOR_I2C_SDA, s_sensor_scan, (unsigned long)seq,
-                          (unsigned long)samples, (unsigned long)moves, (unsigned long)still,
-                          (long)dx, (long)dy, (unsigned)maxstep);
+    // The barometer line is the one being watched now. Pressure and
+    // temperature come straight off the part; the altitude is smoothed and
+    // is a figure to take differences of, not to check against a map.
+    float pa = 0.0f;
+    float degc = 0.0f;
+    const bool live = Barometer_Read(&pa, &degc);
+
+    lv_label_set_text_fmt(s_label,
+                          "BMP580 @%02X id%02X %s\n%.0f Pa  %.1fC  %.1f m\n#%lu n%lu mv%lu st%lu",
+                          (int)Barometer_Address(), (int)Barometer_ChipId(),
+                          Barometer_Found() ? "ok" : "NOT FOUND", (double)pa, (double)degc,
+                          (double)Barometer_AltitudeM(), (unsigned long)seq,
+                          (unsigned long)samples, (unsigned long)moves, (unsigned long)still);
+    (void)live;
 }
 
 } // namespace
