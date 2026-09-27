@@ -700,6 +700,15 @@ performance cost four rounds before anyone measured.
   alone gives visibly wrong colours. This is the 16-bit word's endianness and
   is **not** `TFT_RGB_ORDER`, which is the R/B channel order; the panel needs
   both set.
+- **`lv_label_set_text` invalidates unconditionally** — it never compares
+  against what the label already holds. Anything writing labels on a fast
+  timer must compare first (`SetTextIfChanged` in `Page_Dashboard.cpp`).
+  The dashboard's second page wrote thirteen labels on the 100ms tick and so
+  re-rasterised every figure ten times a second for values that change at
+  most once: 25fps/40% against the first page's 33fps/5%. The first page was
+  only fast by accident — its renderers are driven by publishes and the
+  one-second tick. Setting a **style** invalidates the same way, so guard
+  colour changes too.
 - ⚠️ **A scrollable object suppresses gestures completely.** `indev_gesture()`
   opens with `if (proc->types.pointer.scroll_obj) return;`, so once a drag has
   latched onto anything scrollable, no gesture is ever emitted — the velocity

@@ -67,7 +67,7 @@
  * and later "90% whenever the screen moves" that found the per-pixel byte
  * swap. It is one small label LVGL maintains internally -- cheap enough to
  * leave on while diagnosing, unlike a hand-rolled overlay. */
-#define LV_USE_PERF_MONITOR 1
+#define LV_USE_PERF_MONITOR 0
 #define LV_USE_MEM_MONITOR 0
 #define LV_USE_LOG 0
 
