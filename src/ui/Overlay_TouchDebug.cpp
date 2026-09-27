@@ -62,47 +62,24 @@ void Refresh(lv_timer_t *timer) {
         return;
     }
 
-    uint32_t reads = 0;
-    uint32_t presses = 0;
-    uint16_t x = 0;
-    uint16_t y = 0;
-    Touch_DebugCounters(&reads, &presses, &x, &y);
+    // Only rewrite when a press has completed. The first version of this
+    // overlay reformatted three lines at 4Hz and made the whole UI sluggish;
+    // a label left alone costs nothing, and these numbers only change on a
+    // release anyway.
+    static uint32_t shown_seq = 0xFFFFFFFFu;
+    uint32_t samples = 0, moves = 0, still = 0;
+    int32_t dx = 0, dy = 0;
+    uint16_t maxstep = 0;
+    const uint32_t seq = Touch_DebugPress(&samples, &moves, &still, &dx, &dy, &maxstep);
+    if (seq == shown_seq) {
+        return;
+    }
+    shown_seq = seq;
 
-    const bool found = Touch_ControllerFound();
-
-    // `reads` is the one that answers the first question, and it is separate
-    // from `found` on purpose: the signature check runs once at init, while
-    // reads climb for as long as the bus keeps answering. A found controller
-    // with a frozen read count is a bus that died after bring-up, which is a
-    // different fault from one that never started.
-    uint8_t addr = 0;
-    uint16_t sig = 0;
-    Touch_DebugIdentity(&addr, &sig);
-
-    const char *part = (addr == 0x1A)   ? "CST328"
-                       : (addr == 0x58) ? "CST3530"
-                       : (addr == 0)    ? "NONE"
-                                        : "?";
-
-    char s_probe[64] = "";
-    Touch_DebugProbe(s_probe, sizeof(s_probe));
-
-    uint8_t now[8] = {0};
-    uint8_t hit[8] = {0};
-    Touch_DebugFrame(now, hit, sizeof(now));
-
-    lv_label_set_text_fmt(
-        s_label,
-        "%s @%02X rd%lu int%lu pr%lu xy %d,%d\n"
-        "now %02X %02X %02X %02X %02X %02X %02X %02X\n"
-        "hit %02X %02X %02X %02X %02X %02X %02X %02X\n%s",
-        part, (int)addr, (unsigned long)reads, (unsigned long)Touch_DebugIntLow(),
-        (unsigned long)presses,
-        (int)x, (int)y, now[0], now[1], now[2], now[3], now[4], now[5], now[6],
-        now[7], hit[0], hit[1], hit[2], hit[3], hit[4], hit[5], hit[6], hit[7],
-        s_probe);
-    lv_obj_set_style_text_color(s_label,
-                                lv_color_hex((found && presses > 0) ? COLOR_OK : COLOR_WARN), 0);
+    lv_label_set_text_fmt(s_label, "#%lu n%lu mv%lu st%lu d%ld,%ld mx%u",
+                          (unsigned long)seq, (unsigned long)samples, (unsigned long)moves,
+                          (unsigned long)still, (long)dx, (long)dy, (unsigned)maxstep);
+    lv_obj_set_style_text_color(s_label, lv_color_hex(moves > still ? COLOR_OK : COLOR_WARN), 0);
 }
 
 } // namespace
@@ -111,13 +88,6 @@ void TouchDebug_Show() {
     if (s_label != nullptr) {
         return;
     }
-
-    // Both buses, once, before the first draw. Touch_Init() has already run
-    // and begun the touch bus; the sensor bus has no driver at all yet, so it
-    // is begun here purely to be scanned.
-    ScanBus(Wire1, s_touch_scan, sizeof(s_touch_scan));
-    Wire.begin(SENSOR_I2C_SDA, SENSOR_I2C_SCL, 400000);
-    ScanBus(Wire, s_sensor_scan, sizeof(s_sensor_scan));
 
     s_label = lv_label_create(lv_layer_top());
     lv_obj_set_style_text_font(s_label, &lv_font_montserrat_10, 0);
@@ -133,7 +103,7 @@ void TouchDebug_Show() {
     // swallowed every tap meant for the map beneath it.
     lv_obj_clear_flag(s_label, LV_OBJ_FLAG_CLICKABLE);
 
-    Refresh(nullptr);
+    lv_label_set_text(s_label, "swipe to measure");
     lv_timer_create(Refresh, 250, nullptr);
 }
 

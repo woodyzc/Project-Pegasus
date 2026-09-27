@@ -83,15 +83,22 @@ void setup() {
     // mid-drag -- throws away everything accumulated so far, and the 50px
     // limit is never reached.
     //
-    // 1px asks only that the finger be moving at all (a stationary sample
-    // still reads 0 and still resets, which is what the test is for). Jitter
-    // cannot fake a swipe with it either: noise is not directional, so it
-    // does not accumulate 50px one way.
+    // 1px was not enough, because the reset does not need a SLOW sample --
+    // it needs a stationary one, and it gets those whenever the controller
+    // reports less often than LVGL reads. At a 30ms read period any report
+    // rate under ~33Hz means repeated identical positions, each of which is
+    // a zero vector, each of which wipes the accumulation.
+    //
+    // 0 removes the wipe entirely: LV_ABS(vect) < 0 is never true. Travel
+    // then accumulates for the whole press, which is safe because LVGL zeroes
+    // gesture_sum at press start (lv_indev.c, indev_proc_press) -- so it can
+    // never carry between touches. Jitter still cannot counterfeit a swipe:
+    // noise is not directional and will not add up 50px one way.
     //
     // gesture_limit stays at 50. On a 240px-wide panel that is a fifth of the
     // screen -- a deliberate movement, which is what it should be next to a
     // tap.
-    s_indev_drv.gesture_min_velocity = 1;
+    s_indev_drv.gesture_min_velocity = 0;
 
     lv_indev_drv_register(&s_indev_drv);
 

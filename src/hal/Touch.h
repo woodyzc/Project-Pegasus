@@ -86,3 +86,11 @@ void Touch_DebugProbe(char *out, size_t len);
 // means the controller is not announcing contacts at all -- a different
 // fault, and a more basic one, than a frame we cannot decode.
 uint32_t Touch_DebugIntLow();
+
+// Statistics for the most recently completed press, returning a sequence
+// number that increments on each release. `still` counts samples whose
+// position was unchanged from the one before -- a zero vector as far as
+// LVGL's gesture accumulator is concerned, and the number that says whether
+// the controller reports as often as LVGL reads.
+uint32_t Touch_DebugPress(uint32_t *samples, uint32_t *moves, uint32_t *still, int32_t *dx,
+                          int32_t *dy, uint16_t *maxstep);

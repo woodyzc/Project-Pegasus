@@ -82,6 +82,17 @@ static char s_dbg_probe[64] = "";
 // announcing them in a layout we cannot read.
 static uint32_t s_dbg_int_low = 0;
 
+// What one press actually looked like, which is the thing three rounds of
+// reasoning have been guessing at. `still` is the count that matters: every
+// sample where the position did not change is a zero vector to LVGL.
+static uint32_t s_p_samples = 0, s_p_moves = 0, s_p_still = 0;
+static int32_t s_p_dx = 0, s_p_dy = 0;
+static uint16_t s_p_maxstep = 0;
+static uint32_t s_press_seq = 0;
+static uint32_t s_l_samples = 0, s_l_moves = 0, s_l_still = 0;
+static int32_t s_l_dx = 0, s_l_dy = 0;
+static uint16_t s_l_maxstep = 0;
+
 // Set by the interrupt, consumed by the LVGL read.
 //
 // The vendor driver reads the panel ONLY from here -- its Touch_Loop() is
@@ -451,6 +462,30 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
         uint16_t rx = 0;
         uint16_t ry = 0;
         if (ReadContact(&rx, &ry)) {
+            if (s_pressed) {
+                const int32_t dx = (int32_t)rx - (int32_t)s_cached_x;
+                const int32_t dy = (int32_t)ry - (int32_t)s_cached_y;
+                s_p_samples++;
+                if (dx == 0 && dy == 0) {
+                    s_p_still++;
+                } else {
+                    s_p_moves++;
+                }
+                s_p_dx += dx;
+                s_p_dy += dy;
+                const int32_t step = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy) ? (dx < 0 ? -dx : dx)
+                                                                               : (dy < 0 ? -dy : dy);
+                if (step > (int32_t)s_p_maxstep) {
+                    s_p_maxstep = (uint16_t)step;
+                }
+            } else {
+                s_p_samples = 1;
+                s_p_moves = 0;
+                s_p_still = 0;
+                s_p_dx = 0;
+                s_p_dy = 0;
+                s_p_maxstep = 0;
+            }
             s_pressed = true;
             s_cached_x = rx;
             s_cached_y = ry;
@@ -458,6 +493,15 @@ void Touch_Read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
             s_dbg_last_x = rx;
             s_dbg_last_y = ry;
         } else {
+            if (s_pressed) {
+                s_l_samples = s_p_samples;
+                s_l_moves = s_p_moves;
+                s_l_still = s_p_still;
+                s_l_dx = s_p_dx;
+                s_l_dy = s_p_dy;
+                s_l_maxstep = s_p_maxstep;
+                s_press_seq++;
+            }
             s_pressed = false;
         }
     }
@@ -540,4 +584,15 @@ void Touch_DebugProbe(char *out, size_t len) {
     if (out != nullptr && len > 0) {
         snprintf(out, len, "%s", s_dbg_probe);
     }
+}
+
+uint32_t Touch_DebugPress(uint32_t *samples, uint32_t *moves, uint32_t *still, int32_t *dx,
+                          int32_t *dy, uint16_t *maxstep) {
+    if (samples) *samples = s_l_samples;
+    if (moves) *moves = s_l_moves;
+    if (still) *still = s_l_still;
+    if (dx) *dx = s_l_dx;
+    if (dy) *dy = s_l_dy;
+    if (maxstep) *maxstep = s_l_maxstep;
+    return s_press_seq;
 }
