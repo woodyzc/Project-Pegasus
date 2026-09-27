@@ -76,10 +76,12 @@ void Refresh(lv_timer_t *timer) {
     }
     shown_seq = seq;
 
-    lv_label_set_text_fmt(s_label, "#%lu n%lu mv%lu st%lu d%ld,%ld mx%u",
-                          (unsigned long)seq, (unsigned long)samples, (unsigned long)moves,
-                          (unsigned long)still, (long)dx, (long)dy, (unsigned)maxstep);
-    lv_obj_set_style_text_color(s_label, lv_color_hex(moves > still ? COLOR_OK : COLOR_WARN), 0);
+    // The scan line stays: it is the answer to "did I wire it right", and it
+    // must not be scrolled away by a stray touch.
+    lv_label_set_text_fmt(s_label, "sensor bus %d/%d: %s\n#%lu n%lu mv%lu st%lu d%ld,%ld mx%u",
+                          SENSOR_I2C_SCL, SENSOR_I2C_SDA, s_sensor_scan, (unsigned long)seq,
+                          (unsigned long)samples, (unsigned long)moves, (unsigned long)still,
+                          (long)dx, (long)dy, (unsigned)maxstep);
 }
 
 } // namespace
@@ -103,7 +105,21 @@ void TouchDebug_Show() {
     // swallowed every tap meant for the map beneath it.
     lv_obj_clear_flag(s_label, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_label_set_text(s_label, "swipe to measure");
+    // One scan of the sensor bus, at start-up. Nothing in this firmware
+    // drives that bus yet, so beginning it here is safe -- and a bare address
+    // probe is the whole test a newly wired I2C part needs. It is what found
+    // the CST3530 at 0x58 in one round after several had gone on guessing.
+    Wire.begin(SENSOR_I2C_SDA, SENSOR_I2C_SCL, 400000);
+    ScanBus(Wire, s_sensor_scan, sizeof(s_sensor_scan));
+
+    lv_label_set_text_fmt(s_label, "sensor bus %d/%d: %s", SENSOR_I2C_SCL, SENSOR_I2C_SDA,
+                          s_sensor_scan);
+    // Green once something beyond the two devices that were already there has
+    // answered. 0x51 is the RTC and 0x6B the IMU, both fitted on the board.
+    const bool extra = (strstr(s_sensor_scan, "46") != nullptr) ||
+                       (strstr(s_sensor_scan, "47") != nullptr);
+    lv_obj_set_style_text_color(s_label, lv_color_hex(extra ? COLOR_OK : COLOR_WARN), 0);
+
     lv_timer_create(Refresh, 250, nullptr);
 }
 
