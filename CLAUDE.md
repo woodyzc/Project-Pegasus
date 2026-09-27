@@ -57,7 +57,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     swipes — were each a deviation of mine from that driver, not a fault in
     the part, and each cost rounds to diagnose as though it were.
   - A **V3** would presumably bring a third part. The probe-and-dispatch shape in `Touch.cpp` is there so that costs one branch, not a rewrite.
-- **GNSS Module**: via UART1 on **RX 18 / TX 15** — the only two genuinely spare GPIOs on the board, both on the 12-pin external connector.
+- **GNSS Module**: via UART1 on **RX 44 / TX 43** — the board's dedicated 4-pin **UART** connector on the back, silkscreened GND / 3V3 / TXD / RXD.
   - ⚠️ **The module on the bench is an ATGM336H (中科微电子 GPS+BD), not the
     MAX-M10S this spec asks for** — the M10 still has not arrived. Different
     chipset, not a u-blox part, and it does not speak UBX: no documented
@@ -72,10 +72,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - **It is verified working — but on the stand-in, not here.** It found
     satellites on the Hosyond board on 2026-09-23. On *this* board it has
     never been powered: different pins, and this branch's first boot.
-  - *Not* GPIO43/44, and that decision differs from the stand-in's on
-    purpose. The Hosyond board had **no** spare GPIOs, so it had to spend
-    UART0 and with it §8's USB-TTL escape hatch. This board has two real
-    spares, so 43/44 stays free and **the escape hatch still exists here**.
+  - **That connector carries 3V3, not 5V** — unlike the Hosyond's UART header,
+    which removes the "will the breakout survive 5V, and is its TX going to
+    drive a pin that is not 5V-tolerant" question entirely. Power and both
+    signals in one plug.
+  - It is UART0, so §8's USB-TTL escape hatch is spent on this board too.
+    Accepted: it has never been used, and every diagnostic goes to the panel.
+    **IO15 and IO18 remain genuinely free**, so reclaiming the debug port
+    means moving the GNSS there and finding it 3V3 and GND separately.
   - *Constraint (for the M10 when it lands)*: force UBX binary only; disable high-overhead NMEA text parsing.
   - *Power*: Retain micro-power RTC backup (~15μA) for <1s hot starts.
 - **Sensor I2C bus** — SDA 11 / SCL 10, separate from the touch bus, and untouched by firmware so far:
@@ -375,13 +379,12 @@ These were each discovered the slow way. They are not optional trivia.
   firmware fault. The workaround that has actually worked every time is
   **printing diagnostics to the LCD panel**, and it remains the first choice.
 
-  **The USB-TTL escape hatch exists on this board**, unlike on the stand-in:
-  wire **UART0 (GPIO43/44)**, on the 12-pin connector, to a USB-TTL adapter.
-  It survived here only because this board has two genuinely spare GPIOs for
-  the GNSS (15 and 18), where the Hosyond had none and had to spend 43/44 for
-  it — so if you are reading that branch, this paragraph says the opposite
-  there, and deliberately. Still theoretical: no diagnostic this project has
-  needed has ever gone anywhere but the panel.
+  ⚠️ **The USB-TTL escape hatch is spent on this board as well**, as of
+  2026-09-26: the GNSS took the dedicated UART connector, which is UART0
+  (GPIO43/44). It was chosen over the free IO15/IO18 because it supplies
+  3V3 and both signals in one plug, where those two spare pins have no power
+  beside them. Reclaiming the debug port means moving the GNSS to IO15/IO18
+  and wiring it power separately — the pins are still there for it.
 - **`pio` is not on `PATH`.** Use `~/.platformio/penv/bin/pio`.
 - **Three build flags are load-bearing.** Removing any one produces a
   confusing failure a long way from the cause:
