@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 
+#include "../hal/Barometer.h"
 #include "../navigation/RoadMap.h"
 #include "RoadView.h"
 #include "../system/TimeSource.h" // WiFi.macAddress() -- reads the eFused MAC, no radio started
@@ -1279,6 +1280,32 @@ void PageSettings::onViewLoad() {
              (unsigned)Settings_BootCount());
     MakeInfoRow(info_card, "Last reset", buf);
     MakeInfoRow(info_card, "Build", __DATE__ " " __TIME__);
+
+    // The barometer, because ASCENT is now built on it and a climb total
+    // whose sensor has gone missing otherwise just stops rising with nothing
+    // to say why. Absolute altitude here is against the standard atmosphere,
+    // so it moves with the weather by tens of metres across a day -- it is a
+    // figure to take differences of, which is exactly what a climb total is.
+    if (Barometer_Found()) {
+        float pa = 0.0f;
+        float degc = 0.0f;
+        if (Barometer_Read(&pa, &degc)) {
+            snprintf(buf, sizeof(buf), "0x%02X, %.0f Pa, %.0f m, %.0fC", (unsigned)Barometer_Address(),
+                     (double)pa, (double)Barometer_AltitudeM(), (double)degc);
+        } else {
+            snprintf(buf, sizeof(buf), "0x%02X, found but not reading", (unsigned)Barometer_Address());
+        }
+        MakeInfoRow(info_card, "Barometer", buf);
+    } else if (Barometer_Address() != 0) {
+        // Something answered and is not a BMP580. Worth naming rather than
+        // reporting as absent: an unexpected chip id is a different problem
+        // from an empty socket.
+        snprintf(buf, sizeof(buf), "0x%02X answered, chip id 0x%02X", (unsigned)Barometer_Address(),
+                 (unsigned)Barometer_ChipId());
+        MakeInfoRow(info_card, "Barometer", buf);
+    } else {
+        MakeInfoRow(info_card, "Barometer", "none - ASCENT uses GNSS altitude");
+    }
 
     // What the road layer cost on its last draw.
     //

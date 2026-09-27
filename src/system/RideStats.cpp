@@ -6,6 +6,7 @@
 
 #include "../navigation/RideLog.h"
 #include "DataCenter.h"
+#include "../hal/Barometer.h"
 #include "Ascent.h"
 #include "RideStatsCore.h"
 
@@ -76,7 +77,22 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // reason the speed interval is: the altitude filter needs a time from the
     // very first fix, and the receiver's own time is not valid until it says
     // so, which can be minutes later.
-    Ascent_Feed(&s_ascent, gps->alt, now);
+    // Altitude comes from the barometer when one is fitted, and from the
+    // receiver otherwise.
+    //
+    // Not a blend and not a fallback. A receiver's altitude is its weakest
+    // number -- metres of wander on a perfectly good fix -- and Ascent's GNSS
+    // band exists to reject that, at the cost of discarding every climb
+    // smaller than itself. A BMP580 resolves centimetres of change, so with
+    // one fitted the band drops to a metre and small hills start counting.
+    //
+    // If the sensor dies mid-ride its altitude simply stops moving and the
+    // climb total stops rising. That is deliberate: a visible failure beats
+    // silently reverting to a source whose numbers mean something different,
+    // which would leave one ride's total built from two incompatible scales
+    // with nothing on the panel to say so.
+    const float alt_m = Barometer_HaveAltitude() ? Barometer_AltitudeM() : gps->alt;
+    Ascent_Feed(&s_ascent, alt_m, now);
 }
 
 void OnHeartRatePublished(const char *topic, const void *data, uint32_t size, void *user_arg) {
@@ -97,10 +113,17 @@ Account s_hr_account("RideStats/HR", OnHeartRatePublished);
 
 } // namespace
 
+// Which tuning the climb accumulator should carry. Asked at every reset
+// rather than cached, so a board whose sensor is found late still ends up
+// with the right band.
+static AscentSource_t AltitudeSource() {
+    return Barometer_Found() ? ASCENT_SOURCE_BARO : ASCENT_SOURCE_GNSS;
+}
+
 void RideStats_Init() {
     s_lock = xSemaphoreCreateMutex();
     RideStatsCore_Reset(&s_stats);
-    Ascent_Reset(&s_ascent);
+    Ascent_ResetFor(&s_ascent, AltitudeSource());
     s_have_speed = false;
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
@@ -110,7 +133,7 @@ void RideStats_Init() {
 void RideStats_Reset() {
     Locked guard;
     RideStatsCore_Reset(&s_stats);
-    Ascent_Reset(&s_ascent);
+    Ascent_ResetFor(&s_ascent, AltitudeSource());
     s_have_speed = false;
 }
 

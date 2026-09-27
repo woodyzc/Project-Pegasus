@@ -65,6 +65,33 @@ extern "C" {
 // wander stays inside it and a real hill does not.
 #define ASCENT_BAND_M 4.0f
 
+// ---------------------------------------------------------------------------
+// The same filters, retuned for a barometer
+// ---------------------------------------------------------------------------
+// Every constant above is sized against GNSS noise, and feeding a barometer
+// through them wastes the sensor: a 4m band discards every climb smaller than
+// itself, which is most of what a barometer can see and a receiver cannot.
+// A BMP580 resolves centimetres of change, and hal/Barometer.cpp has already
+// smoothed it once before it reaches here.
+//
+// 1m is the band a barometric bike computer conventionally uses -- above the
+// part's noise, below any hill worth counting.
+#define ASCENT_BARO_BAND_M 1.0f
+
+// Lighter smoothing, because the driver has already applied its own and
+// stacking two lags a real climb without removing anything more.
+#define ASCENT_BARO_SMOOTH_ALPHA 0.50f
+
+// ⚠️ What neither band fixes: a barometer cannot tell a weather system from a
+// hill. A front passing during a long ride moves the pressure steadily, and
+// a slow steady rise is exactly what a climb looks like. The band rejects
+// noise, not drift. Real head units live with this; it is worth knowing
+// before trusting a climb total from a four-hour ride in changing weather.
+typedef enum {
+    ASCENT_SOURCE_GNSS = 0,
+    ASCENT_SOURCE_BARO = 1,
+} AscentSource_t;
+
 typedef struct {
     bool has_smooth;
     float smooth_m; // exponentially smoothed altitude
@@ -78,10 +105,21 @@ typedef struct {
 
     double ascent_m;
     double descent_m;
+
+    // Tuning, carried per-accumulator rather than read from the macros, so
+    // the same filter serves both sources. Set by Ascent_ResetFor().
+    float band_m;
+    float alpha;
 } Ascent_t;
 
-// Zeroes everything. Call before the first sample and at the start of a ride.
+// Zeroes everything and tunes for GNSS. Call before the first sample and at
+// the start of a ride.
 void Ascent_Reset(Ascent_t *a);
+
+// The same, tuned for a named source. Ascent_Reset() is this with
+// ASCENT_SOURCE_GNSS, kept because most callers and every existing test want
+// exactly that.
+void Ascent_ResetFor(Ascent_t *a, AscentSource_t source);
 
 // Offers one altitude, stamped with the time it arrived. Returns true if the
 // sample was accepted, which is useful to tests and to nothing else.

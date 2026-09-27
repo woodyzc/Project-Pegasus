@@ -37,6 +37,64 @@ static float Wobble(int i, float amplitude) {
     return amplitude * shape[i % 8];
 }
 
+static void test_baro_tuning_sees_small_climbs(void) {
+    printf("- the barometric tuning counts a hill the GNSS band would discard: ");
+
+    // A 2.5m rise: real, and smaller than the 4m band GNSS needs. This is the
+    // entire reason for fitting a barometer, so it is the thing to pin.
+    Ascent_t gnss;
+    Ascent_Reset(&gnss);
+    Ascent_t baro;
+    Ascent_ResetFor(&baro, ASCENT_SOURCE_BARO);
+
+    uint32_t t_ms = 0;
+    for (int step = 0; step < 40; step++) {
+        // Up 2.5m, then back down, four times over. A rider on a rolling lane.
+        const float alt = (step % 10 < 5) ? 100.0f : 102.5f;
+        Ascent_Feed(&gnss, alt, t_ms);
+        Ascent_Feed(&baro, alt, t_ms);
+        t_ms += 1000;
+    }
+
+    check(Ascent_Metres(&gnss) < 1.0, "the GNSS band discards a 2.5m rise entirely");
+    check(Ascent_Metres(&baro) > 3.0, "the barometric band counts it");
+    printf("done\n");
+}
+
+static void test_baro_tuning_still_rejects_noise(void) {
+    printf("- and still rejects noise, or it would be worse than no filter: ");
+
+    Ascent_t baro;
+    Ascent_ResetFor(&baro, ASCENT_SOURCE_BARO);
+
+    // +/-0.3m of sensor wander on a flat road, an hour of it. A barometer is
+    // quiet but not silent, and a sum of positive differences would turn this
+    // into hundreds of metres exactly as it does for a receiver.
+    uint32_t t_ms = 0;
+    for (int i = 0; i < 3600; i++) {
+        const float wander = ((i % 7) - 3) * 0.1f;
+        Ascent_Feed(&baro, 100.0f + wander, t_ms);
+        t_ms += 1000;
+    }
+    check(Ascent_Metres(&baro) < 2.0, "an hour of flat riding climbs nothing much");
+    printf("done\n");
+}
+
+static void test_reset_sets_tuning(void) {
+    printf("- each reset installs its own tuning: ");
+    Ascent_t a;
+    Ascent_ResetFor(&a, ASCENT_SOURCE_BARO);
+    check(a.band_m == ASCENT_BARO_BAND_M, "baro reset sets the baro band");
+    check(a.alpha == ASCENT_BARO_SMOOTH_ALPHA, "baro reset sets the baro alpha");
+
+    // Ascent_Reset must stay the GNSS one: every other test here depends on
+    // it, and so does every caller that has not been told about sources.
+    Ascent_Reset(&a);
+    check(a.band_m == ASCENT_BAND_M, "plain reset is still GNSS");
+    check(a.alpha == ASCENT_SMOOTH_ALPHA, "plain reset keeps the GNSS alpha");
+    printf("done\n");
+}
+
 int main(void) {
     Ascent_t a;
 
@@ -165,6 +223,10 @@ int main(void) {
     check_near(Ascent_DescentMetres(NULL), 0.0, 0.001, "both of them");
     Ascent_Reset(NULL); // must not crash
     printf("done\n");
+
+    test_baro_tuning_sees_small_climbs();
+    test_baro_tuning_still_rejects_noise();
+    test_reset_sets_tuning();
 
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     printf("RESULT: %s\n", failures == 0 ? "PASS" : "FAIL");

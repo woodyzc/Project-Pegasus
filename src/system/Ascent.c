@@ -3,6 +3,10 @@
 #include <stddef.h>
 
 void Ascent_Reset(Ascent_t *a) {
+    Ascent_ResetFor(a, ASCENT_SOURCE_GNSS);
+}
+
+void Ascent_ResetFor(Ascent_t *a, AscentSource_t source) {
     if (a == NULL) {
         return;
     }
@@ -15,6 +19,18 @@ void Ascent_Reset(Ascent_t *a) {
     a->ref_m = 0.0f;
     a->ascent_m = 0.0;
     a->descent_m = 0.0;
+
+    // Tuning last, so the two sources differ in exactly one place. Leaving
+    // these unset is not a small bug: band_m of zero counts every wiggle and
+    // an alpha of zero freezes the smoother, so the accumulator reports
+    // either everything or nothing.
+    if (source == ASCENT_SOURCE_BARO) {
+        a->band_m = ASCENT_BARO_BAND_M;
+        a->alpha = ASCENT_BARO_SMOOTH_ALPHA;
+    } else {
+        a->band_m = ASCENT_BAND_M;
+        a->alpha = ASCENT_SMOOTH_ALPHA;
+    }
 }
 
 bool Ascent_Feed(Ascent_t *a, float alt_m, uint32_t time_ms) {
@@ -57,7 +73,7 @@ bool Ascent_Feed(Ascent_t *a, float alt_m, uint32_t time_ms) {
         a->smooth_m = alt_m;
         a->has_smooth = true;
     } else {
-        a->smooth_m += ASCENT_SMOOTH_ALPHA * (alt_m - a->smooth_m);
+        a->smooth_m += a->alpha * (alt_m - a->smooth_m);
     }
 
     // Filter 3b: count only what leaves the band. The reference stays put
@@ -70,10 +86,10 @@ bool Ascent_Feed(Ascent_t *a, float alt_m, uint32_t time_ms) {
     }
 
     const float above = a->smooth_m - a->ref_m;
-    if (above > ASCENT_BAND_M) {
+    if (above > a->band_m) {
         a->ascent_m += (double)above;
         a->ref_m = a->smooth_m;
-    } else if (above < -ASCENT_BAND_M) {
+    } else if (above < -a->band_m) {
         a->descent_m += (double)(-above);
         a->ref_m = a->smooth_m;
     }
