@@ -90,6 +90,12 @@ lv_obj_t *s_power_status = nullptr;
 //     low-battery colour while charging. Worth fixing, not worth hurrying.
 lv_obj_t *s_power_battery = nullptr;
 lv_obj_t *s_hrlink_value = nullptr;
+// Live, not set once at load. A transfer happens minutes after this page is
+// built and PageManager caches the page (CLAUDE.md §8), so a value written
+// only in onViewLoad() reports the state at first open for the rest of the
+// boot -- which is exactly how this row came to read "0 writes" while a
+// transfer was in progress.
+lv_obj_t *s_routerx_value = nullptr;
 lv_obj_t *s_cadencelink_value = nullptr;
 lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
@@ -623,6 +629,30 @@ void InfoTimerCallback(lv_timer_t *timer) {
     }
     if (s_cadencelink_value != nullptr) {
         lv_label_set_text(s_cadencelink_value, BLE_CSC_StatusText());
+    }
+
+    // The whole point of this row is to be read WHILE a transfer is failing,
+    // so it has to track one. See s_routerx_value.
+    if (s_routerx_value != nullptr) {
+        uint32_t writes = 0;
+        uint16_t received = 0;
+        uint16_t total = 0;
+        NavRouteRx_t last = NAVROUTE_RX_NONE;
+        NavRoute_RxDebug(&writes, &received, &total, &last);
+
+        const char *why = "-";
+        switch (last) {
+        case NAVROUTE_RX_NONE: why = "nothing written"; break;
+        case NAVROUTE_RX_OK: why = "ok"; break;
+        case NAVROUTE_RX_BAD_HEADER: why = "bad header"; break;
+        case NAVROUTE_RX_BAD_MANIFEST: why = "bad manifest"; break;
+        case NAVROUTE_RX_ALLOC: why = "PSRAM alloc failed"; break;
+        case NAVROUTE_RX_NO_MANIFEST: why = "no manifest held"; break;
+        case NAVROUTE_RX_BAD_OFFSET: why = "bad offset"; break;
+        case NAVROUTE_RX_SHORT_CHUNK: why = "short chunk"; break;
+        }
+        lv_label_set_text_fmt(s_routerx_value, "Route RX: %lu writes, %u/%u, last: %s",
+                              (unsigned long)writes, (unsigned)received, (unsigned)total, why);
     }
 
     // The phone can only ever report that it did not find the head unit, which
@@ -1309,7 +1339,7 @@ void PageSettings::onViewLoad() {
         }
         snprintf(buf, sizeof(buf), "%lu writes, %u/%u, last: %s", (unsigned long)writes,
                  (unsigned)received, (unsigned)total, why);
-        MakeInfoRow(info_card, "Route RX", buf);
+        s_routerx_value = MakeInfoRow(info_card, "Route RX", buf);
     }
 
     // The barometer, because ASCENT is now built on it and a climb total
@@ -1443,6 +1473,7 @@ void PageSettings::onViewUnload() {
     s_ride_finish_icon = nullptr;
     s_ride_finish_label = nullptr;
     s_hrlink_value = nullptr;
+    s_routerx_value = nullptr;
     s_cadencelink_value = nullptr;
     s_tbtlink_value = nullptr;
     s_heap_value = nullptr;
