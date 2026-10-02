@@ -1,6 +1,7 @@
 #include "Touch.h"
 
 #include <Arduino.h>
+#include <driver/gpio.h>
 #include <Wire.h>
 #include <stdio.h>
 #include <string.h>
@@ -298,6 +299,18 @@ void Touch_Init() {
     // sleep wake, where a floating-low line is a permanent instant wake --
     // though that path needs rtc_gpio_pullup_en() as well, because the RTC
     // mux does not inherit this. See EnterSleep().
+    // Released for the same reason the power latch is (hal/BoardPower.cpp):
+    // EnterSleep() holds this pin HIGH through deep sleep, and the hold
+    // outlives the wake. A held pad ignores digitalWrite, so the vendor reset
+    // pulse below -- low 100ms, high 500ms, which §8 records as the thing
+    // without which this controller answers nothing on I2C -- would never
+    // actually drive the line low on a boot that followed a sleep.
+    //
+    // Touch is the only wake source, so the failure that would cause is the
+    // unpleasant one: the board wakes once and is then deaf until a power
+    // cycle.
+    gpio_hold_dis((gpio_num_t)TOUCH_RST_PIN);
+
     pinMode(TOUCH_INT_PIN, INPUT_PULLUP);
     pinMode(TOUCH_RST_PIN, OUTPUT);
 
