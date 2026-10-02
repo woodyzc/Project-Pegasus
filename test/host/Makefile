@@ -55,6 +55,11 @@
 #                        sea level at 44km while still drawing a smooth curve)
 #                        and a filter seeded from zero (which invents a minute
 #                        of climbing at every power-on).
+#   * test_long_press   - the power key's long press (compiles the real
+#                         src/system/LongPress.c). Small, and tested out of
+#                         proportion to its size: it fires the power-off path,
+#                         so firing twice or firing spuriously switches the
+#                         board off under the rider.
 #   * test_stillness    - is the bike moving at all, from the IMU (compiles the
 #                         real src/system/Stillness.c). A stationary receiver
 #                         wanders metres per sample and three consumers read
@@ -99,7 +104,7 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_hr_zone$(SUFFIX) test_route_parse$(SUFFIX) test_clock_frame$(SUFFIX) \
         test_time_source$(SUFFIX) test_ride_stats$(SUFFIX) test_file_path$(SUFFIX) \
         test_idle_policy$(SUFFIX) test_ascent$(SUFFIX) \
-        test_baro_altitude$(SUFFIX) test_grade$(SUFFIX) test_stillness$(SUFFIX) \
+        test_baro_altitude$(SUFFIX) test_grade$(SUFFIX) test_stillness$(SUFFIX) test_long_press$(SUFFIX) \
         test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX) \
         test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX) test_csc_parse$(SUFFIX) \
         test_nmea_parse$(SUFFIX)
@@ -149,6 +154,9 @@ test_ubx_parse$(SUFFIX): test_ubx_parse.c $(SENSORS)/UbxParse.c
 
 test_nmea_parse$(SUFFIX): test_nmea_parse.c $(SENSORS)/NmeaParse.c
 	$(CC) $(CFLAGS) -I$(SENSORS) -o $@ $(CSRC) -lm
+
+test_long_press$(SUFFIX): test_long_press.c $(SYSTEM)/LongPress.c
+	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC)
 
 test_stillness$(SUFFIX): test_stillness.c $(SYSTEM)/Stillness.c
 	$(CC) $(CFLAGS) -I$(SYSTEM) -o $@ $(CSRC) -lm

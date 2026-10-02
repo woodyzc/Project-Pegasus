@@ -21,10 +21,23 @@
 // keep their thumb down.
 // ---------------------------------------------------------------------------
 //
-// NOTE: the power *key* (PWR_KEY_PIN) is not handled here yet. The vendor
-// driver reads it for long-press sleep/restart/shutdown; this board branch
-// brings up the latch only, and the key is a follow-up along with the IMU and
-// the RTC.
+// The power key (PWR_KEY_PIN) is readable here, but what a press MEANS is
+// decided in system/PowerManager.cpp -- it owns the teardown that has to
+// happen before the rail goes away, and it already runs the timer to poll on.
+// This file keeps the pins and nothing else.
 
 // Latches the power rail on. Call first from setup(), before anything else.
 void BoardPower_Init();
+
+// True while the power key is held. Active low, which is the level the vendor
+// driver tests at boot to tell "the user pressed the button" from "the rail
+// came up on its own".
+bool BoardPower_KeyPressed();
+
+// Opens the latch: the rail collapses and the board switches off.
+//
+// ⚠️ Does not return on battery. Everything that must survive -- the ride
+// file closed, the BLE peer told, the card unmounted -- has to have happened
+// already. On USB the host may keep the chip alive, so callers must not
+// assume this is the last line that ever runs.
+void BoardPower_LatchOff();

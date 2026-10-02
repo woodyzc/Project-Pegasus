@@ -6,8 +6,10 @@
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
 
+#include "../hal/BoardPower.h"
 #include "../hal/Display.h"
 #include "../hal/Imu.h"
+#include "LongPress.h"
 #include "../navigation/RideLog.h"
 #include "../sensors/BLE_HR_Client.h"
 #include "DataCenter.h"
@@ -31,6 +33,10 @@ constexpr uint32_t SLEEP_IDLE_MS = POWER_SLEEP_IDLE_MS;
 // on all afternoon -- the same problem TripAccum's floor exists to solve, and
 // the same answer.
 constexpr float MOVING_MPS = 1.0f;
+
+// How long "Powering off." stays on screen before the rail goes. Long enough
+// to read, short enough that nobody presses the button a second time.
+constexpr uint32_t POWER_OFF_NOTICE_MS = 700;
 
 // How long the "going to sleep" notice stays up. Long enough to read, and long
 // enough to be interrupted by a touch, which is the point of it.
@@ -114,6 +120,14 @@ volatile uint32_t s_last_activity_ms = 0;
 lv_obj_t *s_notice = nullptr;
 uint32_t s_notice_since_ms = 0;
 lv_timer_t *s_timer = nullptr;
+
+// The power key. Watched here rather than in hal/BoardPower because switching
+// off is a teardown, not a pin: the ride file has to be closed, the BLE peer
+// told, and the card unmounted before the rail goes away -- and this file
+// already owns all three.
+LongPress_t s_key;
+uint32_t s_off_notice_since_ms = 0;
+bool s_powering_off = false;
 PowerStage_t s_stage = POWER_STAGE_ACTIVE;
 uint8_t s_active_percent = 100;
 bool s_screen_off = false;
@@ -263,8 +277,55 @@ void ApplyStage(PowerStage_t stage) {
     SetCpuMhz(CpuMhzForStage(stage));
 }
 
+// Drawn and then acted on a later tick, for the same reason the sleep notice
+// is: calling lv_refr_now() from inside a timer LVGL is already running is not
+// allowed, so the label goes up on one pass and the teardown happens on the
+// next with an ordinary render in between. Without that the screen would go
+// dark with no explanation and the rider would not know the press worked.
+void ShowPowerOffNotice() {
+    Display_SetBrightness(s_active_percent);
+    s_notice = lv_label_create(lv_layer_top());
+    lv_label_set_text(s_notice, "Powering off.");
+    lv_obj_set_style_text_align(s_notice, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_notice, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_notice, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_color(s_notice, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_notice, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(s_notice, 16, 0);
+    lv_obj_center(s_notice);
+    s_off_notice_since_ms = millis();
+}
+
+void PowerOffNow() {
+    // ⚠️ The ride file FIRST, and through its own writer task.
+    //
+    // PrepareForSleep() unmounts the card without closing the log, and §8
+    // records that it gets away with that only because deep sleep refuses to
+    // run while a ride is armed. A power-off has no such gate -- the rider may
+    // well be holding the button at the end of a ride they never finished --
+    // so unmounting first would truncate the GPX with no error and no symptom.
+    RideLog_Shutdown();
+    PrepareForSleep();
+    BoardPower_LatchOff();
+}
+
 void Service(lv_timer_t *timer) {
     (void)timer;
+
+    // The power key, before anything else: a rider holding the button has
+    // asked for one thing and should not have to wait on the stage machine.
+    if (s_powering_off) {
+        if ((millis() - s_off_notice_since_ms) >= POWER_OFF_NOTICE_MS) {
+            PowerOffNow();
+        }
+        return;
+    }
+    if (LongPress_Feed(&s_key, BoardPower_KeyPressed(), millis())) {
+        HideNotice();
+        s_powering_off = true;
+        ShowPowerOffNotice();
+        return;
+    }
 
     // While the rider is at full brightness the settings slider is the source
     // of truth; once dimmed it is not, because the backlight then holds a
@@ -330,6 +391,12 @@ void PowerManager_Init() {
     s_last_activity_ms = millis();
     s_stage = POWER_STAGE_ACTIVE;
     s_screen_off = false;
+
+    // Disarmed if the key is still down: this board is switched ON with the
+    // same button, so at this moment the rider's thumb is very often still on
+    // it, and without the disarm the board would power itself off a second
+    // and a half after booting. LongPress.h has the three rules.
+    LongPress_Reset(&s_key, BoardPower_KeyPressed());
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
 

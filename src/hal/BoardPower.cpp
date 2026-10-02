@@ -40,5 +40,17 @@ void BoardPower_Init() {
     // yet, there is no software path that switches this board off. Pulling the
     // battery is it. Driving PWR_LATCH_PIN low is what will do it once the
     // power key lands.
-    (void)PWR_KEY_PIN;
+    // Input, pulled up: the key shorts it to ground when held.
+    pinMode(PWR_KEY_PIN, INPUT_PULLUP);
+}
+
+bool BoardPower_KeyPressed() { return digitalRead(PWR_KEY_PIN) == LOW; }
+
+void BoardPower_LatchOff() {
+    // Released first. The hold is what kept this pin high through deep sleep,
+    // and a held pad ignores digitalWrite -- so without this the board would
+    // simply carry on running, which is the one outcome a power-off button
+    // must never produce.
+    gpio_hold_dis((gpio_num_t)PWR_LATCH_PIN);
+    digitalWrite(PWR_LATCH_PIN, LOW);
 }
