@@ -638,7 +638,8 @@ void InfoTimerCallback(lv_timer_t *timer) {
         uint16_t received = 0;
         uint16_t total = 0;
         NavRouteRx_t last = NAVROUTE_RX_NONE;
-        NavRoute_RxDebug(&writes, &received, &total, &last);
+        NavRouteRx_t mf = NAVROUTE_RX_NONE;
+        NavRoute_RxDebug(&writes, &received, &total, &last, &mf);
 
         const char *why = "-";
         switch (last) {
@@ -651,8 +652,12 @@ void InfoTimerCallback(lv_timer_t *timer) {
         case NAVROUTE_RX_BAD_OFFSET: why = "bad offset"; break;
         case NAVROUTE_RX_SHORT_CHUNK: why = "short chunk"; break;
         }
-        lv_label_set_text_fmt(s_routerx_value, "Route RX: %lu writes, %u/%u, last: %s",
-                              (unsigned long)writes, (unsigned)received, (unsigned)total, why);
+        const char *mfwhy = (mf == NAVROUTE_RX_BAD_MANIFEST)  ? "bad manifest"
+                            : (mf == NAVROUTE_RX_ALLOC) ? "PSRAM alloc failed"
+                            : (mf == NAVROUTE_RX_OK)    ? "ok"
+                                                        : "never seen";
+        lv_label_set_text_fmt(s_routerx_value, "Route RX: %lu writes, %u/%u, last: %s, manifest: %s",
+                              (unsigned long)writes, (unsigned)received, (unsigned)total, why, mfwhy);
     }
 
     // The phone can only ever report that it did not find the head unit, which
@@ -1324,7 +1329,8 @@ void PageSettings::onViewLoad() {
         uint16_t received = 0;
         uint16_t total = 0;
         NavRouteRx_t last = NAVROUTE_RX_NONE;
-        NavRoute_RxDebug(&writes, &received, &total, &last);
+        NavRouteRx_t mf = NAVROUTE_RX_NONE;
+        NavRoute_RxDebug(&writes, &received, &total, &last, &mf);
 
         const char *why = "-";
         switch (last) {
@@ -1337,8 +1343,12 @@ void PageSettings::onViewLoad() {
         case NAVROUTE_RX_BAD_OFFSET: why = "bad offset"; break;
         case NAVROUTE_RX_SHORT_CHUNK: why = "short chunk"; break;
         }
-        snprintf(buf, sizeof(buf), "%lu writes, %u/%u, last: %s", (unsigned long)writes,
-                 (unsigned)received, (unsigned)total, why);
+        const char *mfwhy = (mf == NAVROUTE_RX_BAD_MANIFEST)  ? "bad manifest"
+                            : (mf == NAVROUTE_RX_ALLOC) ? "PSRAM alloc failed"
+                            : (mf == NAVROUTE_RX_OK)    ? "ok"
+                                                        : "never seen";
+        snprintf(buf, sizeof(buf), "%lu writes, %u/%u, last: %s, manifest: %s",
+                 (unsigned long)writes, (unsigned)received, (unsigned)total, why, mfwhy);
         s_routerx_value = MakeInfoRow(info_card, "Route RX", buf);
     }
 

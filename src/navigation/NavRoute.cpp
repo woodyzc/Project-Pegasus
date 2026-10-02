@@ -235,10 +235,32 @@ void MarkChunk(uint16_t index) {
 uint32_t s_rx_writes = 0;
 NavRouteRx_t s_rx_last = NAVROUTE_RX_NONE;
 
+// Kept apart from s_rx_last on purpose. A refused manifest is followed
+// immediately by every payload chunk of that pass reporting "no manifest
+// held", so the reason that actually matters is overwritten within
+// milliseconds and only its consequence survives to be read.
+NavRouteRx_t s_rx_manifest_last = NAVROUTE_RX_NONE;
+
+// Chunk count of the last transfer that completed and went live, or 0.
+//
+// ⚠️ This exists so a FINISHED transfer can still be reported as finished.
+// NavRoute_Progress describes the staging area, and FinishTransfer tears the
+// staging area down -- so the moment the last chunk lands, the progress the
+// phone is waiting for stops existing. The notify that follows that chunk
+// then answers 0/0, the phone reads its count as having collapsed from n-1 to
+// zero, and starts another pass over a route the head unit has already
+// accepted and is navigating. Five passes later it reports "0 of n chunks"
+// for a transfer that worked every time.
+uint16_t s_rx_done_chunks = 0;
+
 bool BeginTransfer(const RouteManifest_t &m) {
     // Only the staging area. The live route is not touched here -- see the
     // note on s_rx_blob for what happened when it was.
     FreeRx();
+
+    // A new transfer supersedes whatever the last one completed, so the
+    // completion below must not be reported against it.
+    s_rx_done_chunks = 0;
 
     const size_t blob_size = Route_BlobSize(&m);
     s_rx_blob = (uint8_t *)heap_caps_calloc(blob_size, 1, MALLOC_CAP_SPIRAM);
@@ -304,6 +326,12 @@ void FinishTransfer() {
     s_length_m = length_m;
     s_loaded = true;
 
+    // Remembered before FreeRx clears the manifest, so NavRoute_Progress can
+    // still answer "n of n" afterwards. Set only on the usable path: a route
+    // refused above must keep reporting an unfinished transfer, because from
+    // the phone's side a refusal IS a failed upload and it should say so.
+    s_rx_done_chunks = s_rx_manifest.chunk_count;
+
     // Releases the chunk bitmap and clears the transfer's bookkeeping. The
     // blob and table are already moved out, so this does not free them.
     FreeRx();
@@ -333,6 +361,10 @@ void NavRoute_Clear() {
     RouteLock lock;
     FreeLive();
     FreeRx();
+    // The completed-transfer marker goes with the route it describes. Left
+    // standing, "Clear route" would be followed by the next progress read
+    // still reporting the cleared route's chunks as delivered.
+    s_rx_done_chunks = 0;
     ResetFollowState();
 }
 
@@ -354,6 +386,7 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
         RouteManifest_t m;
         if (!Route_ParseManifest(payload, payload_len, &m)) {
             s_rx_last = NAVROUTE_RX_BAD_MANIFEST;
+            s_rx_manifest_last = NAVROUTE_RX_BAD_MANIFEST;
             return false;
         }
         // Re-sending the manifest for the transfer already in progress is a
@@ -363,12 +396,12 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
             m.point_count == s_rx_manifest.point_count &&
             m.maneuver_count == s_rx_manifest.maneuver_count) {
             s_rx_last = NAVROUTE_RX_OK;
+            s_rx_manifest_last = NAVROUTE_RX_OK;
             return true;
         }
         const bool began = BeginTransfer(m);
-        if (began) {
-            s_rx_last = NAVROUTE_RX_OK;
-        }
+        s_rx_last = began ? NAVROUTE_RX_OK : s_rx_last;
+        s_rx_manifest_last = began ? NAVROUTE_RX_OK : s_rx_last;
         return began;
     }
 
@@ -416,17 +449,33 @@ void NavRoute_Progress(uint16_t *out_received, uint16_t *out_total) {
     // The transfer in flight, not the route in use: this is what the upload
     // progress bar is watching, and it ticks while the live route -- if there
     // is one -- carries on being navigated underneath it.
+    if (s_rx_have_manifest) {
+        if (out_received != nullptr) {
+            *out_received = s_rx_received_count;
+        }
+        if (out_total != nullptr) {
+            *out_total = s_rx_manifest.chunk_count;
+        }
+        return;
+    }
+
+    // No staging, but one finished: keep reporting it complete. Without this
+    // the completing chunk's own notification says 0/0 and the sender cannot
+    // tell success from a transfer that never started.
     if (out_received != nullptr) {
-        *out_received = s_rx_have_manifest ? s_rx_received_count : 0;
+        *out_received = s_rx_done_chunks;
     }
     if (out_total != nullptr) {
-        *out_total = s_rx_have_manifest ? s_rx_manifest.chunk_count : 0;
+        *out_total = s_rx_done_chunks;
     }
 }
 
 void NavRoute_RxDebug(uint32_t *out_writes, uint16_t *out_received, uint16_t *out_total,
-                      NavRouteRx_t *out_last) {
+                      NavRouteRx_t *out_last, NavRouteRx_t *out_manifest) {
     RouteLock lock;
+    if (out_manifest != nullptr) {
+        *out_manifest = s_rx_manifest_last;
+    }
     if (out_writes != nullptr) {
         *out_writes = s_rx_writes;
     }

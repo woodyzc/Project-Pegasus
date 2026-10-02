@@ -96,8 +96,12 @@ typedef enum {
 // `writes` counts every call into NavRoute_AcceptChunk since boot, which is
 // the one fact that separates "the phone is not reaching us" from "we are
 // refusing what it sends".
+// `out_manifest` is reported separately from `out_last` because a refused
+// manifest is followed at once by every payload chunk of that pass reporting
+// NO_MANIFEST, so the reason that matters is overwritten by its own
+// consequence before anyone can read it.
 void NavRoute_RxDebug(uint32_t *out_writes, uint16_t *out_received, uint16_t *out_total,
-                      NavRouteRx_t *out_last);
+                      NavRouteRx_t *out_last, NavRouteRx_t *out_manifest);
 
 // The assembled route's manifest, or false when none is loaded. A copy: the
 // blob itself is deliberately not exposed.
