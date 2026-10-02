@@ -10,6 +10,7 @@
 
 #include "../navigation/BLE_TBT_Receiver.h"
 #include "../navigation/GpxTrack.h"
+#include "../navigation/NavRoute.h"
 #include "../navigation/RideLog.h"
 #include "Overlay_FileTransfer.h"
 #include "Overlay_RideSummary.h"
@@ -1280,6 +1281,36 @@ void PageSettings::onViewLoad() {
              (unsigned)Settings_BootCount());
     MakeInfoRow(info_card, "Last reset", buf);
     MakeInfoRow(info_card, "Build", __DATE__ " " __TIME__);
+
+    // The BLE route transfer, because a refused upload is invisible from both
+    // ends. The phone can only say "0 of n acknowledged", which reads the same
+    // whether its writes never arrived, the manifest was malformed, or PSRAM
+    // could not be had -- and this board has no usable serial console to tell
+    // them apart on (CLAUDE.md §8). `writes` is the load-bearing number: zero
+    // means the phone is not reaching this characteristic at all, non-zero
+    // means it is and we are refusing what it sends.
+    {
+        uint32_t writes = 0;
+        uint16_t received = 0;
+        uint16_t total = 0;
+        NavRouteRx_t last = NAVROUTE_RX_NONE;
+        NavRoute_RxDebug(&writes, &received, &total, &last);
+
+        const char *why = "-";
+        switch (last) {
+        case NAVROUTE_RX_NONE: why = "nothing written"; break;
+        case NAVROUTE_RX_OK: why = "ok"; break;
+        case NAVROUTE_RX_BAD_HEADER: why = "bad header"; break;
+        case NAVROUTE_RX_BAD_MANIFEST: why = "bad manifest"; break;
+        case NAVROUTE_RX_ALLOC: why = "PSRAM alloc failed"; break;
+        case NAVROUTE_RX_NO_MANIFEST: why = "no manifest held"; break;
+        case NAVROUTE_RX_BAD_OFFSET: why = "bad offset"; break;
+        case NAVROUTE_RX_SHORT_CHUNK: why = "short chunk"; break;
+        }
+        snprintf(buf, sizeof(buf), "%lu writes, %u/%u, last: %s", (unsigned long)writes,
+                 (unsigned)received, (unsigned)total, why);
+        MakeInfoRow(info_card, "Route RX", buf);
+    }
 
     // The barometer, because ASCENT is now built on it and a climb total
     // whose sensor has gone missing otherwise just stops rising with nothing

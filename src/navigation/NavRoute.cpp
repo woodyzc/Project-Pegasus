@@ -231,6 +231,10 @@ void MarkChunk(uint16_t index) {
 // A manifest starts a transfer. Allocating here rather than on the first
 // payload chunk means an out-of-order arrival -- which BLE permits and Android
 // does in practice under load -- is stored rather than dropped.
+// Bring-up diagnostics; see NavRoute_RxDebug.
+uint32_t s_rx_writes = 0;
+NavRouteRx_t s_rx_last = NAVROUTE_RX_NONE;
+
 bool BeginTransfer(const RouteManifest_t &m) {
     // Only the staging area. The live route is not touched here -- see the
     // note on s_rx_blob for what happened when it was.
@@ -239,11 +243,13 @@ bool BeginTransfer(const RouteManifest_t &m) {
     const size_t blob_size = Route_BlobSize(&m);
     s_rx_blob = (uint8_t *)heap_caps_calloc(blob_size, 1, MALLOC_CAP_SPIRAM);
     if (s_rx_blob == nullptr) {
+        s_rx_last = NAVROUTE_RX_ALLOC;
         return false;
     }
     s_rx_cum = (uint32_t *)heap_caps_calloc(m.point_count, sizeof(uint32_t), MALLOC_CAP_SPIRAM);
     if (s_rx_cum == nullptr) {
         FreeRx();
+        s_rx_last = NAVROUTE_RX_ALLOC;
         return false;
     }
 
@@ -251,6 +257,7 @@ bool BeginTransfer(const RouteManifest_t &m) {
     s_rx_received = (uint8_t *)heap_caps_calloc(s_rx_received_bytes, 1, MALLOC_CAP_INTERNAL);
     if (s_rx_received == nullptr) {
         FreeRx();
+        s_rx_last = NAVROUTE_RX_ALLOC;
         return false;
     }
 
@@ -336,13 +343,17 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
     const uint8_t *payload = nullptr;
     uint16_t payload_len = 0;
 
+    s_rx_writes++;
+
     if (!Route_ParseChunkHeader(data, length, &index, &payload, &payload_len)) {
+        s_rx_last = NAVROUTE_RX_BAD_HEADER;
         return false;
     }
 
     if (index == 0) {
         RouteManifest_t m;
         if (!Route_ParseManifest(payload, payload_len, &m)) {
+            s_rx_last = NAVROUTE_RX_BAD_MANIFEST;
             return false;
         }
         // Re-sending the manifest for the transfer already in progress is a
@@ -351,12 +362,18 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
         if (s_rx_have_manifest && m.route_id == s_rx_manifest.route_id &&
             m.point_count == s_rx_manifest.point_count &&
             m.maneuver_count == s_rx_manifest.maneuver_count) {
+            s_rx_last = NAVROUTE_RX_OK;
             return true;
         }
-        return BeginTransfer(m);
+        const bool began = BeginTransfer(m);
+        if (began) {
+            s_rx_last = NAVROUTE_RX_OK;
+        }
+        return began;
     }
 
     if (!s_rx_have_manifest || index >= s_rx_manifest.chunk_count) {
+        s_rx_last = NAVROUTE_RX_NO_MANIFEST;
         // A payload chunk with no manifest cannot be placed: its offset comes
         // from the manifest's geometry. Dropped, and the phone's retry after
         // the manifest lands will carry it.
@@ -367,6 +384,7 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
     const size_t offset = (size_t)(index - 1) * ROUTE_CHUNK_PAYLOAD;
     const size_t blob_size = Route_BlobSize(&s_rx_manifest);
     if (offset >= blob_size || offset + payload_len > blob_size) {
+        s_rx_last = NAVROUTE_RX_BAD_OFFSET;
         return false;
     }
     // Only the final chunk may be short. Anything else short means the sender
@@ -374,11 +392,13 @@ bool NavRoute_AcceptChunk(const uint8_t *data, size_t length) {
     // scatter the route through the buffer.
     const bool is_last = (index == (uint16_t)(s_rx_manifest.chunk_count - 1));
     if (!is_last && payload_len != ROUTE_CHUNK_PAYLOAD) {
+        s_rx_last = NAVROUTE_RX_SHORT_CHUNK;
         return false;
     }
 
     memcpy(s_rx_blob + offset, payload, payload_len);
     MarkChunk(index);
+    s_rx_last = NAVROUTE_RX_OK;
 
     if (s_rx_received_count == s_rx_manifest.chunk_count) {
         FinishTransfer();
@@ -401,6 +421,23 @@ void NavRoute_Progress(uint16_t *out_received, uint16_t *out_total) {
     }
     if (out_total != nullptr) {
         *out_total = s_rx_have_manifest ? s_rx_manifest.chunk_count : 0;
+    }
+}
+
+void NavRoute_RxDebug(uint32_t *out_writes, uint16_t *out_received, uint16_t *out_total,
+                      NavRouteRx_t *out_last) {
+    RouteLock lock;
+    if (out_writes != nullptr) {
+        *out_writes = s_rx_writes;
+    }
+    if (out_received != nullptr) {
+        *out_received = s_rx_have_manifest ? s_rx_received_count : 0;
+    }
+    if (out_total != nullptr) {
+        *out_total = s_rx_have_manifest ? s_rx_manifest.chunk_count : 0;
+    }
+    if (out_last != nullptr) {
+        *out_last = s_rx_last;
     }
 }
 

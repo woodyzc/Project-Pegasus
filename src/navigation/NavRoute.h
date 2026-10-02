@@ -75,6 +75,30 @@ bool NavRoute_IsLoaded();
 // when no transfer has started.
 void NavRoute_Progress(uint16_t *out_received, uint16_t *out_total);
 
+// Why the last chunk was refused, for the settings page.
+//
+// Exists because a refused upload is invisible from both ends: the phone can
+// only report "0 of n acknowledged", which is the same message whether the
+// writes never arrived, the manifest was malformed, or PSRAM could not be
+// had. This board has no usable serial console (CLAUDE.md §8), so the panel
+// is where that distinction has to appear.
+typedef enum {
+    NAVROUTE_RX_NONE = 0,   // nothing has been written since boot
+    NAVROUTE_RX_OK,         // last chunk accepted
+    NAVROUTE_RX_BAD_HEADER, // magic, version or declared length wrong
+    NAVROUTE_RX_BAD_MANIFEST,
+    NAVROUTE_RX_ALLOC,      // PSRAM staging could not be allocated
+    NAVROUTE_RX_NO_MANIFEST, // payload chunk with no manifest held
+    NAVROUTE_RX_BAD_OFFSET,
+    NAVROUTE_RX_SHORT_CHUNK,
+} NavRouteRx_t;
+
+// `writes` counts every call into NavRoute_AcceptChunk since boot, which is
+// the one fact that separates "the phone is not reaching us" from "we are
+// refusing what it sends".
+void NavRoute_RxDebug(uint32_t *out_writes, uint16_t *out_received, uint16_t *out_total,
+                      NavRouteRx_t *out_last);
+
 // The assembled route's manifest, or false when none is loaded. A copy: the
 // blob itself is deliberately not exposed.
 //
