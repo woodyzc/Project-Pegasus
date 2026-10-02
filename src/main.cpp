@@ -5,6 +5,7 @@
 #include "hal/Barometer.h"
 #include "hal/BoardPower.h"
 #include "hal/Display.h"
+#include "hal/Imu.h"
 #include "hal/LvglFs.h"
 #include "hal/Touch.h"
 #include "navigation/BLE_TBT_Receiver.h"
@@ -66,6 +67,8 @@ void setup() {
     // by the time anything wants to draw them. It begins the sensor bus and
     // is safe with nothing fitted.
     Barometer_Init();
+    // Same bus as the barometer; SensorBus_Begin() is idempotent.
+    Imu_Init();
     GPS_Init();
 
     // Before anything slow. Everything below this -- the card, the road
@@ -263,6 +266,7 @@ void setup() {
     // Core 0, beside the battery monitor, and a no-op when no sensor
     // answered.
     Barometer_StartMonitor();
+    Imu_StartMonitor();
 
     // Core 0 GNSS reader. Independent of the heart-rate radios below, so it
     // starts first: a stall in radio bring-up should not cost the position

@@ -1,20 +1,14 @@
 #include "Barometer.h"
 
 #include <Arduino.h>
-#include <Wire.h>
 #include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 #include <freertos/task.h>
 
 #include "../system/BaroAltitude.h"
+#include "SensorBus.h"
 
 namespace {
 
-// The sensor bus. Wire1 belongs to the touch controller (hal/Touch.cpp); this
-// is the other one, and nothing else in the firmware drives it.
-constexpr int SENSOR_I2C_SDA = 11;
-constexpr int SENSOR_I2C_SCL = 10;
-constexpr uint32_t SENSOR_I2C_HZ = 400000;
 
 // Both addresses the breakout can present, high one first because that is
 // what this board's module actually does with its pull-ups.
@@ -120,70 +114,16 @@ volatile uint32_t s_last_ms = 0;
 // board is still in your hands.
 constexpr uint32_t STALE_MS = 3000;
 
-// One owner at a time. Arduino's Wire is not thread-safe and this is the only
-// module driving the sensor bus -- but "only module" is not "only task": the
-// Core 0 sampler and anything calling from the UI are two, and two concurrent
-// transactions corrupt each other.
-//
-// Added pre-emptively rather than after a failure, which is worth recording
-// honestly: the "found but not reading" this went in alongside was a loose
-// jumper, diagnosed as this race and blamed on the settings page before the
-// wire was checked. The lock is still right -- the two callers existed and the
-// bus has no arbitration -- but nothing here has ever been observed to
-// corrupt, and the next person reading this should not go looking for the
-// symptom that proved it.
-SemaphoreHandle_t s_lock = nullptr;
-
-struct BusLock {
-    BusLock() {
-        if (s_lock != nullptr) {
-            xSemaphoreTake(s_lock, portMAX_DELAY);
-        }
-    }
-    ~BusLock() {
-        if (s_lock != nullptr) {
-            xSemaphoreGive(s_lock);
-        }
-    }
-    BusLock(const BusLock &) = delete;
-    BusLock &operator=(const BusLock &) = delete;
-};
-
 bool WriteReg(uint8_t reg, uint8_t value) {
-    if (s_addr == 0) {
-        return false;
-    }
-    Wire.beginTransmission(s_addr);
-    Wire.write(reg);
-    Wire.write(value);
-    return Wire.endTransmission(true) == 0;
+    return s_addr != 0 && SensorBus_Write(s_addr, reg, value);
 }
 
 bool ReadRegs(uint8_t reg, uint8_t *buf, uint8_t len) {
-    if (s_addr == 0) {
-        return false;
-    }
-    Wire.beginTransmission(s_addr);
-    Wire.write(reg);
-    // Repeated START, as Bosch's I2C read does. A STOP here would end the
-    // transaction and leave the following read unattached to the register
-    // just written -- the exact failure that made the CST3530 look dead for
-    // most of a day (CLAUDE.md §2).
-    if (Wire.endTransmission(false) != 0) {
-        return false;
-    }
-    if (Wire.requestFrom((int)s_addr, (int)len) != (int)len) {
-        return false;
-    }
-    for (uint8_t i = 0; i < len; i++) {
-        buf[i] = (uint8_t)Wire.read();
-    }
-    return true;
+    return s_addr != 0 && SensorBus_Read(s_addr, reg, buf, len);
 }
 
 bool AddressAcks(uint8_t addr) {
-    Wire.beginTransmission(addr);
-    return Wire.endTransmission(true) == 0;
+    return SensorBus_Probe(addr);
 }
 
 void BaroTask(void *pv) {
@@ -208,10 +148,9 @@ void BaroTask(void *pv) {
 } // namespace
 
 void Barometer_Init() {
-    if (s_lock == nullptr) {
-        s_lock = xSemaphoreCreateMutex();
-    }
-    Wire.begin(SENSOR_I2C_SDA, SENSOR_I2C_SCL, SENSOR_I2C_HZ);
+    // Shared with the IMU and the RTC, and idempotent, so whichever driver
+    // initialises first opens the bus (hal/SensorBus.h).
+    SensorBus_Begin();
     BaroSmoother_Reset(&s_smoother);
 
     if (AddressAcks(ADDR_HIGH)) {
@@ -310,8 +249,6 @@ bool Barometer_Read(float *pressure_pa, float *temperature_c) {
     if (!s_found) {
         return false;
     }
-
-    BusLock guard;
 
     // Six bytes in one transfer, temperature first: 0x1D..0x1F then
     // 0x20..0x22, each little-endian XLSB/LSB/MSB.

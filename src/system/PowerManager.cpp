@@ -7,6 +7,7 @@
 #include <esp_sleep.h>
 
 #include "../hal/Display.h"
+#include "../hal/Imu.h"
 #include "../navigation/RideLog.h"
 #include "../sensors/BLE_HR_Client.h"
 #include "DataCenter.h"
@@ -124,6 +125,17 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
         return;
     }
     const GPS_Info_t *gps = (const GPS_Info_t *)data;
+
+    // ⚠️ A stationary receiver reports speed, and on a marginal fix it
+    // regularly exceeds MOVING_MPS. Without the IMU check this resets the
+    // idle timer every second or so for ever: the screen never blanks, the
+    // CPU never downclocks, and deep sleep is unreachable -- on a board left
+    // on a desk with a view of the sky, which is where it spends its life
+    // between rides.
+    if (Imu_IsStill()) {
+        return;
+    }
+
     if (gps->fix_valid && gps->speed >= MOVING_MPS) {
         s_last_activity_ms = millis();
     }

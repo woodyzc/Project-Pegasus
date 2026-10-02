@@ -4,6 +4,7 @@
 #include <WiFi.h>
 
 #include "../hal/Barometer.h"
+#include "../hal/Imu.h"
 #include "../navigation/RoadMap.h"
 #include "RoadView.h"
 #include "../system/TimeSource.h" // WiFi.macAddress() -- reads the eFused MAC, no radio started
@@ -96,6 +97,9 @@ lv_obj_t *s_hrlink_value = nullptr;
 // boot -- which is exactly how this row came to read "0 writes" while a
 // transfer was in progress.
 lv_obj_t *s_routerx_value = nullptr;
+// Live for the obvious reason: it changes every time the bike is touched, and
+// its whole purpose is to be watched while someone moves the thing.
+lv_obj_t *s_imu_value = nullptr;
 lv_obj_t *s_cadencelink_value = nullptr;
 lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
@@ -629,6 +633,21 @@ void InfoTimerCallback(lv_timer_t *timer) {
     }
     if (s_cadencelink_value != nullptr) {
         lv_label_set_text(s_cadencelink_value, BLE_CSC_StatusText());
+    }
+
+    if (s_imu_value != nullptr) {
+        char buf[96];
+        if (Imu_Found()) {
+            snprintf(buf, sizeof(buf), "0x%02X, %.2f g, %.1f dps, %s", (unsigned)Imu_Address(),
+                     (double)Imu_AccelG(), (double)Imu_GyroDps(),
+                     Imu_IsStill() ? "STILL" : "moving");
+        } else if (Imu_Address() != 0) {
+            snprintf(buf, sizeof(buf), "0x%02X answered, id 0x%02X", (unsigned)Imu_Address(),
+                     (unsigned)Imu_WhoAmI());
+        } else {
+            snprintf(buf, sizeof(buf), "none - GPS drift is not gated");
+        }
+        lv_label_set_text_fmt(s_imu_value, "IMU: %s", buf);
     }
 
     // The whole point of this row is to be read WHILE a transfer is failing,
@@ -1317,6 +1336,24 @@ void PageSettings::onViewLoad() {
     MakeInfoRow(info_card, "Last reset", buf);
     MakeInfoRow(info_card, "Build", __DATE__ " " __TIME__);
 
+    // The IMU, which exists to answer one question -- is the bike moving --
+    // and gates the odometer, the idle timer and the SPEED cell on the answer
+    // (system/Stillness.h). Shown because the thresholds are a starting point
+    // that wants tuning against a real bike, and because "none" has to be
+    // distinguishable from "fitted and always saying moving".
+    {
+    if (Imu_Found()) {
+        snprintf(buf, sizeof(buf), "0x%02X, %.2f g, %.1f dps, %s", (unsigned)Imu_Address(),
+                 (double)Imu_AccelG(), (double)Imu_GyroDps(), Imu_IsStill() ? "STILL" : "moving");
+    } else if (Imu_Address() != 0) {
+        snprintf(buf, sizeof(buf), "0x%02X answered, id 0x%02X", (unsigned)Imu_Address(),
+                 (unsigned)Imu_WhoAmI());
+    } else {
+        snprintf(buf, sizeof(buf), "none - GPS drift is not gated");
+    }
+        s_imu_value = MakeInfoRow(info_card, "IMU", buf);
+    }
+
     // The BLE route transfer, because a refused upload is invisible from both
     // ends. The phone can only say "0 of n acknowledged", which reads the same
     // whether its writes never arrived, the manifest was malformed, or PSRAM
@@ -1484,6 +1521,7 @@ void PageSettings::onViewUnload() {
     s_ride_finish_label = nullptr;
     s_hrlink_value = nullptr;
     s_routerx_value = nullptr;
+    s_imu_value = nullptr;
     s_cadencelink_value = nullptr;
     s_tbtlink_value = nullptr;
     s_heap_value = nullptr;

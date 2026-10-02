@@ -5,6 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "../hal/Imu.h"
 #include "../navigation/RideLog.h"
 #include "TripAccum.h"
 
@@ -81,6 +82,24 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // first fix is on their ride, and the metres they cover getting one are
     // theirs. The fix-validity check inside TripAccum_AddFix still applies.
     if (!RideLog_IsArmed()) {
+        return;
+    }
+
+    // ---- A parked bike covers no distance ----
+    //
+    // A stationary receiver wanders metres per sample, and TripAccum only
+    // rejects steps under TRIP_MIN_STEP_M (1m), so the wander walks straight
+    // into the odometer -- a bike left on a rack all afternoon gains
+    // kilometres it never rode.
+    //
+    // The IMU is the only thing that can tell that apart from a rider walking
+    // the bike slowly, which is why this is not simply a higher speed
+    // threshold (system/Stillness.h). The fix is NOT fed through at all while
+    // still, rather than fed and ignored, because TripAccum measures from the
+    // last fix it saw: feeding the drift would move its reference and the
+    // first real step after setting off would be measured from a position the
+    // bike was never at.
+    if (Imu_IsStill()) {
         return;
     }
 

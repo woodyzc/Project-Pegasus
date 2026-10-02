@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "../hal/Battery.h"
+#include "../hal/Imu.h"
 #include "../system/DataCenter.h"
 #include "../system/HrZone.h"
 #include "../system/PageManager/PageManager.h"
@@ -1211,7 +1212,10 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             // that has lost its fix still publishes, and its speed field is
             // meaningless once it has.
             if (gps.fix_valid) {
-                s_last_speed_kmh = gps.speed * 3.6f;
+                // A hard 0.0, not "--". The two say different things on this
+                // panel and must keep doing so: "--" means no fix, and a
+                // parked bike has a perfectly good fix and is doing zero.
+                s_last_speed_kmh = Imu_IsStill() ? 0.0f : (gps.speed * 3.6f);
                 s_has_speed = true;
                 s_gps_last_ms = lv_tick_get();
                 s_last_num_sv = gps.num_sv;
