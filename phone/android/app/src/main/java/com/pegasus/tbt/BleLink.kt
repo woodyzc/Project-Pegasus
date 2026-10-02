@@ -138,6 +138,20 @@ class BleLink(context: Context) {
      */
     private var negotiatedMtu = 23
 
+    /**
+     * Upload counters, for the failure message.
+     *
+     * "0 of n chunks" cannot say whether the writes were attempted, whether
+     * the stack took them, whether they completed, or whether anything came
+     * back -- and the head unit's own counter says it has never been written
+     * to at all. One of the two is wrong about something and these four
+     * numbers are what separate them.
+     */
+    private var wAttempt = 0
+    private var wAccept = 0
+    private var wDone = 0
+    private var nNotify = 0
+
     @Volatile
     var isConnected = false
         private set
@@ -213,6 +227,10 @@ class BleLink(context: Context) {
             report("Route needs MTU $needed, link has $negotiatedMtu")
             return
         }
+        wAttempt = 0
+        wAccept = 0
+        wDone = 0
+        nNotify = 0
         transfer = RouteTransfer(encoded.chunks)
         report("Sending route (${encoded.chunks.size} chunks)")
         pumpTransfer()
@@ -267,7 +285,9 @@ class BleLink(context: Context) {
      */
     private fun uploadFailureReport(t: RouteTransfer): String =
         "Route upload failed (${t.acknowledged} of ${t.totalChunks} chunks," +
-            " pass ${t.pass})"
+            " pass ${t.pass}) try=$wAttempt ok=$wAccept done=$wDone notif=$nNotify" +
+            " mtu=$negotiatedMtu conn=$isConnected chr=${routeCharacteristic != null}"
+
 
     private fun tickTransfer() {
         val t = transfer ?: return
@@ -284,12 +304,13 @@ class BleLink(context: Context) {
         chr: BluetoothGattCharacteristic,
         chunk: ByteArray,
     ): Boolean {
+        wAttempt++
         // WRITE_TYPE_DEFAULT, not NO_RESPONSE: a dropped route chunk is a
         // permanent hole, where a dropped turn is corrected a second later.
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             g.writeCharacteristic(
                 chr, chunk, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            ) == BluetoothGatt.GATT_SUCCESS
+            ) == BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
             run {
@@ -298,6 +319,8 @@ class BleLink(context: Context) {
                 g.writeCharacteristic(chr)
             }
         }
+        if (ok) wAccept++
+        return ok
     }
 
     private fun scanForDevice() {
@@ -465,6 +488,7 @@ class BleLink(context: Context) {
             // signal that the queue has room again. Without it the transfer
             // would move only at the stall timeout.
             if (chr.uuid == RouteFrame.ROUTE_CHARACTERISTIC_UUID) {
+                wDone++
                 handler.post(::pumpTransfer)
             }
         }
@@ -495,6 +519,7 @@ class BleLink(context: Context) {
 
     /** Four bytes: received u16, total u16, little-endian. */
     private fun handleStatus(value: ByteArray) {
+        nNotify++
         if (value.size < 4) return
         val received = (value[0].toInt() and 0xFF) or ((value[1].toInt() and 0xFF) shl 8)
 
