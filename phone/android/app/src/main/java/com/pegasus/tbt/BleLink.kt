@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -70,6 +71,17 @@ class BleLink(context: Context) {
          */
         const val ROUTE_MTU = 200
 
+        /**
+         * How long one connect-time GATT step may take before the chain gives
+         * up on it and moves on.
+         *
+         * The chain must never wedge: a head unit that simply never answers a
+         * descriptor write would otherwise leave the link permanently without
+         * an MTU and without a clock, and the only symptom would be route
+         * uploads failing at "0 of n".
+         */
+        const val SETUP_STEP_TIMEOUT_MS = 3000L
+
         /** How soon to try the clock again after the GATT queue refused it. */
         const val CLOCK_RETRY_MS = 2_000L
 
@@ -95,6 +107,36 @@ class BleLink(context: Context) {
     // RouteTransfer; this class only performs the writes and feeds back what
     // the head unit reports.
     private var transfer: RouteTransfer? = null
+
+    /**
+     * The connect-time GATT chain.
+     *
+     * ⚠️ Android runs ONE GATT operation at a time and silently drops any
+     * issued while another is outstanding -- no exception, no callback, no
+     * error anywhere. These two used to be fired back to back in
+     * onServicesDiscovered, so one of them was always lost:
+     *
+     *   - lose the MTU request and the link stays at 23 bytes, where every
+     *     186-byte route chunk is refused;
+     *   - lose the descriptor write and the head unit is never told to notify
+     *     progress, so every chunk may land and none is ever acknowledged.
+     *
+     * Both land on "Route upload failed (0 of n chunks)", and neither touches
+     * turns or alerts -- those are small enough for the default MTU and need
+     * nothing notified back -- which is exactly how this survived so long:
+     * navigation worked, so the link looked healthy.
+     *
+     * So the steps are chained, each started by the previous one's callback.
+     */
+    private var cccdPending = false
+    private var mtuPending = false
+
+    /**
+     * What the MTU exchange actually settled on, so a chunk that cannot fit
+     * is reported rather than written into a refusal. 23 is the ATT default
+     * and the value in force if the exchange never happened.
+     */
+    private var negotiatedMtu = 23
 
     @Volatile
     var isConnected = false
@@ -162,6 +204,15 @@ class BleLink(context: Context) {
      * upload would waste the link on geometry nobody will follow.
      */
     fun sendRoute(encoded: RouteFrame.Encoded) {
+        // A chunk write needs three bytes of ATT header on top of the frame.
+        // Checked here because the alternative is writing 186 bytes into a
+        // 23-byte MTU fifteen times and reporting "0 of 15 chunks", which
+        // says nothing about why.
+        val needed = RouteFrame.CHUNK_HEADER_LEN + RouteFrame.CHUNK_PAYLOAD + 3
+        if (negotiatedMtu < needed) {
+            report("Route needs MTU $needed, link has $negotiatedMtu")
+            return
+        }
         transfer = RouteTransfer(encoded.chunks)
         report("Sending route (${encoded.chunks.size} chunks)")
         pumpTransfer()
@@ -320,6 +371,12 @@ class BleLink(context: Context) {
                 gpsCharacteristic = null
                 alertCharacteristic = null
                 handler.removeCallbacks(clockTick)
+                // The chain does not survive the link: a callback for the old
+                // connection must not advance a new one's setup.
+                handler.removeCallbacks(setupWatchdog)
+                cccdPending = false
+                mtuPending = false
+                negotiatedMtu = 23
                 // The transfer survives the drop and resumes on reconnect --
                 // see RouteTransfer.onDisconnected, which deliberately does
                 // not spend one of its attempts on a reconnect.
@@ -356,35 +413,47 @@ class BleLink(context: Context) {
             isConnected = true
             report(if (routeCharacteristic != null) "Ready" else "Ready (no route support)")
 
-            statusCharacteristic?.let { subscribeToStatus(g, it) }
+            // Step one of the chain, and nothing else may be issued until its
+            // callback arrives. The MTU request follows from onDescriptorWrite
+            // and the clock from onMtuChanged; see cccdPending above for what
+            // happens when they are issued together instead.
+            cccdPending = statusCharacteristic?.let { subscribeToStatus(g, it) } ?: false
+            if (cccdPending) {
+                armSetupWatchdog()
+            } else {
+                // No status characteristic, or the write could not be issued.
+                // Either way there is nothing outstanding, so go straight on.
+                requestMtuStep(g)
+            }
+        }
 
-            // The clock is NOT sent here, though that is the obvious place.
-            // Android runs one GATT operation at a time and drops any issued
-            // while another is outstanding, and this method already starts two
-            // -- the descriptor write above and the MTU request below. A clock
-            // write wedged between them is discarded with no error, and the
-            // next attempt is five minutes away, so the panel sits at dashes
-            // for the whole of a short test. It goes in onMtuChanged instead,
-            // which is the last of the connect-time operations to finish.
-
-            // A larger MTU matters more now than it did for turns alone. A
-            // route chunk is 186 bytes on the wire, and at the 23-byte default
-            // every one of them would be rejected.
-            g.requestMtu(ROUTE_MTU)
+        override fun onDescriptorWrite(
+            g: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int,
+        ) {
+            if (descriptor.uuid != CCCD_UUID || !cccdPending) {
+                return
+            }
+            cccdPending = false
+            handler.removeCallbacks(setupWatchdog)
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                // Said out loud rather than swallowed: without the CCCD the
+                // head unit sends no progress and every upload ends at "0 of
+                // n" however well the chunks themselves go out.
+                report("Route progress unavailable (CCCD $status)")
+            }
+            requestMtuStep(g)
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-            // Only now is the link able to carry a full chunk, so a transfer
-            // queued before this point starts here.
-            if (transfer != null) {
-                handler.post(::pumpTransfer)
+            if (!mtuPending) {
+                return
             }
-            // And the last connect-time operation is done, so the queue is
-            // free for the clock. The head unit has no clock of its own until
-            // a GNSS module is fitted, and the point of sending one now rather
-            // than on the first timer tick is that the panel shows a time as
-            // soon as the link comes up.
-            handler.post { sendClock() }
+            mtuPending = false
+            handler.removeCallbacks(setupWatchdog)
+            negotiatedMtu = if (status == BluetoothGatt.GATT_SUCCESS) mtu else 23
+            finishConnectSetup()
         }
 
         override fun onCharacteristicWrite(
@@ -434,20 +503,95 @@ class BleLink(context: Context) {
         handler.post(::pumpTransfer)
     }
 
-    private fun subscribeToStatus(g: BluetoothGatt, chr: BluetoothGattCharacteristic) {
+    /**
+     * Returns true when a descriptor write was actually issued, and the
+     * caller must therefore wait for onDescriptorWrite before issuing
+     * anything else. False means nothing is outstanding and the chain can
+     * move on immediately.
+     *
+     * The return value is the point. Issuing this and then not knowing
+     * whether it is in flight is what let the MTU request be fired on top of
+     * it.
+     */
+    private fun subscribeToStatus(g: BluetoothGatt, chr: BluetoothGattCharacteristic): Boolean {
         g.setCharacteristicNotification(chr, true)
         // Enabling notifications locally is not enough: the descriptor write
         // is what tells the head unit to send them. Skipping it is a classic
         // silent failure -- everything looks connected and nothing arrives.
-        val cccd = chr.getDescriptor(CCCD_UUID) ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        val cccd = chr.getDescriptor(CCCD_UUID) ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) ==
+                BluetoothStatusCodes.SUCCESS
         } else {
             @Suppress("DEPRECATION")
             run {
                 cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                 g.writeDescriptor(cccd)
             }
+        }
+    }
+
+    /**
+     * Step two: ask for an MTU big enough to carry a route chunk.
+     *
+     * A route chunk is 186 bytes on the wire and the ATT default carries 20,
+     * so without this the route path cannot work at all -- while turns and
+     * alerts, which fit, carry on as though the link were healthy.
+     */
+    private fun requestMtuStep(g: BluetoothGatt) {
+        mtuPending = true
+        if (g.requestMtu(ROUTE_MTU)) {
+            armSetupWatchdog()
+        } else {
+            // Could not even be issued. Carry on at whatever MTU is in force
+            // rather than wedging the link: turns will work, and sendRoute()
+            // will say plainly why the route cannot.
+            mtuPending = false
+            report("MTU request refused")
+            finishConnectSetup()
+        }
+    }
+
+    /**
+     * Step three, once nothing is outstanding: the clock, and any transfer
+     * that was queued while the chain was still running.
+     *
+     * The head unit has no clock of its own until a GNSS module is fitted,
+     * and sending one here rather than on the first timer tick is what stops
+     * the panel sitting at dashes for the five minutes to the next tick.
+     */
+    private fun finishConnectSetup() {
+        if (transfer != null) {
+            handler.post(::pumpTransfer)
+        }
+        handler.post { sendClock() }
+    }
+
+    private fun armSetupWatchdog() {
+        handler.removeCallbacks(setupWatchdog)
+        handler.postDelayed(setupWatchdog, SETUP_STEP_TIMEOUT_MS)
+    }
+
+    /**
+     * Moves the chain on when a step's callback never arrives.
+     *
+     * A chain is only better than a race if it cannot stall. A head unit that
+     * accepts a descriptor write and never confirms it would otherwise leave
+     * the link with no MTU and no clock for ever.
+     */
+    private val setupWatchdog = Runnable {
+        val g = gatt
+        if (g == null) {
+            cccdPending = false
+            mtuPending = false
+        } else if (cccdPending) {
+            cccdPending = false
+            report("Status subscription unconfirmed; continuing")
+            requestMtuStep(g)
+        } else if (mtuPending) {
+            mtuPending = false
+            report("MTU exchange unconfirmed; continuing")
+            finishConnectSetup()
         }
     }
 
