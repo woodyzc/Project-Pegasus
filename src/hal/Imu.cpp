@@ -5,6 +5,7 @@
 #include <freertos/task.h>
 #include <math.h>
 
+#include "../system/GyroBias.h"
 #include "../system/Stillness.h"
 #include "SensorBus.h"
 
@@ -45,9 +46,11 @@ uint8_t s_who = 0;
 bool s_found = false;
 
 Stillness_t s_still;
+GyroBias_t s_bias;
 volatile float s_accel_g = 0.0f;
 volatile float s_gyro_dps = 0.0f;
 volatile bool s_is_still = false;
+volatile float s_bias_dps = 0.0f;
 
 // ⚠️ When the last read succeeded, and why that matters more than the value.
 //
@@ -85,10 +88,20 @@ void ImuTask(void *pv) {
             // Magnitudes, so no axis is privileged and the head unit can be
             // clamped to the bars at any angle. See Stillness.h.
             const float amag = sqrtf(ax * ax + ay * ay + az * az);
-            const float gmag = sqrtf(gx * gx + gy * gy + gz * gz);
+
+            // The gyro's zero-rate offset is removed first, and only while
+            // gravity says nothing is happening to the part -- the
+            // accelerometer is the reference the gyro cannot provide for
+            // itself (system/GyroBias.h). Without this the bench unit spends
+            // 3.2 of Stillness's 8 dps budget before the bike has moved, and
+            // a warmer part would spend all of it.
+            const float accel_quiet = fabsf(amag - 1.0f) <= STILL_ACCEL_TOL_G;
+            const float graw[3] = {gx, gy, gz};
+            const float gmag = GyroBias_Correct(&s_bias, graw, accel_quiet);
 
             s_accel_g = amag;
             s_gyro_dps = gmag;
+            s_bias_dps = GyroBias_MagnitudeDps(&s_bias);
             const uint32_t now = millis();
             s_is_still = Stillness_Feed(&s_still, amag, gmag, now);
             s_last_read_ms = now;
@@ -103,6 +116,7 @@ void ImuTask(void *pv) {
 void Imu_Init() {
     SensorBus_Begin();
     Stillness_Reset(&s_still);
+    GyroBias_Reset(&s_bias);
 
     if (SensorBus_Probe(ADDR_LOW)) {
         s_addr = ADDR_LOW;
@@ -163,6 +177,7 @@ bool Imu_Fresh() {
 }
 float Imu_AccelG() { return s_accel_g; }
 float Imu_GyroDps() { return s_gyro_dps; }
+float Imu_GyroBiasDps() { return s_bias_dps; }
 
 void Imu_StartMonitor() {
     if (!s_found) {

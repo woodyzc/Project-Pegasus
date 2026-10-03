@@ -66,4 +66,12 @@ bool Imu_Fresh();
 // at rest in any orientation) and rotation magnitude in degrees per second.
 // Both zero until the first read succeeds.
 float Imu_AccelG();
+
+// Rotation magnitude with the zero-rate offset already removed, which is what
+// the stillness test uses.
 float Imu_GyroDps();
+
+// The offset being subtracted, for the settings page. Watching this settle on
+// a resting board is how to tell the estimator is working; a figure that
+// climbs towards GYRO_BIAS_MAX_DPS is a part going wrong.
+float Imu_GyroBiasDps();

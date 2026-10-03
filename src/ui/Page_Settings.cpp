@@ -638,8 +638,8 @@ void InfoTimerCallback(lv_timer_t *timer) {
     if (s_imu_value != nullptr) {
         char buf[96];
         if (Imu_Found()) {
-            snprintf(buf, sizeof(buf), "0x%02X, %.2f g, %.1f dps, %s", (unsigned)Imu_Address(),
-                     (double)Imu_AccelG(), (double)Imu_GyroDps(),
+            snprintf(buf, sizeof(buf), "0x%02X, %.2f g, %.1f dps (b%.1f), %s", (unsigned)Imu_Address(),
+                     (double)Imu_AccelG(), (double)Imu_GyroDps(), (double)Imu_GyroBiasDps(),
                      !Imu_Fresh() ? "NO DATA" : (Imu_IsStill() ? "STILL" : "moving"));
         } else if (Imu_Address() != 0) {
             snprintf(buf, sizeof(buf), "0x%02X answered, id 0x%02X", (unsigned)Imu_Address(),
@@ -1343,8 +1343,8 @@ void PageSettings::onViewLoad() {
     // distinguishable from "fitted and always saying moving".
     {
     if (Imu_Found()) {
-        snprintf(buf, sizeof(buf), "0x%02X, %.2f g, %.1f dps, %s", (unsigned)Imu_Address(),
-                 (double)Imu_AccelG(), (double)Imu_GyroDps(),
+        snprintf(buf, sizeof(buf), "0x%02X, %.2f g, %.1f dps (b%.1f), %s", (unsigned)Imu_Address(),
+                 (double)Imu_AccelG(), (double)Imu_GyroDps(), (double)Imu_GyroBiasDps(),
                  !Imu_Fresh() ? "NO DATA" : (Imu_IsStill() ? "STILL" : "moving"));
     } else if (Imu_Address() != 0) {
         snprintf(buf, sizeof(buf), "0x%02X answered, id 0x%02X", (unsigned)Imu_Address(),
