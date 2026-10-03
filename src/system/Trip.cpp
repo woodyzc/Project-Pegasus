@@ -6,6 +6,7 @@
 #include <freertos/semphr.h>
 
 #include "../hal/Imu.h"
+#include "Stillness.h"
 #include "../navigation/RideLog.h"
 #include "TripAccum.h"
 
@@ -99,7 +100,7 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // last fix it saw: feeding the drift would move its reference and the
     // first real step after setting off would be measured from a position the
     // bike was never at.
-    if (Imu_IsStill()) {
+    if (Stillness_FixIsDrift(Imu_IsStill(), gps->speed)) {
         return;
     }
 

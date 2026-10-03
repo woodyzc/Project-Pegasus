@@ -7,6 +7,8 @@
 #include "../navigation/RideLog.h"
 #include "DataCenter.h"
 #include "../hal/Barometer.h"
+#include "../hal/Imu.h"
+#include "Stillness.h"
 #include "Ascent.h"
 #include "RideStatsCore.h"
 
@@ -68,7 +70,14 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
         // Unsigned, so a tick counter wrapping after 49 days still yields the
         // real interval rather than an enormous one.
         const double dt = (double)(uint32_t)(now - s_last_speed_ms) / 1000.0;
-        RideStatsCore_AddSpeed(&s_stats, gps->speed * 3.6f, dt);
+        // ⚠️ Fed as a real 0, not skipped. max_kmh updates from any plausible
+        // sample, so a single drift spike on a parked bike would inflate the
+        // ride's top speed permanently; and skipping instead of zeroing would
+        // leave a hole in the interval bookkeeping that the average is built
+        // from. A parked bike is genuinely doing zero.
+        const float kmh =
+            Stillness_FixIsDrift(Imu_IsStill(), gps->speed) ? 0.0f : (gps->speed * 3.6f);
+        RideStatsCore_AddSpeed(&s_stats, kmh, dt);
     }
     s_last_speed_ms = now;
     s_have_speed = true;
@@ -104,6 +113,14 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // total stops rising, deliberately: a visible failure beats reverting to a
     // source whose numbers mean something different and leaving one ride's
     // total built from two scales.
+    // A parked bike climbs nothing, whatever the weather is doing to the
+    // pressure. The band in Ascent rejects noise, not the slow drift of a
+    // front moving through, so a bike left armed on a rack for an afternoon
+    // would otherwise book the weather as elevation.
+    if (Stillness_FixIsDrift(Imu_IsStill(), gps->speed)) {
+        return;
+    }
+
     if (Barometer_Found()) {
         if (Barometer_AltitudeFresh()) {
             Ascent_Feed(&s_ascent, Barometer_AltitudeM(), now);

@@ -10,6 +10,7 @@
 #include "../hal/Display.h"
 #include "../hal/Imu.h"
 #include "LongPress.h"
+#include "Stillness.h"
 #include "../navigation/RideLog.h"
 #include "../sensors/BLE_HR_Client.h"
 #include "DataCenter.h"
@@ -146,7 +147,7 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // CPU never downclocks, and deep sleep is unreachable -- on a board left
     // on a desk with a view of the sky, which is where it spends its life
     // between rides.
-    if (Imu_IsStill()) {
+    if (Stillness_FixIsDrift(Imu_IsStill(), gps->speed)) {
         return;
     }
 

@@ -47,3 +47,12 @@ bool Stillness_Feed(Stillness_t *s, float accel_g_mag, float gyro_dps_mag, uint3
 }
 
 bool Stillness_IsStill(const Stillness_t *s) { return (s != NULL) && s->still; }
+
+bool Stillness_FixIsDrift(bool imu_still, float speed_mps) {
+    if (!imu_still) {
+        return false;
+    }
+    // Written to reject on false, so a NaN speed reads as "not drift" and
+    // gates nothing.
+    return speed_mps < STILL_MAX_DRIFT_MPS;
+}

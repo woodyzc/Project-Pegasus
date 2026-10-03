@@ -47,10 +47,20 @@ uint8_t Imu_WhoAmI();
 // found. Preconditions: Imu_Init() has run.
 void Imu_StartMonitor();
 
-// ⚠️ **False when no IMU is fitted, and that is the safe answer.** Every
-// consumer gates on "is it still" rather than "is it moving", so a board
-// without the part behaves exactly as it did before this existed.
+// ⚠️ **False when no IMU is fitted, and false once its readings go stale.**
+// Both are the safe answer: every consumer gates on "is it still" rather than
+// "is it moving", so a board without the part -- or with one that has stopped
+// answering -- behaves exactly as it did before this existed.
+//
+// The staleness half is not decoration. Without it a part that fell off the
+// bus while parked would leave "still" standing for the rest of the boot, and
+// a whole ride would record no distance at all with nothing on the panel to
+// say why.
 bool Imu_IsStill();
+
+// Whether the reading above is current at all. Shown on the settings page, so
+// "fitted but silent" is distinguishable from "fitted and saying moving".
+bool Imu_Fresh();
 
 // Last sample, for the settings page: acceleration magnitude in g (about 1.0
 // at rest in any orientation) and rotation magnitude in degrees per second.

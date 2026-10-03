@@ -69,6 +69,26 @@ extern "C" {
 // nothing but a second of drift nobody was watching.
 #define STILL_HOLD_MS 2000u
 
+// ⚠️ Above this speed the IMU's opinion is ignored and the receiver is
+// believed outright.
+//
+// Every consumer stops counting when told the bike is still, so the dangerous
+// mistake is a false "still" WHILE RIDING -- it stops the odometer mid-ride,
+// silently, and the rider finds out at the end. Road vibration makes that
+// unlikely, but "unlikely" is not a thing to hang a ride on.
+//
+// The ambiguity this detector exists to resolve only happens slowly: drift is
+// a metre or two per sample, and so is a rider walking a bike. At 7 km/h and
+// above there is nothing to resolve -- no receiver wanders that fast -- so the
+// IMU is simply not consulted, and no misreading can cost a ride.
+#define STILL_MAX_DRIFT_MPS 2.0f
+
+// Should this fix be treated as drift rather than travel?
+//
+// Takes both because neither is sufficient: the receiver cannot tell a parked
+// bike from a slow one, and the IMU must not be allowed to veto a fast one.
+bool Stillness_FixIsDrift(bool imu_still, float speed_mps);
+
 typedef struct {
     bool still;
     bool have;

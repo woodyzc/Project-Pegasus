@@ -640,7 +640,7 @@ void InfoTimerCallback(lv_timer_t *timer) {
         if (Imu_Found()) {
             snprintf(buf, sizeof(buf), "0x%02X, %.2f g, %.1f dps, %s", (unsigned)Imu_Address(),
                      (double)Imu_AccelG(), (double)Imu_GyroDps(),
-                     Imu_IsStill() ? "STILL" : "moving");
+                     !Imu_Fresh() ? "NO DATA" : (Imu_IsStill() ? "STILL" : "moving"));
         } else if (Imu_Address() != 0) {
             snprintf(buf, sizeof(buf), "0x%02X answered, id 0x%02X", (unsigned)Imu_Address(),
                      (unsigned)Imu_WhoAmI());
@@ -1344,7 +1344,8 @@ void PageSettings::onViewLoad() {
     {
     if (Imu_Found()) {
         snprintf(buf, sizeof(buf), "0x%02X, %.2f g, %.1f dps, %s", (unsigned)Imu_Address(),
-                 (double)Imu_AccelG(), (double)Imu_GyroDps(), Imu_IsStill() ? "STILL" : "moving");
+                 (double)Imu_AccelG(), (double)Imu_GyroDps(),
+                 !Imu_Fresh() ? "NO DATA" : (Imu_IsStill() ? "STILL" : "moving"));
     } else if (Imu_Address() != 0) {
         snprintf(buf, sizeof(buf), "0x%02X answered, id 0x%02X", (unsigned)Imu_Address(),
                  (unsigned)Imu_WhoAmI());

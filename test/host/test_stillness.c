@@ -168,6 +168,32 @@ static void test_tick_wrap(void) {
     printf("done\n");
 }
 
+static void test_fix_is_drift(void) {
+    printf("- the IMU is only consulted where the ambiguity is: ");
+
+    // Parked: both agree, and the fix is drift.
+    check(Stillness_FixIsDrift(true, 0.4f), "still and slow is drift");
+
+    // The case this whole detector exists for: a receiver wandering at a
+    // walking pace on a bike that is not moving.
+    check(Stillness_FixIsDrift(true, 1.5f), "still and wandering is still drift");
+
+    // ⚠️ The dangerous direction. Every consumer stops counting on a "drift"
+    // verdict, so a false "still" at riding speed would stop the odometer
+    // mid-ride and the rider would find out at the end. Above the ceiling the
+    // receiver is believed outright and no misreading can cost a ride.
+    check(!Stillness_FixIsDrift(true, 8.0f), "still but moving fast is NOT drift");
+    check(!Stillness_FixIsDrift(true, STILL_MAX_DRIFT_MPS), "exactly at the ceiling is not");
+
+    // And the IMU saying "moving" settles it at any speed.
+    check(!Stillness_FixIsDrift(false, 0.0f), "moving and stopped is not drift");
+    check(!Stillness_FixIsDrift(false, 20.0f), "moving and fast is not drift");
+
+    // A nonsense speed must gate nothing.
+    check(!Stillness_FixIsDrift(true, NAN), "NaN speed is not drift");
+    printf("done\n");
+}
+
 static void test_null_arguments(void) {
     printf("- null arguments: ");
     Stillness_Reset(NULL);
@@ -187,6 +213,7 @@ int main(void) {
     test_tolerances();
     test_nan_is_movement();
     test_tick_wrap();
+    test_fix_is_drift();
     test_null_arguments();
 
     printf("\nchecks: %d  failures: %d\n", checks, failures);

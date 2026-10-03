@@ -49,6 +49,25 @@ volatile float s_accel_g = 0.0f;
 volatile float s_gyro_dps = 0.0f;
 volatile bool s_is_still = false;
 
+// ⚠️ When the last read succeeded, and why that matters more than the value.
+//
+// s_is_still is only assigned on a successful transfer, so a part that stops
+// answering -- a loose jumper, which is exactly what the barometer did on
+// 2026-09-27 -- leaves the last verdict standing for the rest of the boot. If
+// that verdict was "still", and it usually would be because a parked bike is
+// when wires get disturbed, then every gate below stays shut: the odometer
+// records nothing, SPEED reads 0.0, and an entire ride is silently lost.
+//
+// A frozen reading is a wrong answer, not a missing one. Same rule as
+// Barometer_AltitudeFresh().
+volatile uint32_t s_last_read_ms = 0;
+volatile bool s_have_read = false;
+
+// Twenty missed samples at 50ms. Long enough that a single dropped transfer
+// does not flicker the gates, short enough to notice a disconnected part
+// while the bike is still in the owner's hands.
+constexpr uint32_t STALE_MS = 1000;
+
 int16_t Le16(const uint8_t *p) { return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8)); }
 
 void ImuTask(void *pv) {
@@ -70,7 +89,10 @@ void ImuTask(void *pv) {
 
             s_accel_g = amag;
             s_gyro_dps = gmag;
-            s_is_still = Stillness_Feed(&s_still, amag, gmag, millis());
+            const uint32_t now = millis();
+            s_is_still = Stillness_Feed(&s_still, amag, gmag, now);
+            s_last_read_ms = now;
+            s_have_read = true;
         }
         vTaskDelay(pdMS_TO_TICKS(SAMPLE_MS));
     }
@@ -134,7 +156,11 @@ void Imu_Init() {
 bool Imu_Found() { return s_found; }
 uint8_t Imu_Address() { return s_addr; }
 uint8_t Imu_WhoAmI() { return s_who; }
-bool Imu_IsStill() { return s_is_still; }
+bool Imu_IsStill() { return Imu_Fresh() && s_is_still; }
+
+bool Imu_Fresh() {
+    return s_have_read && ((uint32_t)(millis() - s_last_read_ms) <= STALE_MS);
+}
 float Imu_AccelG() { return s_accel_g; }
 float Imu_GyroDps() { return s_gyro_dps; }
 
