@@ -5,8 +5,10 @@
 #include <freertos/semphr.h>
 
 #include "../hal/Barometer.h"
+#include "../hal/Imu.h"
 #include "DataCenter.h"
 #include "Grade.h"
+#include "Stillness.h"
 
 namespace {
 
@@ -53,6 +55,25 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // frozen rise is a confident +0.0% on a climb. Blanking is the honest
     // answer (Barometer.h).
     if (!gps->fix_valid || !Barometer_AltitudeFresh()) {
+        Locked guard;
+        s_have_fix = false;
+        return;
+    }
+
+    // ⚠️ A parked bike must not accumulate run.
+    //
+    // This integrates distance from the reported speed, and a stationary
+    // receiver reports speed -- so without this the window fills with
+    // kilometres the bike never rode, and Grade divides barometric noise by
+    // that invented distance and shows a figure. The whole point of the
+    // stillness gating is that drift is not travel, and this was the one
+    // consumer of it that was missed.
+    //
+    // Treated as a dropped fix rather than merely skipped, for the same
+    // reason RideStats treats a disarmed ride that way: leaving the timestamp
+    // standing would make the first sample after setting off carry a dt of
+    // however long the bike was parked, and multiply the speed by it.
+    if (Stillness_FixIsDrift(Imu_IsStill(), gps->speed)) {
         Locked guard;
         s_have_fix = false;
         return;

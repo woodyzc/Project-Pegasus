@@ -95,7 +95,7 @@ void ImuTask(void *pv) {
             // itself (system/GyroBias.h). Without this the bench unit spends
             // 3.2 of Stillness's 8 dps budget before the bike has moved, and
             // a warmer part would spend all of it.
-            const float accel_quiet = fabsf(amag - 1.0f) <= STILL_ACCEL_TOL_G;
+            const bool accel_quiet = fabsf(amag - 1.0f) <= STILL_ACCEL_TOL_G;
             const float graw[3] = {gx, gy, gz};
             const float gmag = GyroBias_Correct(&s_bias, graw, accel_quiet);
 
