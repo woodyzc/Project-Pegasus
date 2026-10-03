@@ -83,19 +83,99 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - *Constraint (for the M10 when it lands)*: force UBX binary only; disable high-overhead NMEA text parsing.
   - *Power*: Retain micro-power RTC backup (~15μA) for <1s hot starts.
 - **Sensor I2C bus** — SDA 11 / SCL 10, separate from the touch bus, and untouched by firmware so far:
-  - **IMU** *(present, not yet driven)*: QMI8658 6-axis at `0x6B`. Motion detection, inclination/slope, anti-theft alarm, fall detection, Any-Motion wake.
-    - **This is the first board in the project with the hardware to produce a
-      grade at all.** INCLINE and ASCENT live on the dashboard's **second**
-      page; they shared a two-row ELEVATION cell on the first page until
-      cadence took that cell on 2026-09-20, which cost nothing at the time
-      precisely because no board had an IMU. That is no longer true, so
-      whether INCLINE deserves the first page again is now a real question
-      rather than a moot one.
+  - **IMU**: QMI8658 6-axis at `0x6B`, driven since 2026-10-01 (`src/hal/Imu.h`).
+    It does **one** job: deciding whether the bike is moving at all, so the
+    consumers of a wandering position can ignore the wander. Everything else
+    the spec listed for it is either better done elsewhere or not possible
+    here.
+    - **It does NOT supply the grade, and should not.** An accelerometer
+      measures specific force and cannot separate gravity from the rider's own
+      acceleration: pulling away from a light at 1 m/s² tilts the apparent
+      vertical by `atan(1/9.81)`, which reads as a **10% climb on flat
+      ground**. INCLINE comes from the barometer instead — rise over run, via
+      `src/system/Grade.h` — which has none of those failure modes and is what
+      every commercial head unit does. The IMU is worth adding back only as
+      the *fast* half of a pair, with the barometric figure as its drift
+      reference, and that buys responsiveness rather than correctness.
+    - ⚠️ **Any-Motion wake is not available on this board.** The part has
+      interrupt lines; they are not brought out to a GPIO. Waveshare's own
+      driver assigns no pin to them and polls, and §2's pin budget accounts
+      for everything except 15 and 18. So anti-theft-in-standby and
+      wake-on-motion are off the table — all three need to wake a sleeping
+      chip, and nothing can.
+    - **A stationary receiver is the problem it solves.** It wanders metres
+      per sample, and that reached four consumers which each read it as
+      travel: SPEED, the odometer, the climb total and the idle timer. See
+      `src/system/Stillness.h`, which also explains why this is not simply a
+      higher speed threshold — a threshold must choose between swallowing
+      drift and swallowing a rider walking the bike at 0.8 m/s, and only the
+      IMU can tell those apart.
+    - ⚠️ **The IMU is consulted only below `STILL_MAX_DRIFT_MPS` (7 km/h).**
+      Every consumer *stops counting* on a "still" verdict, so the dangerous
+      mistake is a false "still" while riding: it stops the odometer mid-ride,
+      silently, and the rider finds out at the end. Above walking pace there
+      is nothing to resolve — no receiver wanders that fast — so the receiver
+      is believed outright and no misreading can cost a ride.
+    - INCLINE and ASCENT live on the dashboard's **second** page, where cadence
+      pushed them on 2026-09-20. Now that INCLINE has a real source, whether it
+      deserves the first page back is a live question rather than a moot one.
+  - **Barometer** (added by the owner, not onboard): BMP580 at `0x47` on the
+    same bus, driven since 2026-09-26. It is the source for ASCENT and for
+    INCLINE. A receiver's altitude is its weakest axis — metres of wander on a
+    good fix — and `Ascent.h`'s band exists to reject exactly that, at the
+    cost of discarding every climb smaller than itself. The BMP580 resolves
+    centimetres of *change*, so the band drops to a metre and small hills
+    start counting. The tuning travels with the source
+    (`Ascent_ResetFor`); mixing the two scales in one ride's total is the
+    failure that split is there to prevent.
+    - ⚠️ **The dominant error is moving air, not sensor noise.** 10 m/s of
+      dynamic pressure is 60 Pa, which is 5m of apparent altitude. No
+      firmware can fix that — it is a case and port question — but it is why
+      the part's own IIR filter is enabled (the sampler reads at 2Hz, so
+      anything above 1Hz would otherwise alias into the band a climb lives
+      in) and why `Grade.h` needs 30m of run before it will divide.
+    - Enabling that filter turned up two bugs in this driver's own first
+      version: the ODR was set to `0x1A` under a comment claiming ~5Hz, and
+      `0x1A` is `BMP5_ODR_03_HZ` — 3Hz; and `deep_dis` was never set, which
+      Bosch states makes the power mode invalid once the IIR is not bypassed.
+      Both found by reading `bmp5_defs.h` rather than trusting the comments.
+    - ⚠️ The IIR output only reaches the data registers if `shdw_set_iir_p`
+      is set, and the IIR registers are writable **only in standby**. Get
+      either wrong and the filter runs correctly while every read returns the
+      unfiltered sample — no error, no symptom. The configuration is read back
+      and the settings page says `IIR` or `no IIR`, because that is the only
+      way to know it took on real silicon.
   - **RTC** *(present, not yet driven)*: PCF85063 at `0x51`, battery-backed. Note `TimeZone.c` derives the zone from GNSS coordinates and the clock is fed from the fix, so this would buy time across a flat battery, not first-fix speed.
 - **Storage**: microSD on **SDIO, 1-bit only** — CLK 14, CMD 17, D0 16. GPIO21 is *not* a data line: it is a plain enable that firmware must drive high before the card answers. `SD_MMC`, never the SPI `SD` library.
 - **Power & Control**:
-  - **Power latch on GPIO7 — load-bearing.** On battery the rail is held up by a soft latch, and it stays up only because firmware drives GPIO7 high. `BoardPower_Init()` is the first line of `setup()` for this reason. Invisible on USB, where the host holds the rail up regardless; it bites the first time the cable comes out. Driving it low is what powers the board off.
-  - Power key on GPIO6 *(present, not yet driven)*: the vendor reads it for long-press sleep / restart / shutdown. Until that lands there is **no software path to switch this board off**.
+  - **Power latch on GPIO7 — load-bearing.** The rail is held up by a soft latch, and it stays up only because firmware drives GPIO7 high. `BoardPower_Init()` is the first line of `setup()` for this reason. Driving it low is what powers the board off.
+    - ⚠️ **USB does NOT hold the rail up on this board**, whatever this entry
+      used to say. Proved on the bench 2026-10-02: pressing reset switches the
+      board off *while plugged in*, because reset releases GPIO7 and the latch
+      opens. The mistaken belief that USB masked this is what made the
+      deep-sleep latch bug look battery-only in the branch review — see §8.
+    - A powered-off board does not enumerate its USB-Serial-JTAG, so "no
+      `/dev/cu.usbmodem*`" usually means the board is off, not that the cable
+      is bad.
+  - **Power key on GPIO6 — hold 1.5s to switch off** (2026-10-02, verified on
+    hardware). Active low, read in `PowerManager`'s timer rather than in
+    `hal/BoardPower` because switching off is a teardown, not a pin: the ride
+    file is closed through its own writer task, the BLE peer is told, the card
+    unmounted, and only then is the latch opened. One button for both, since
+    pressing it already brings the rail up in hardware.
+    - ⚠️ **The detector starts DISARMED while the key is held.** The board is
+      switched on with this same button, so firmware begins watching the pin
+      with the rider's thumb still on it; without the disarm it would power
+      itself off a second and a half after every boot. `src/system/LongPress.h`
+      is pure and host-tested for exactly this reason — it fires the power-off
+      path, so firing twice or firing spuriously switches the board off under
+      the rider.
+    - **Reset still cuts power and always will.** Pulling `EN` low stops the
+      chip, GPIO7 goes high-impedance and the latch opens; no firmware is
+      running to prevent it. What that skips is the BLE goodbye, and §3
+      records what that costs: a peer that still believes the link is up stops
+      advertising, and on the owner's Galaxy Watch 8 the only cure was
+      switching broadcasting off at the watch. Use the key, not reset.
   - Battery sense on **GPIO8 through a 3:1 divider** (the stand-in's was 2:1), with a ~0.99 trim the vendor applies. Target ~200μA standby in Deep Sleep (5–6 months on 1000mAh).
 - **Audio Output** *(present, not yet driven)*: onboard PCM5101 I2S decoder & speaker — DOUT 47, BCLK 48, LRCK/WS 38 — for key clicks, off-route alerts, and turn prompts.
 
@@ -254,10 +334,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     for a bench reason as well as that one: a sleeping board's
     USB-Serial-JTAG is powered down with the rest of the digital domain, so the
     port disappears and it cannot be flashed until something wakes it.
-    IMU-based motion detection is still absent — but on this board that is an
-    omission rather than a hardware limit: the QMI8658 is on the sensor bus
-    (§2) waiting to be driven, and it would also make a wake source that does
-    not depend on the touch controller at all.
+  - Task 4: the QMI8658, sampling at 20Hz to decide whether the bike is moving
+    (`src/hal/Imu.h`). ⚠️ It is **not** a wake source and cannot become one:
+    the part's interrupt lines are not brought out to a GPIO on this board
+    (§2), so motion wake needs the CPU awake to poll, which defeats the point.
+  - Task 5: the BMP580 barometer, 2Hz (`src/hal/Barometer.h`), feeding both
+    ASCENT and INCLINE.
+  - ⚠️ Tasks 4 and 5 share one I2C bus, which is why `src/hal/SensorBus.h`
+    exists. The lock used to live inside `Barometer.cpp`, where it was
+    file-private and so guarded nothing the moment a second driver appeared;
+    it moved out **before** the IMU landed rather than after.
 - **Core 1 (UI & Life Cycle Core)**:
   - Task 1: LVGL rendering loop (`lv_timer_handler()`).
   - Task 2: X-TRACK `PageManager` life cycle management.
@@ -505,17 +591,37 @@ These were each discovered the slow way. They are not optional trivia.
   a first fix), a finished ride sleeps after five minutes, and a device that
   has recorded nothing waits thirty — because it has been told nothing and may
   be waiting on a rider who has not started yet.
-- **Deep sleep and its wake source work.** Verified 2026-09-17: the board
-  slept overnight on USB, a touch woke it, and the panel read `Last reset:
-  Deep sleep (boot 8)` with the card remounted and the PSRAM buffers back.
-  That one line proves the whole chain, including the `gpio_hold_en` on
-  `TOUCH_RST_PIN` in `EnterSleep()` — without it the ESP32 releases every
-  non-RTC pin on the way down, resets the touch controller, and nothing is left
-  to pull the interrupt line. That hold had only ever been reasoned about.
+- ⚠️ **Deep sleep "works" was proven on the STAND-IN, and that proof does not
+  carry.** 2026-09-17 on the Hosyond: slept overnight on USB, a touch woke it,
+  `Last reset: Deep sleep (boot 8)`, card remounted, PSRAM buffers back. That
+  settles the ESP32 half of the chain and nothing else.
 
-  It also proves the USB gate really was dead weight: the board was plugged in
-  the whole time and slept anyway, which is exactly what removing that gate was
-  meant to allow.
+  **Read what it could not see.** It was measured on USB, and on the Waveshare
+  the rail is held by the GPIO7 latch *even when plugged in* (§2, proved
+  2026-10-02 by pressing reset while connected). `EnterSleep()` held
+  `TOUCH_RST_PIN` and not `PWR_LATCH_PIN`, so on this board deep sleep was not
+  a sleep at all — it was a power-off, with no wake source able to recover it.
+  A branch review found that in September and called it battery-only, because
+  this entry told it USB masked the fault. It did not.
+
+  Three fixes went in on 2026-10-01 and **none has been exercised**: the latch
+  hold, an `rtc_gpio_pullup_en()` on the touch INT (ext0 waits for a LOW and
+  the open-drain line was *measured* floating low during bring-up, so a held
+  latch plus a floating INT is an instant wake, for ever), and
+  `gpio_hold_dis()` on both pins at the next boot.
+
+  That last one is the subtle one: **a hold does not end at wake-up.** The pad
+  stays frozen at its held level for the rest of the boot and silently ignores
+  `pinMode` and `digitalWrite`. Both pins are held at the level the next boot
+  wants, so nothing breaks immediately — what breaks is anything that later
+  needs to CHANGE them. `TOUCH_RST_PIN` frozen high means `Touch_Init()`'s
+  reset pulse never drives the line low, and touch is the only wake source;
+  `PWR_LATCH_PIN` frozen high means the power-off path does nothing.
+
+  **So the first real battery sleep has three distinct ways to fail, each
+  pointing somewhere different:** board powers off entirely (latch hold),
+  screen wakes itself repeatedly (INT pull-up), touch dead after waking
+  (hold release).
 - **`PrepareForSleep()` unmounts the card without closing the ride file, and
   gets away with it only because of the sleep gate.** `SD_MMC.end()` runs with
   the writer task still alive and nothing closing anything — safe today purely
@@ -623,6 +729,39 @@ These were each discovered the slow way. They are not optional trivia.
   setCallbacks` takes no ownership and needs no flag, and
   `NimBLEClient::setClientCallbacks` has the same defaulted trap as the server.
   Two near-identical APIs where one owns its argument and one does not.
+- **A "0 of n chunks" route upload was the head unit failing to say it had
+  succeeded.** Two days of symptoms, one cause each side, and the firmware was
+  blameless for the one that mattered.
+
+  `NavRoute_Progress` describes the *staging* area, and `FinishTransfer()`
+  tears the staging area down — so the chunk that COMPLETES a transfer is the
+  one whose notification answers 0/0. From the phone that reads as the count
+  collapsing from n-1 to zero, so it starts another pass; the head unit
+  accepts the whole route again, finishes again, reports 0 again. Five passes,
+  then "upload failed" for a transfer that had loaded the route five times.
+  That is why the route appeared on the panel while the app insisted it had
+  not been sent, and why the built-in test loop failed exactly like a
+  Mapbox-planned one — it was never about route content.
+
+  **The lesson that outlives it:** a completed operation must still be able to
+  report itself completed, after the state it was reported from is gone.
+
+- **An info row built in `onViewLoad()` is frozen for the whole boot.** §8
+  already says PageManager caches a page; the trap is worth naming separately
+  for *diagnostics*, because a diagnostic exists to be read while something is
+  going wrong, which is always later than page-build time. A freshly added
+  "Route RX" row read `0 writes` on a board that had just drawn a route, and
+  that very nearly sent a hunt off after a second, non-existent fault. Live
+  rows go in `InfoTimerCallback` beside the link rows, not in the builder.
+
+- **The dev phone (ColorOS / OnePlus) suppresses third-party app logs
+  entirely.** `adb logcat` shows the framework's own lines from the app's PID
+  — `BluetoothGatt`, `HWUI` — and not one `Log.i` the app itself writes. So an
+  Android-side problem gets diagnosed the same way the firmware does: put the
+  numbers on the screen. The app's upload-failure line now carries
+  try/ok/done/notif counts, the MTU and the connection state for exactly that
+  reason, and that is what finally located the bug above.
+
 - **The board records its own crashes, and you can read them.** Serial is
   unusable (above), but `esp_reset_reason()` now surfaces on the Settings page,
   and the `coredump` partition at `0xFF0000` holds a full ELF core dump written
@@ -837,6 +976,19 @@ notification stream — notification access is one grant, so a second listener
 service would need its own. `AlertClassifier` and `AlertThrottle` hold every
 rule and are pure and unit-tested; `MapsNotificationListener` only reads fields
 and passes them on.
+
+⚠️ **Android runs ONE GATT operation at a time and silently drops any issued
+while another is outstanding** — no exception, no callback, nothing logged.
+`onServicesDiscovered` used to fire the CCCD descriptor write and
+`requestMtu()` back to back, so one of them was always lost. Lose the MTU and
+the link stays at 23 bytes where a 186-byte route chunk cannot go; lose the
+descriptor and the head unit is never told to notify progress, so every chunk
+can land and none is ever acknowledged. Both report "0 of n". Neither touches
+turns or alerts, which fit the default MTU and need nothing notified back —
+which is why navigation worked perfectly while the route path could not work
+at all. The steps are now chained, each started by the previous one's
+callback, with a 3s watchdog so chaining cannot wedge what a race merely
+degraded.
 
 **The firmware headers are the authorities on the wire formats**, and the app's
 `TbtFrame.kt`, `RouteFrame.kt` and `AlertFrame.kt` are encoders for
