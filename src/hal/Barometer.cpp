@@ -18,7 +18,6 @@ constexpr uint8_t ADDR_LOW = 0x46;
 // ---- Registers, from boschsensortec/BMP5_SensorAPI ----
 constexpr uint8_t REG_CHIP_ID = 0x01;
 constexpr uint8_t REG_TEMP_XLSB = 0x1D; // 0x1D..0x1F temp, 0x20..0x22 press
-constexpr uint8_t REG_STATUS = 0x28;
 constexpr uint8_t REG_DSP_CONFIG = 0x30;
 constexpr uint8_t REG_DSP_IIR = 0x31;
 constexpr uint8_t REG_OSR_CONFIG = 0x36;
@@ -27,7 +26,6 @@ constexpr uint8_t REG_ODR_CONFIG = 0x37;
 constexpr uint8_t CHIP_ID_PRIM = 0x50;
 constexpr uint8_t CHIP_ID_SEC = 0x51;
 
-constexpr uint8_t STATUS_NVM_RDY = 0x02;
 
 // OSR_CONFIG: bit 6 enables pressure, bits 3..5 are its oversampling, bits
 // 0..2 the temperature's. Pressure measurement is OFF by default -- without
@@ -175,27 +173,31 @@ void Barometer_Init() {
         return; // something is there; it is not this sensor. Keep the id to show.
     }
 
-    // Wait for the NVM copy to finish. Configuring through it leaves the
-    // trim registers half-loaded and the readings quietly wrong.
-    bool nvm_ready = false;
-    for (int i = 0; i < 20 && !nvm_ready; i++) {
-        uint8_t status = 0;
-        if (ReadRegs(REG_STATUS, &status, 1) && (status & STATUS_NVM_RDY)) {
-            nvm_ready = true;
-            break;
-        }
-        delay(5);
-    }
-    if (!nvm_ready) {
-        // Acted on rather than merely warned about. The loop used to fall
-        // through and configure anyway, which contradicted the comment above
-        // it -- and a part that has not finished its NVM copy after 100ms is
-        // not a part to then write configuration into. Leaving s_found false
-        // puts "found but not reading" on the panel, which is a diagnosable
-        // state; configuring through it produces readings that are quietly
-        // wrong, which is not.
-        return;
-    }
+    // ⚠️ There is deliberately NO wait for NVM here, and the wait that used to
+    // be is worth describing because it broke the sensor on 2026-10-04.
+    //
+    // It polled STATUS (0x28) for BMP5_INT_NVM_RDY (0x02) and then fell
+    // through regardless. Three things were wrong with it:
+    //
+    //   * that bit lives in INT_STATUS (0x27), not STATUS, so the poll could
+    //     never see it and always ran its full 100ms;
+    //   * Bosch uses it around NVM *programming* operations, not as a
+    //     boot-time gate -- their own bmp5_init does not wait on anything of
+    //     the kind;
+    //   * and its justification, "configuring through an incomplete NVM copy
+    //     leaves the trim registers half-loaded", described a part this is
+    //     not. The BMP580 compensates on-chip; there are no trim coefficients
+    //     to load, as this driver's own header says two screens up.
+    //
+    // It was harmless only because it fell through. A review observed that
+    // the code ignored its own warning, the warning was taken at face value,
+    // and returning on the timeout disabled a working barometer outright --
+    // the panel went to "0x47 answered, chip id 0x50". A comment that is
+    // wrong is worse than no comment, because someone eventually believes it.
+    //
+    // The datasheet's actual requirement after power-up is a couple of
+    // milliseconds (BMP5_DELAY_US_SOFT_RESET is 2000us). That is all this is.
+    delay(3);
 
     // Oversampling before power mode: the part latches this configuration
     // when it enters normal mode.
