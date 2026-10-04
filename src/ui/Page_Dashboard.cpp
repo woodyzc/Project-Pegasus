@@ -1819,12 +1819,17 @@ void PageDashboard::onViewWillAppear() {
     // snap back to its own framing the moment the big one is closed.
     if (s_nav_is_map) {
         MapView_RestoreCamera(&s_map_view);
+        MapView_SetCameraOwner(&s_map_view, true);
         RoadView_Refresh();
     }
 }
 
 void PageDashboard::onViewDidDisappear() {
     if (s_nav_is_map) {
+        // Hand the camera over before this page's refresh timer -- which
+        // outlives its visibility, because the page is cached -- starts
+        // redrawing a tile nobody can see.
+        MapView_SetCameraOwner(&s_map_view, false);
         MapView_SaveCamera(&s_map_view);
     }
 }

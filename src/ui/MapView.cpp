@@ -201,6 +201,9 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->have_done_src = false;
     view->done_src_track_points = 0;
     view->done_src_track_name[0] = '\0';
+    // Claimed on appear, never by default: a view nobody is looking at must
+    // not own the camera.
+    view->camera_owner = false;
 
     view->container = lv_obj_create(parent);
     // Not scrollable, and this is what made swipes on the dashboard fail.
@@ -395,7 +398,12 @@ void MapView_Redraw(MapView_t *view) {
     // Nothing below this line touches the camera -- Redraw only reads it and
     // writes pixels -- so the top is as current as the bottom and reachable
     // from every path.
-    MapView_SaveCamera(view);
+    // Gated: a hidden view still redraws (the dashboard's timer outlives its
+    // own visibility, because the page is cached) and must not write the
+    // camera the visible one owns. See MapView_t::camera_owner.
+    if (view->camera_owner) {
+        MapView_SaveCamera(view);
+    }
 
     if (!view->have_center || GpxTrack_PointCount() == 0) {
         lv_line_set_points(view->trail, view->points, 0);
@@ -681,6 +689,12 @@ double s_cam_lon = 0.0;
 bool s_cam_have_centre = false; // ...and a centre with it
 
 } // namespace
+
+void MapView_SetCameraOwner(MapView_t *view, bool owner) {
+    if (view != nullptr) {
+        view->camera_owner = owner;
+    }
+}
 
 void MapView_SaveCamera(const MapView_t *view) {
     if (view == nullptr) {

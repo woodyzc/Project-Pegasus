@@ -655,6 +655,7 @@ void PageMap::onViewLoad() {
         // dashboard's map, going back and enlarging it again would throw the
         // rider's own framing away and refit, which reads as the map resetting
         // itself for no reason.
+        MapView_SetCameraOwner(&s_view, true);
         if (!MapView_RestoreCamera(&s_view)) {
             // First look of the boot: the whole trail, rather than an
             // arbitrary zoom on a corner of it.
@@ -684,6 +685,7 @@ void Page_Map_ClosePickerForTest() {
 }
 
 void PageMap::onViewUnload() {
+    MapView_SetCameraOwner(&s_view, false);
     // No camera save here any more: MapView_Redraw does it on every change, so
     // by the time this runs the camera is already whatever the rider left the
     // map looking at. Saving here as well was not merely redundant, it ran too

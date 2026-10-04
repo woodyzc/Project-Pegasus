@@ -54,6 +54,21 @@ typedef struct {
     double fix_lon;
     bool have_fix;
 
+    // ⚠️ Whether this view's redraws may write the shared camera.
+    //
+    // There are two MapViews -- the dashboard's tile and the ROUTE page's
+    // full screen -- and one saved camera between them. MapView_Redraw saves
+    // on every pass, which is deliberate (see the note at the save), but the
+    // dashboard's refresh timer is created in onViewLoad and the page is
+    // CACHED, so that timer keeps running while the route page is on top.
+    // Every fix therefore redrew the hidden dashboard tile and overwrote the
+    // camera the rider was actively zooming.
+    //
+    // The symptom was zoom "sometimes" reverting on leaving the map: it
+    // depended on whether a fix landed between the rider's last zoom and
+    // their exit.
+    bool camera_owner;
+
     // ⚠️ Progress along the SOURCE track, and it only ever moves forward.
     //
     // The ridden/ahead split used to be recomputed from scratch every redraw
@@ -150,6 +165,11 @@ bool MapView_IsManual(const MapView_t *view);
 // keeps the two in step. The scale travels as metres per pixel, which means
 // the same thing in a 184px tile and a 262px page; the taller one simply shows
 // more of the same ground.
+// Only the view the rider is actually looking at may write the shared camera
+// from its redraws. Set on appear, cleared on disappear; explicit
+// MapView_SaveCamera calls are unaffected.
+void MapView_SetCameraOwner(MapView_t *view, bool owner);
+
 void MapView_SaveCamera(const MapView_t *view);
 
 // Applies the saved camera. False when nothing has been saved yet, which is
