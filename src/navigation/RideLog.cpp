@@ -8,6 +8,7 @@
 #include <freertos/queue.h>
 #include <freertos/task.h>
 
+#include "../hal/Barometer.h"
 #include "../hal/Imu.h"
 #include "../system/DataCenter.h"
 #include "../system/Stillness.h"
@@ -635,7 +636,35 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     RideLogPoint_t point;
     point.lat = gps->lat;
     point.lon = gps->lon;
-    point.alt = gps->alt;
+    // ⚠️ The barometer, when one is fitted -- not the receiver.
+    //
+    // A receiver's altitude is its weakest axis, and the 2026-10-03 ride is
+    // the proof: the file opens at 33.8m and reaches 133.5m ninety seconds
+    // later, while the rider was still setting off. That is the vertical
+    // solution converging as satellites locked, and it invented 107m of the
+    // 671m the file totals. The barometer was reading ~104m at the same spot.
+    //
+    // It also made the file disagree with the device: ASCENT is computed from
+    // the BMP580, so the panel and the recording were describing one quantity
+    // from two sources. Whichever is better, they must not be different.
+    //
+    // ⚠️ One scale for the whole file, which is why this asks Found() rather
+    // than AltitudeFresh(). A sensor that dies mid-ride leaves the altitude
+    // frozen -- visible as a flat line, and diagnosable -- where falling back
+    // to the receiver would splice two references into one elevation profile
+    // with nothing in the file to say where the join is. Same reasoning as
+    // RideStats, and the same conclusion.
+    //
+    // HaveAltitude() rather than nothing, for the one case it exists for: a
+    // barometer found but not yet read would otherwise write 0m into the
+    // opening points.
+    //
+    // The trade taken knowingly: barometric height is referenced to the
+    // standard atmosphere, so it moves with the weather and two rides a week
+    // apart will not agree on the height of the same hill. Within one ride it
+    // is consistent, and consistency is what an elevation profile and a climb
+    // total are made of.
+    point.alt = (Barometer_Found() && Barometer_HaveAltitude()) ? Barometer_AltitudeM() : gps->alt;
     point.has_time = gps->time_valid;
     point.year = gps->year;
     point.month = gps->month;
