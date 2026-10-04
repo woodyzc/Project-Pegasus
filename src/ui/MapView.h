@@ -69,6 +69,17 @@ typedef struct {
     // their exit.
     bool camera_owner;
 
+    // What the last Redraw actually put on screen, so the overlay callback can
+    // decorate the same geometry rather than recomputing it. Chevrons go on
+    // the stretch still to ride, which is [ahead_from, count).
+    size_t drawn_count;
+    size_t drawn_ahead_from;
+
+    // Scale bar, chosen by MapScale_Choose each Redraw. Zero hides it, which
+    // is what an unusable scale should do rather than drawing a bar that lies.
+    int scale_px;
+    lv_obj_t *scale_label;
+
     // ⚠️ Progress along the SOURCE track, and it only ever moves forward.
     //
     // The ridden/ahead split used to be recomputed from scratch every redraw

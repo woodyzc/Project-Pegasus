@@ -1,6 +1,9 @@
 #include "MapView.h"
 
+#include <math.h>
 #include <string.h>
+
+#include "../navigation/MapScale.h"
 
 // How far off the line a fix may be and still count as progress along it.
 // Generous: a 240px panel at a usable zoom is wider than this, and the point
@@ -9,9 +12,6 @@
 #ifndef MAP_DONE_MAX_OFFTRACK_M
 #define MAP_DONE_MAX_OFFTRACK_M 200.0
 #endif
-
-
-#include <math.h>
 #include <stdint.h>
 
 #include "../navigation/GpxTrack.h"
@@ -22,18 +22,42 @@ namespace {
 constexpr uint32_t COLOR_MAP_BG = 0x0B1116;
 // The trail, in two colours: what is behind the rider and what is ahead.
 //
-// Green ahead and amber behind rather than the other way round. The part that
-// matters at a glance is the part still to ride, and green reads as "this way"
-// where amber reads as a mark left behind -- which is what it is.
-constexpr uint32_t COLOR_TRAIL_DONE = 0xFFD166;
-constexpr uint32_t COLOR_TRAIL_AHEAD = 0x7CE38B;
+// Magenta ahead, grey behind. The magenta is the convention every other head
+// unit uses for a planned route -- Garmin and Wahoo both -- and conventions
+// are worth adopting for exactly the reason §8 gives for the red REC dot: a
+// panel read in a fifth of a second is better served by a learned cue than by
+// a reasoned one.
+//
+// It replaces green-ahead/amber-behind, which was reasoned and fine, but
+// which spent two saturated colours on one object. Grey behind says "done"
+// without competing, and frees amber for things that actually want attention.
+constexpr uint32_t COLOR_TRAIL_DONE = 0x6B7680;
+constexpr uint32_t COLOR_TRAIL_AHEAD = 0xF02D9B;
+
+// Direction chevrons, laid along the stretch still to ride. White, because
+// they sit ON the magenta and have to read at 7px.
+constexpr uint32_t COLOR_CHEVRON = 0xFFFFFF;
+
+// Pixels between chevrons along the drawn line. Close enough that a junction
+// always has one near it, far enough that the route still reads as a line
+// rather than a dotted one.
+constexpr double CHEVRON_SPACING_PX = 34.0;
+constexpr double CHEVRON_LEN_PX = 7.0;
+constexpr double CHEVRON_HALF_W_PX = 4.5;
+
+// The scale bar and the north arrow live in opposite corners, out of the way
+// of the rider marker which sits at the centre when the map is following.
+constexpr uint32_t COLOR_HUD = 0xC8D2DC;
+constexpr lv_coord_t HUD_MARGIN_PX = 6;
+constexpr lv_coord_t SCALE_MAX_PX = 74;
+constexpr lv_coord_t NORTH_RADIUS_PX = 9;
 
 constexpr uint32_t COLOR_MARKER = 0x61DAFB;
 
 // Outlined in the map's own background colour, so the marker keeps a hard
 // edge wherever it sits. It is drawn ON TOP of the route and the roads, and
-// every one of those is light -- white-grey streets, green and amber trail --
-// so a cyan triangle laid directly on them loses its shape at exactly the
+// every one of those is light -- white-grey streets, magenta route, white
+// chevrons -- so a cyan triangle laid directly on them loses its shape at the
 // moment it matters, which is when the rider is on the line they are
 // following. Dark separates it from all of them at once. Over bare map this
 // outline is invisible, which is the correct behaviour rather than a flaw.
@@ -63,21 +87,17 @@ constexpr double MARKER_RADIUS = 14.0;
 // three points; scanline-filling it here costs ~22 rect draws at 1Hz and no
 // memory at all. RoadView draws its whole road network this way for the same
 // reason.
-void MarkerDrawCb(lv_event_t *e) {
-    lv_obj_t *obj = lv_event_get_target(e);
-    MapView_t *view = (MapView_t *)lv_obj_get_user_data(obj);
-    if (view == nullptr) {
-        return;
-    }
-    lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
-
-    lv_area_t area;
-    lv_obj_get_coords(obj, &area);
-
-    // marker_points[0..2] are the corners; [3] repeats [0] to close the
-    // outline stroke below.
-    const lv_point_t *p = view->marker_points;
-
+// Fills a triangle by scanlines, in container-relative coordinates.
+//
+// LVGL 8 has no filled-polygon primitive outside lv_canvas, and a canvas would
+// mean a per-view pixel buffer redrawn on every fix. Rects rather than 1px
+// lines: a horizontal line is anti-aliased at both ends, so a stack of them
+// builds a shape with soft ragged sides, where a rect of one row is exact.
+//
+// Extracted from the marker when the chevrons and the north arrow needed the
+// same thing. RoadView draws its whole network this way for the same reason.
+void FillTriangle(lv_draw_ctx_t *ctx, const lv_area_t &area, const lv_point_t p[3],
+                  uint32_t colour) {
     lv_coord_t min_y = p[0].y;
     lv_coord_t max_y = p[0].y;
     for (int i = 1; i < 3; i++) {
@@ -85,19 +105,14 @@ void MarkerDrawCb(lv_event_t *e) {
         if (p[i].y > max_y) max_y = p[i].y;
     }
 
-    // Rects rather than 1px lines: a horizontal line is anti-aliased at both
-    // ends, so a stack of them builds a shape with soft ragged sides. A rect
-    // of one row is exact, and the outline below supplies the smooth edge.
     lv_draw_rect_dsc_t fill;
     lv_draw_rect_dsc_init(&fill);
-    fill.bg_color = lv_color_hex(COLOR_MARKER);
+    fill.bg_color = lv_color_hex(colour);
     fill.bg_opa = LV_OPA_COVER;
     fill.border_width = 0;
     fill.radius = 0;
 
     for (lv_coord_t y = min_y; y <= max_y; y++) {
-        // Where this row crosses each edge. A triangle is convex, so the
-        // filled span is simply the leftmost crossing to the rightmost.
         double xs[3];
         int n = 0;
         for (int i = 0; i < 3; i++) {
@@ -111,8 +126,7 @@ void MarkerDrawCb(lv_event_t *e) {
             if (y < lo_y || y > hi_y) {
                 continue;
             }
-            xs[n++] = (double)a.x + (double)(b.x - a.x) * (double)(y - a.y) /
-                                        (double)(b.y - a.y);
+            xs[n++] = (double)a.x + (double)(b.x - a.x) * (double)(y - a.y) / (double)(b.y - a.y);
         }
         if (n < 2) {
             continue;
@@ -133,6 +147,139 @@ void MarkerDrawCb(lv_event_t *e) {
         }
         lv_draw_rect(ctx, &fill, &row);
     }
+}
+
+
+// Chevrons along the stretch still to ride.
+//
+// The one thing a plain line cannot say is WHICH WAY along itself. On an
+// out-and-back the route crosses its own path, and at a junction the question
+// "do I go left here or is that the leg I come back on" is exactly the one a
+// head unit exists to answer.
+//
+// Walked in pixels on the drawn polyline rather than in metres on the source,
+// so spacing stays even on screen at any zoom -- which is the only place it
+// is read.
+void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
+    if (view->drawn_count < 2 || view->drawn_ahead_from + 1 >= view->drawn_count) {
+        return;
+    }
+
+    double carry = CHEVRON_SPACING_PX * 0.5; // first one half a gap in
+    for (size_t i = view->drawn_ahead_from; i + 1 < view->drawn_count; i++) {
+        const double ax = view->points[i].x;
+        const double ay = view->points[i].y;
+        const double bx = view->points[i + 1].x;
+        const double by = view->points[i + 1].y;
+        const double dx = bx - ax;
+        const double dy = by - ay;
+        const double len = sqrt((dx * dx) + (dy * dy));
+        if (len < 0.5) {
+            continue; // a thinned polyline can repeat a point
+        }
+        const double ux = dx / len;
+        const double uy = dy / len;
+
+        for (double at = carry; at < len; at += CHEVRON_SPACING_PX) {
+            const double cx = ax + (ux * at);
+            const double cy = ay + (uy * at);
+
+            // Tip forward along the segment, base either side of it.
+            lv_point_t tri[3];
+            tri[0].x = (lv_coord_t)(cx + (ux * CHEVRON_LEN_PX));
+            tri[0].y = (lv_coord_t)(cy + (uy * CHEVRON_LEN_PX));
+            tri[1].x = (lv_coord_t)(cx - (uy * CHEVRON_HALF_W_PX));
+            tri[1].y = (lv_coord_t)(cy + (ux * CHEVRON_HALF_W_PX));
+            tri[2].x = (lv_coord_t)(cx + (uy * CHEVRON_HALF_W_PX));
+            tri[2].y = (lv_coord_t)(cy - (ux * CHEVRON_HALF_W_PX));
+            FillTriangle(ctx, area, tri, COLOR_CHEVRON);
+        }
+        // Carry the remainder into the next segment, so spacing does not
+        // restart at every vertex -- on a thinned line that would cluster them
+        // wherever the geometry happens to bend.
+        carry = fmod(carry - len, CHEVRON_SPACING_PX);
+        if (carry < 0.0) {
+            carry += CHEVRON_SPACING_PX;
+        }
+    }
+}
+
+// Which way is north, for a map that has turned.
+//
+// Pointless north-up, and drawn anyway rather than hidden: a corner that
+// sometimes holds a thing and sometimes does not is harder to read than one
+// that always does, and the arrow pointing straight up IS the information
+// when the map is north-up.
+void DrawNorth(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
+    const double heading = MapView_IsTrackUp(view) ? MapView_HeadingDeg(view) : 0.0;
+    // Screen-up is the heading, so north sits at minus the heading. Screen y
+    // grows downward, which the sine term accounts for.
+    const double a = -heading * M_PI / 180.0;
+    const double cx = (double)(view->width - HUD_MARGIN_PX - NORTH_RADIUS_PX);
+    const double cy = (double)(HUD_MARGIN_PX + NORTH_RADIUS_PX);
+
+    const double ux = sin(a);
+    const double uy = -cos(a);
+    const double r = (double)NORTH_RADIUS_PX;
+
+    lv_point_t tri[3];
+    tri[0].x = (lv_coord_t)(cx + (ux * r));
+    tri[0].y = (lv_coord_t)(cy + (uy * r));
+    tri[1].x = (lv_coord_t)(cx - (ux * r * 0.45) - (uy * r * 0.5));
+    tri[1].y = (lv_coord_t)(cy - (uy * r * 0.45) + (ux * r * 0.5));
+    tri[2].x = (lv_coord_t)(cx - (ux * r * 0.45) + (uy * r * 0.5));
+    tri[2].y = (lv_coord_t)(cy - (uy * r * 0.45) - (ux * r * 0.5));
+    FillTriangle(ctx, area, tri, COLOR_HUD);
+}
+
+// The bar itself. Its label is an ordinary lv_label, because drawing text
+// through a draw context means carrying a font descriptor around for no gain.
+void DrawScaleBar(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
+    if (view->scale_px <= 0) {
+        return;
+    }
+    const lv_coord_t y = (lv_coord_t)(view->height - HUD_MARGIN_PX - 2);
+    const lv_coord_t x2 = (lv_coord_t)(view->width - HUD_MARGIN_PX);
+    const lv_coord_t x1 = (lv_coord_t)(x2 - view->scale_px);
+
+    lv_draw_line_dsc_t dsc;
+    lv_draw_line_dsc_init(&dsc);
+    dsc.color = lv_color_hex(COLOR_HUD);
+    dsc.width = 2;
+
+    lv_point_t a = {(lv_coord_t)(area.x1 + x1), (lv_coord_t)(area.y1 + y)};
+    lv_point_t b = {(lv_coord_t)(area.x1 + x2), (lv_coord_t)(area.y1 + y)};
+    lv_draw_line(ctx, &dsc, &a, &b);
+
+    // End ticks, so the bar reads as a measured span rather than a stray line.
+    for (int i = 0; i < 2; i++) {
+        const lv_coord_t x = (i == 0) ? x1 : x2;
+        lv_point_t t1 = {(lv_coord_t)(area.x1 + x), (lv_coord_t)(area.y1 + y - 4)};
+        lv_point_t t2 = {(lv_coord_t)(area.x1 + x), (lv_coord_t)(area.y1 + y)};
+        lv_draw_line(ctx, &dsc, &t1, &t2);
+    }
+}
+
+void MarkerDrawCb(lv_event_t *e) {
+    lv_obj_t *obj = lv_event_get_target(e);
+    MapView_t *view = (MapView_t *)lv_obj_get_user_data(obj);
+    if (view == nullptr) {
+        return;
+    }
+    lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
+
+    lv_area_t area;
+    lv_obj_get_coords(obj, &area);
+
+    // Order matters: chevrons sit on the route and under the rider, the HUD
+    // sits over both.
+    DrawChevrons(ctx, area, view);
+
+    // marker_points[0..2] are the corners; [3] repeats [0] to close the
+    // outline stroke below.
+    const lv_point_t *p = view->marker_points;
+
+    FillTriangle(ctx, area, p, COLOR_MARKER);
 
     // The border last, over the fill, so it trims the stepped edge the
     // scanlines leave and separates the marker from whatever it is sitting on.
@@ -172,6 +319,9 @@ void MarkerDrawCb(lv_event_t *e) {
                         (lv_coord_t)(area.y1 + out[i + 1].y)};
         lv_draw_line(ctx, &edge, &a, &b);
     }
+
+    DrawNorth(ctx, area, view);
+    DrawScaleBar(ctx, area, view);
 }
 
 } // namespace
@@ -204,6 +354,10 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // Claimed on appear, never by default: a view nobody is looking at must
     // not own the camera.
     view->camera_owner = false;
+    view->drawn_count = 0;
+    view->drawn_ahead_from = 0;
+    view->scale_px = 0;
+    view->scale_label = nullptr;
 
     view->container = lv_obj_create(parent);
     // Not scrollable, and this is what made swipes on the dashboard fail.
@@ -283,6 +437,13 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     lv_obj_clear_flag(view->marker, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_user_data(view->marker, view);
     lv_obj_add_event_cb(view->marker, MarkerDrawCb, LV_EVENT_DRAW_MAIN, nullptr);
+
+    // Created after the overlay so it draws on top of the bar it labels.
+    view->scale_label = lv_label_create(view->container);
+    lv_label_set_text(view->scale_label, "");
+    lv_obj_set_style_text_font(view->scale_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(view->scale_label, lv_color_hex(COLOR_HUD), 0);
+    lv_obj_clear_flag(view->scale_label, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(view->marker, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -540,6 +701,36 @@ void MapView_Redraw(MapView_t *view) {
     const size_t ahead_from = (split > 0) ? split - 1 : 0;
     lv_line_set_points(view->trail, view->points + ahead_from,
                        (uint16_t)(written - ahead_from));
+
+    // Handed to the overlay rather than recomputed there: it decorates the
+    // same geometry that was just drawn, and the drawn line is clipped and
+    // thinned relative to the source.
+    view->drawn_count = written;
+    view->drawn_ahead_from = ahead_from;
+
+    // The scale bar. Chosen from a round sequence so the label is a number a
+    // rider can hold; see navigation/MapScale.h for why the distance leads and
+    // the pixel length follows.
+    {
+        uint32_t metres = 0;
+        int px = 0;
+        if (MapScale_Choose(view->metres_per_pixel, SCALE_MAX_PX, &metres, &px)) {
+            view->scale_px = px;
+            if (view->scale_label != nullptr) {
+                char buf[16];
+                if (MapScale_Format(metres, buf, sizeof(buf))) {
+                    lv_label_set_text(view->scale_label, buf);
+                    lv_obj_align(view->scale_label, LV_ALIGN_BOTTOM_RIGHT, -HUD_MARGIN_PX,
+                                 -(HUD_MARGIN_PX + 6));
+                }
+            }
+        } else {
+            view->scale_px = 0;
+            if (view->scale_label != nullptr) {
+                lv_label_set_text(view->scale_label, "");
+            }
+        }
+    }
 
     // The save is at the TOP of this function, not here -- see the note there.
     // It is in Redraw at all, rather than at page teardown, because
