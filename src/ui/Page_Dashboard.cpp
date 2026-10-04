@@ -993,10 +993,8 @@ void PaintTripCell(lv_obj_t *cell, lv_obj_t *caption, lv_obj_t *value, lv_obj_t 
         lv_obj_set_style_text_color(value, ink, 0);
     }
     // The caption and unit are the quiet grey everywhere else on the panel,
-    // and that grey is illegible on amber -- so while filled they take the
+    // and that grey is illegible on all three fills -- so here they take the
     // same dark ink as the figure rather than keeping their usual colour.
-    // The quiet grey is illegible on all three fills, so the caption and unit
-    // take the same dark ink as the figure in every state.
     const lv_color_t trim = ink;
     if (caption != nullptr) {
         lv_obj_set_style_text_color(caption, trim, 0);
@@ -1751,6 +1749,15 @@ void RenderPage2() {
     char buf[RIDE_SUMMARY_SHORT_TIME_MAX];
     if (RideSummary_FormatDurationShort((uint32_t)RideStats_MovingSeconds(), buf, sizeof(buf))) {
         SetTextIfChanged(s_p2_ridetime, buf);
+    } else {
+        // Blanked rather than skipped. The format only fails on a buffer too
+        // small -- which cannot happen while this one is declared from
+        // RIDE_SUMMARY_SHORT_TIME_MAX -- so this branch is unreachable today
+        // and is here because the shape is the trap: "if (ok) set()" with no
+        // else leaves the last value on the panel for ever, and §8 records
+        // that exact pattern surviving for months on the position readout.
+        // One line now, against a constant that only has to grow once.
+        SetTextIfChanged(s_p2_ridetime, "--");
     }
 
     // The same climb page one shows as GAIN, from the same accumulator.
