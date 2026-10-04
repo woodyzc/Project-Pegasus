@@ -8,7 +8,9 @@
 #include <freertos/queue.h>
 #include <freertos/task.h>
 
+#include "../hal/Imu.h"
 #include "../system/DataCenter.h"
+#include "../system/Stillness.h"
 #include "../system/FileServer.h"
 #include "../system/TripAccum.h"
 #include "GpxTrack.h"
@@ -609,7 +611,17 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
     // the file -- whereas this is a question about whether they are riding at
     // all, and a slow crawl that never clears MIN_POINT_SPACING_M is still
     // riding.
-    if (gps->speed >= AUTO_END_MOVING_MPS) {
+    // ⚠️ Drift is not motion, and this is the consumer that was missed when
+    // everything else got the gate.
+    //
+    // A stationary receiver reports speed, routinely over AUTO_END_MOVING_MPS
+    // on a marginal fix -- so without the IMU check this stamp refreshes for
+    // ever and the hour timeout NEVER fires. PowerManager inhibits deep sleep
+    // while a ride is armed, so a forgotten mid-ride stop left the board
+    // armed and awake indefinitely: exactly the thing the stillness work was
+    // built to end, surviving in the one place that decides when a ride is
+    // over.
+    if (!Stillness_FixIsDrift(Imu_IsStill(), gps->speed) && gps->speed >= AUTO_END_MOVING_MPS) {
         s_last_motion_ms = now;
     }
     if (s_has_last) {

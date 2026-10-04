@@ -69,7 +69,13 @@ typedef struct {
     // mark cannot live there.
     size_t done_src;
     bool have_done_src;
-    size_t done_src_track_points; // track length this was measured against
+    // What the mark was measured against. Point count ALONE is not an
+    // identity: two routes with the same number of points are not unusual --
+    // a re-export of the same ride, or two tracks from the same generator --
+    // and the second would silently inherit the first's ridden stretch. The
+    // name is what actually distinguishes them.
+    size_t done_src_track_points;
+    char done_src_track_name[32];
 
     // Track-up. The smoother decides what "up" is and when it has moved
     // enough to be worth a redraw; this view only asks it.

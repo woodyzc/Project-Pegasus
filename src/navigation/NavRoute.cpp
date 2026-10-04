@@ -308,6 +308,14 @@ void FinishTransfer() {
     const bool usable = length_m > 0 && RouteFollow_ManeuversOrdered(s_rx_blob, &s_rx_manifest);
 
     if (!usable) {
+        // ⚠️ Recorded, or the panel lies about it.
+        //
+        // Every chunk was accepted, so s_rx_last still reads OK from the last
+        // one -- and a refused route would have shown "last: ok, manifest:
+        // ok" beside a progress of 0/0, which is precisely the confident
+        // wrong answer the Route RX row was added to abolish.
+        s_rx_last = NAVROUTE_RX_REFUSED;
+
         // The rider keeps whatever they were already navigating. Refusing a
         // route is not a reason to take away a good one.
         FreeRx();

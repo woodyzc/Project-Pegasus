@@ -91,6 +91,11 @@ typedef enum {
     NAVROUTE_RX_NO_MANIFEST, // payload chunk with no manifest held
     NAVROUTE_RX_BAD_OFFSET,
     NAVROUTE_RX_SHORT_CHUNK,
+    // Every chunk arrived and the assembled route was then refused as a whole
+    // -- zero length, or maneuvers out of order (see FinishTransfer). Kept
+    // apart from the chunk codes because it is the opposite situation: nothing
+    // was wrong with the transfer at all.
+    NAVROUTE_RX_REFUSED,
 } NavRouteRx_t;
 
 // `writes` counts every call into NavRoute_AcceptChunk since boot, which is

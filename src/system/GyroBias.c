@@ -19,7 +19,12 @@ void GyroBias_Reset(GyroBias_t *b) {
 
 float GyroBias_Correct(GyroBias_t *b, const float gyro_dps[3], bool accel_quiet) {
     if (b == NULL || gyro_dps == NULL) {
-        return 0.0f;
+        // A large magnitude, not zero. Zero reads as "not rotating", which is
+        // the input that lets a caller conclude the bike is parked -- and the
+        // safe answer to a question this module cannot answer is always
+        // movement, never stillness. Unreachable today; the cost of being
+        // wrong about it is an odometer that stops.
+        return GYRO_BIAS_MAX_DPS;
     }
 
     float corrected[3];

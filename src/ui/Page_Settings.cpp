@@ -670,6 +670,7 @@ void InfoTimerCallback(lv_timer_t *timer) {
         case NAVROUTE_RX_NO_MANIFEST: why = "no manifest held"; break;
         case NAVROUTE_RX_BAD_OFFSET: why = "bad offset"; break;
         case NAVROUTE_RX_SHORT_CHUNK: why = "short chunk"; break;
+        case NAVROUTE_RX_REFUSED: why = "route REFUSED (bad maneuvers)"; break;
         }
         const char *mfwhy = (mf == NAVROUTE_RX_BAD_MANIFEST)  ? "bad manifest"
                             : (mf == NAVROUTE_RX_ALLOC) ? "PSRAM alloc failed"
@@ -1380,6 +1381,7 @@ void PageSettings::onViewLoad() {
         case NAVROUTE_RX_NO_MANIFEST: why = "no manifest held"; break;
         case NAVROUTE_RX_BAD_OFFSET: why = "bad offset"; break;
         case NAVROUTE_RX_SHORT_CHUNK: why = "short chunk"; break;
+        case NAVROUTE_RX_REFUSED: why = "route REFUSED (bad maneuvers)"; break;
         }
         const char *mfwhy = (mf == NAVROUTE_RX_BAD_MANIFEST)  ? "bad manifest"
                             : (mf == NAVROUTE_RX_ALLOC) ? "PSRAM alloc failed"

@@ -177,12 +177,24 @@ void Barometer_Init() {
 
     // Wait for the NVM copy to finish. Configuring through it leaves the
     // trim registers half-loaded and the readings quietly wrong.
-    for (int i = 0; i < 20; i++) {
+    bool nvm_ready = false;
+    for (int i = 0; i < 20 && !nvm_ready; i++) {
         uint8_t status = 0;
         if (ReadRegs(REG_STATUS, &status, 1) && (status & STATUS_NVM_RDY)) {
+            nvm_ready = true;
             break;
         }
         delay(5);
+    }
+    if (!nvm_ready) {
+        // Acted on rather than merely warned about. The loop used to fall
+        // through and configure anyway, which contradicted the comment above
+        // it -- and a part that has not finished its NVM copy after 100ms is
+        // not a part to then write configuration into. Leaving s_found false
+        // puts "found but not reading" on the panel, which is a diagnosable
+        // state; configuring through it produces readings that are quietly
+        // wrong, which is not.
+        return;
     }
 
     // Oversampling before power mode: the part latches this configuration

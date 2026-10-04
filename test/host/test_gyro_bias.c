@@ -131,10 +131,16 @@ static void test_null_arguments(void) {
     printf("- null arguments: ");
     GyroBias_Reset(NULL);
     const float g[3] = {1.0f, 0.0f, 0.0f};
-    check(GyroBias_Correct(NULL, g, true) == 0.0f, "null tracker returns 0");
+    // ⚠️ Movement, not zero. Zero reads as "not rotating", which is exactly
+    // the input that lets a caller conclude the bike is parked and stop the
+    // odometer. The safe answer to a question this module cannot answer is
+    // always movement.
+    check(GyroBias_Correct(NULL, g, true) >= GYRO_BIAS_ADAPT_MAX_DPS,
+          "null tracker reads as moving, not as still");
     GyroBias_t b;
     GyroBias_Reset(&b);
-    check(GyroBias_Correct(&b, NULL, true) == 0.0f, "null sample returns 0");
+    check(GyroBias_Correct(&b, NULL, true) >= GYRO_BIAS_ADAPT_MAX_DPS,
+          "null sample reads as moving, not as still");
     check(GyroBias_MagnitudeDps(NULL) == 0.0f, "null magnitude is 0");
     printf("done\n");
 }

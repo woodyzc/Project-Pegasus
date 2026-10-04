@@ -63,6 +63,13 @@ extern "C" {
 // rest is faulty, and subtracting that much would hide real rotation.
 #define GYRO_BIAS_MAX_DPS 25.0f
 
+// A known, narrow hole, recorded rather than fixed: a rotation held steadily
+// between GYRO_BIAS_ADAPT_MAX_DPS and the point where the accelerometer stops
+// reading 1g would be learned as bias. It needs a sustained smooth turn at
+// 8-10 dps with no lateral acceleration, which a bicycle does not really
+// produce, and it self-corrects as soon as the rotation stops. Closing it
+// would mean a second threshold to get wrong; it is cheaper to know about.
+
 typedef struct {
     float bias[3];
     bool have;
@@ -76,6 +83,9 @@ void GyroBias_Reset(GyroBias_t *b);
 // `accel_quiet` should be true when the acceleration magnitude is close to 1g
 // -- that is the caller's evidence that nothing is happening to the part, and
 // the only condition under which the estimate is allowed to move.
+// A null argument returns a large magnitude rather than zero: zero would read
+// as "not rotating", and the safe answer to a question this cannot answer is
+// movement.
 float GyroBias_Correct(GyroBias_t *b, const float gyro_dps[3], bool accel_quiet);
 
 // Magnitude of the current estimate, for the settings page. Zero until the

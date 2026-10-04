@@ -36,8 +36,15 @@ bool BoardPower_KeyPressed();
 
 // Opens the latch: the rail collapses and the board switches off.
 //
-// ⚠️ Does not return on battery. Everything that must survive -- the ride
-// file closed, the BLE peer told, the card unmounted -- has to have happened
-// already. On USB the host may keep the chip alive, so callers must not
-// assume this is the last line that ever runs.
+// ⚠️ Does not return. Everything that must survive -- the ride file closed,
+// the BLE peer told, the card unmounted -- has to have happened already.
+//
+// This used to say "on USB the host may keep the chip alive". The bench
+// disproved that on 2026-10-02: pressing reset switches this board off while
+// plugged in, because reset releases GPIO7 and the latch opens. USB does not
+// hold the rail here.
+//
+// Callers must still not BET on never returning, and PowerManager does not:
+// it runs this once and, if it is somehow still executing afterwards, says so
+// on the panel rather than looping the teardown.
 void BoardPower_LatchOff();

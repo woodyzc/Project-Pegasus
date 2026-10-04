@@ -115,6 +115,12 @@ float Barometer_AltitudeM();
 // believed: the altitude froze, and because grade is rise over run with a run
 // that keeps advancing, INCLINE read a confident +0.0% on a climb instead of
 // blanking. A frozen input produces a wrong answer, not a missing one.
+// ⚠️ "has EVER read", not "is reading". No live decision may use this, and
+// as of 2026-10-03 nothing outside this driver calls it at all -- the
+// migration to AltitudeFresh() is complete. Kept because the distinction is
+// worth stating where someone will look for it, and because the question it
+// answers ("was a barometer ever working this boot") is a real one a
+// diagnostic might want. Anything choosing what to show a rider wants Fresh.
 bool Barometer_HaveAltitude();
 bool Barometer_AltitudeFresh();
 

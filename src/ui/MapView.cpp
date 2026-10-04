@@ -1,5 +1,16 @@
 #include "MapView.h"
 
+#include <string.h>
+
+// How far off the line a fix may be and still count as progress along it.
+// Generous: a 240px panel at a usable zoom is wider than this, and the point
+// is to reject a fix from somewhere else entirely rather than to police
+// accuracy.
+#ifndef MAP_DONE_MAX_OFFTRACK_M
+#define MAP_DONE_MAX_OFFTRACK_M 200.0
+#endif
+
+
 #include <math.h>
 #include <stdint.h>
 
@@ -189,6 +200,7 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->done_src = 0;
     view->have_done_src = false;
     view->done_src_track_points = 0;
+    view->done_src_track_name[0] = '\0';
 
     view->container = lv_obj_create(parent);
     // Not scrollable, and this is what made swipes on the dashboard fail.
@@ -420,8 +432,17 @@ void MapView_Redraw(MapView_t *view) {
     // A different track means a different journey: a loaded route replacing
     // the old one must not inherit its progress.
     const size_t track_points = GpxTrack_PointCount();
-    if (view->done_src_track_points != track_points) {
+    const char *track_name = GpxTrack_LoadedName();
+    if (track_name == nullptr) {
+        track_name = "";
+    }
+    if (view->done_src_track_points != track_points ||
+        strncmp(view->done_src_track_name, track_name,
+                sizeof(view->done_src_track_name) - 1) != 0) {
         view->done_src_track_points = track_points;
+        strncpy(view->done_src_track_name, track_name,
+                sizeof(view->done_src_track_name) - 1);
+        view->done_src_track_name[sizeof(view->done_src_track_name) - 1] = '\0';
         view->done_src = 0;
         view->have_done_src = false;
     }
@@ -453,7 +474,22 @@ void MapView_Redraw(MapView_t *view) {
                 found = true;
             }
         }
-        if (found && (!view->have_done_src || nearest > view->done_src)) {
+        // ⚠️ Only a fix that is actually ON the track may advance the mark.
+        //
+        // The mark is permanent by design, so one bad fix is permanent too: a
+        // single valid-but-wrong position hundreds of metres away would mark
+        // everything up to its nearest vertex as ridden, for the rest of the
+        // route, with no way back. The old per-frame code had no memory and so
+        // self-corrected on the next fix; buying monotonicity means buying
+        // that risk, and this is the price of it.
+        //
+        // Degrees squared, compared against a budget converted at the equator
+        // -- which under-reads longitude at higher latitudes and so is
+        // conservative in the direction that matters: it rejects more, never
+        // less.
+        const double budget_deg = (double)MAP_DONE_MAX_OFFTRACK_M / 111320.0;
+        const bool on_track = found && (best <= (budget_deg * budget_deg));
+        if (on_track && (!view->have_done_src || nearest > view->done_src)) {
             view->done_src = nearest;
             view->have_done_src = true;
         }
