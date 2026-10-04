@@ -57,6 +57,18 @@ void TimeSource_SetFromGnss(uint32_t utc_seconds, uint32_t now_ms) {
     s_kind = TIME_SRC_GNSS;
 }
 
+void TimeSource_SetZoneFromGnss(int16_t offset_min, const char *zone, uint32_t now_ms) {
+    s_offset_min = offset_min;
+    s_offset_ms = now_ms;
+    s_offset_known = true;
+    if (zone != NULL) {
+        strncpy(s_zone, zone, sizeof(s_zone) - 1);
+        s_zone[sizeof(s_zone) - 1] = '\0';
+    } else {
+        s_zone[0] = '\0';
+    }
+}
+
 bool TimeSource_Now(uint32_t now_ms, TimeReading_t *out) {
     uint32_t elapsed_ms;
 

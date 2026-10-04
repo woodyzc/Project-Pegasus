@@ -58,6 +58,18 @@ void TimeSource_SetFromPhone(uint32_t utc_seconds, int16_t offset_min, const cha
                              uint32_t now_ms);
 void TimeSource_SetFromGnss(uint32_t utc_seconds, uint32_t now_ms);
 
+// The zone a GNSS fix implies, once something has worked it out from the
+// coordinates.
+//
+// ⚠️ Separate from SetFromGnss because the receiver supplies UTC and nothing
+// else: a zone has to be derived from WHERE the fix is, which is TimeZone.c's
+// job and happens at draw time. Without this the offset was only ever set by
+// the phone, so a board navigating perfectly well on its own receiver
+// reported "GNSS, +0 min" on the settings page while the dashboard beside it
+// correctly showed EDT -- the one row whose whole purpose is explaining the
+// clock, disagreeing with the clock.
+void TimeSource_SetZoneFromGnss(int16_t offset_min, const char *zone, uint32_t now_ms);
+
 // The current best reading. False when nothing has ever set the clock, or
 // when everything that did has gone stale.
 bool TimeSource_Now(uint32_t now_ms, TimeReading_t *out);

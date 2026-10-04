@@ -1282,6 +1282,28 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 strftime(zone, sizeof(zone), "%Z", &local);
                 lv_label_set_text_fmt(s_clock_caption, approximate ? "~%s" : "%s", zone);
                 s_clock_from_fix_ms = lv_tick_get();
+
+                // Told to TimeSource rather than kept here. The zone is worked
+                // out at draw time because that is where the coordinates and
+                // newlib's tz database meet -- but the settings page reads
+                // TimeSource, and a diagnostic that disagrees with the thing
+                // it is diagnosing is worse than no diagnostic at all.
+                //
+                // The offset, worked out from the hour actually drawn rather
+                // than computed separately -- so it cannot disagree with what
+                // is on screen, which is the whole point of reporting it.
+                //
+                // TimeZone_UtcToEpoch reads its fields AS UTC, so feeding it
+                // the local ones answers "what instant would this wall clock
+                // be if it were UTC". The gap from the real instant is the
+                // offset. newlib here has no tm_gmtoff, and this reuses a
+                // function the host tests already cover.
+                const int64_t local_as_utc = TimeZone_UtcToEpoch(
+                    (uint16_t)(local.tm_year + 1900), (uint8_t)(local.tm_mon + 1),
+                    (uint8_t)local.tm_mday, (uint8_t)local.tm_hour, (uint8_t)local.tm_min,
+                    (uint8_t)local.tm_sec);
+                TimeSource_SetZoneFromGnss((int16_t)((local_as_utc - (int64_t)epoch) / 60), zone,
+                                           lv_tick_get());
             }
             // No dedicated "time but no fix" branch any more. That case now
             // falls through to RenderClock() below, which can do better than
