@@ -42,8 +42,22 @@ constexpr uint32_t COLOR_CHEVRON = 0xFFFFFF;
 // always has one near it, far enough that the route still reads as a line
 // rather than a dotted one.
 constexpr double CHEVRON_SPACING_PX = 34.0;
-constexpr double CHEVRON_LEN_PX = 7.0;
-constexpr double CHEVRON_HALF_W_PX = 4.5;
+
+// ⚠️ Longer than it is wide, and that ratio is the whole thing.
+//
+// These began as filled triangles 7px long and 9px across -- WIDER than they
+// were long -- which reads as a blob sitting on the line rather than as an
+// arrow lying along it. An arrowhead says "this way" because it is
+// elongated; make it stubby and it says nothing at all.
+//
+// Drawn as an open chevron now, two strokes meeting at a point, which is what
+// the Garmin does and what survives being small. A filled triangle at this
+// size is a lump of white; two 2px strokes keep the magenta visible through
+// the middle, so the route still reads as a continuous line with direction
+// marks on it rather than as a line interrupted by dots.
+constexpr double CHEVRON_LEN_PX = 9.0;     // along the direction of travel
+constexpr double CHEVRON_HALF_W_PX = 3.5;  // perpendicular, each side
+constexpr lv_coord_t CHEVRON_STROKE_PX = 2;
 
 // The scale bar and the north arrow live in opposite corners, out of the way
 // of the rider marker which sits at the centre when the map is following.
@@ -165,6 +179,15 @@ void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *vi
         return;
     }
 
+    // One descriptor for all of them: rounded caps, so the apex closes cleanly
+    // instead of showing the notch two square-ended strokes leave.
+    lv_draw_line_dsc_t chev;
+    lv_draw_line_dsc_init(&chev);
+    chev.color = lv_color_hex(COLOR_CHEVRON);
+    chev.width = CHEVRON_STROKE_PX;
+    chev.round_start = 1;
+    chev.round_end = 1;
+
     double carry = CHEVRON_SPACING_PX * 0.5; // first one half a gap in
     for (size_t i = view->drawn_ahead_from; i + 1 < view->drawn_count; i++) {
         const double ax = view->points[i].x;
@@ -184,15 +207,22 @@ void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *vi
             const double cx = ax + (ux * at);
             const double cy = ay + (uy * at);
 
-            // Tip forward along the segment, base either side of it.
-            lv_point_t tri[3];
-            tri[0].x = (lv_coord_t)(cx + (ux * CHEVRON_LEN_PX));
-            tri[0].y = (lv_coord_t)(cy + (uy * CHEVRON_LEN_PX));
-            tri[1].x = (lv_coord_t)(cx - (uy * CHEVRON_HALF_W_PX));
-            tri[1].y = (lv_coord_t)(cy + (ux * CHEVRON_HALF_W_PX));
-            tri[2].x = (lv_coord_t)(cx + (uy * CHEVRON_HALF_W_PX));
-            tri[2].y = (lv_coord_t)(cy - (ux * CHEVRON_HALF_W_PX));
-            FillTriangle(ctx, area, tri, COLOR_CHEVRON);
+            // Apex half a length ahead, arms trailing half a length behind
+            // and out to each side. Centred on the point rather than built
+            // forward from it, so a chevron sits ON the line it marks instead
+            // of leading it.
+            const double hx = ux * (CHEVRON_LEN_PX * 0.5);
+            const double hy = uy * (CHEVRON_LEN_PX * 0.5);
+            const double px_ = -uy * CHEVRON_HALF_W_PX;
+            const double py_ = ux * CHEVRON_HALF_W_PX;
+
+            lv_point_t apex = {(lv_coord_t)(area.x1 + cx + hx), (lv_coord_t)(area.y1 + cy + hy)};
+            lv_point_t arm1 = {(lv_coord_t)(area.x1 + cx - hx + px_),
+                               (lv_coord_t)(area.y1 + cy - hy + py_)};
+            lv_point_t arm2 = {(lv_coord_t)(area.x1 + cx - hx - px_),
+                               (lv_coord_t)(area.y1 + cy - hy - py_)};
+            lv_draw_line(ctx, &chev, &apex, &arm1);
+            lv_draw_line(ctx, &chev, &apex, &arm2);
         }
         // Carry the remainder into the next segment, so spacing does not
         // restart at every vertex -- on a thinned line that would cluster them
