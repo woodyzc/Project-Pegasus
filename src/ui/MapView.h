@@ -54,6 +54,23 @@ typedef struct {
     double fix_lon;
     bool have_fix;
 
+    // ⚠️ Progress along the SOURCE track, and it only ever moves forward.
+    //
+    // The ridden/ahead split used to be recomputed from scratch every redraw
+    // as "nearest drawn vertex to the rider", which has no memory: turn
+    // around and ride back and the nearest vertex moves backwards, so route
+    // the rider had already covered went green again behind them.
+    //
+    // Kept as a source index rather than a drawn one because drawn indices
+    // are not stable between frames -- the builder clips to the viewport and
+    // thins what it draws, so the same drawn index means a different place
+    // from one redraw to the next. That instability is already why the split
+    // stopped being a fraction of the track; it is also why the high-water
+    // mark cannot live there.
+    size_t done_src;
+    bool have_done_src;
+    size_t done_src_track_points; // track length this was measured against
+
     // Track-up. The smoother decides what "up" is and when it has moved
     // enough to be worth a redraw; this view only asks it.
     MapHeading_t heading;

@@ -183,6 +183,12 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->have_center = false;
     view->zoom_locked = false;
     view->pan_locked = false;
+    // Explicit, because MapView_t is not required to arrive zeroed and a
+    // high-water mark inherited from whatever was in memory would colour an
+    // arbitrary stretch of a fresh route as already ridden.
+    view->done_src = 0;
+    view->have_done_src = false;
+    view->done_src_track_points = 0;
 
     view->container = lv_obj_create(parent);
     // Not scrollable, and this is what made swipes on the dashboard fail.
@@ -411,19 +417,73 @@ void MapView_Redraw(MapView_t *view) {
     // builder now draws only the visible stretch, and thins it when it does
     // not fit, source indices and drawn indices have no fixed relationship at
     // all -- the fraction put the colour change wherever it liked.
-    size_t split = 0;
-    if (view->have_fix && written > 0) {
-        int16_t fx = 0;
-        int16_t fy = 0;
-        Map_ProjectPrepared(&proj, view->fix_lat, view->fix_lon, &fx, &fy);
-        int32_t best = INT32_MAX;
-        for (size_t i = 0; i < written; i++) {
-            const int32_t dx = (int32_t)view->points[i].x - fx;
-            const int32_t dy = (int32_t)view->points[i].y - fy;
-            const int32_t d2 = dx * dx + dy * dy;
-            if (d2 < best) {
+    // A different track means a different journey: a loaded route replacing
+    // the old one must not inherit its progress.
+    const size_t track_points = GpxTrack_PointCount();
+    if (view->done_src_track_points != track_points) {
+        view->done_src_track_points = track_points;
+        view->done_src = 0;
+        view->have_done_src = false;
+    }
+
+    // Advance the high-water mark, in source indices. Nearest-point rather
+    // than anything cleverer: this only has to answer "how far along have we
+    // ever been", and max() is what makes it monotonic.
+    if (view->have_fix && track_points > 0) {
+        const TrackBuffer_t *src = GpxTrack_Buffer();
+        double best = 0.0;
+        size_t nearest = 0;
+        bool found = false;
+        for (size_t i = 0; i < track_points; i++) {
+            double lat = 0.0;
+            double lon = 0.0;
+            if (!TrackBuffer_Get(src, i, &lat, &lon)) {
+                continue;
+            }
+            // Squared degrees, with longitude left unscaled. Good enough to
+            // pick a vertex: the error it introduces is a cosine of latitude
+            // on one axis, which cannot move the answer past a neighbouring
+            // point at any spacing a track actually uses.
+            const double dlat = lat - view->fix_lat;
+            const double dlon = lon - view->fix_lon;
+            const double d2 = (dlat * dlat) + (dlon * dlon);
+            if (!found || d2 < best) {
                 best = d2;
-                split = i + 1;
+                nearest = i;
+                found = true;
+            }
+        }
+        if (found && (!view->have_done_src || nearest > view->done_src)) {
+            view->done_src = nearest;
+            view->have_done_src = true;
+        }
+    }
+
+    // Where to cut the drawn line: the drawn vertex nearest the furthest
+    // point reached, measured in pixels on the line that was actually drawn.
+    //
+    // Going through the source point rather than through the rider is what
+    // makes this survive a turnaround, and it degrades correctly when that
+    // point is off-screen: clipped off behind, the nearest drawn vertex is
+    // the first one and everything visible is ahead; clipped off in front,
+    // it is the last and everything visible is done.
+    size_t split = 0;
+    if (view->have_done_src && written > 0) {
+        double dlat = 0.0;
+        double dlon = 0.0;
+        if (TrackBuffer_Get(GpxTrack_Buffer(), view->done_src, &dlat, &dlon)) {
+            int16_t fx = 0;
+            int16_t fy = 0;
+            Map_ProjectPrepared(&proj, dlat, dlon, &fx, &fy);
+            int32_t best = INT32_MAX;
+            for (size_t i = 0; i < written; i++) {
+                const int32_t dx = (int32_t)view->points[i].x - fx;
+                const int32_t dy = (int32_t)view->points[i].y - fy;
+                const int32_t d2 = dx * dx + dy * dy;
+                if (d2 < best) {
+                    best = d2;
+                    split = i + 1;
+                }
             }
         }
     }
