@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 
+#include "../system/BatteryLevel.h"
 #include "../system/DataCenter.h"
 
 #ifndef BATTERY_ADC_PIN
@@ -21,38 +22,30 @@
 
 namespace {
 
-// LiPo discharge curve from deps/Waveshare-LCD-2.8's power_manager. Piecewise
-// linear rather than a single 3.0-4.2V ramp, because a LiPo spends most of its
-// charge between 3.7V and 4.2V and a linear map badly overstates what's left
-// once it drops below nominal.
-struct CurvePoint {
-    uint16_t mv;
-    uint8_t percent;
-};
-
-constexpr CurvePoint CURVE[] = {
-    {3000, 0},   // cutoff
-    {3400, 10},  // low-battery warning
-    {3700, 50},  // nominal
-    {4200, 100}, // fully charged
-};
-constexpr size_t CURVE_LEN = sizeof(CURVE) / sizeof(CURVE[0]);
-
 // Above any voltage a 1S LiPo reaches on its own, so the rail is being held up
 // by USB. Matches the reference implementation's isOnBattery() threshold.
 constexpr uint16_t USB_POWERED_MV = 4500;
 
-constexpr int SAMPLE_COUNT = 8;      // ADC1 is noisy; average a short burst
+// ⚠️ 64, not 8. The curve gives one percent per 7.5mV of pack, which is
+// 2.5mV on the pin through the divider -- below the noise on an ESP32-S3
+// ADC1 channel. A burst alone cannot fix that (it is over in microseconds and
+// samples one slice of the noise, not its mean), but it is free and it helps;
+// the filter across readings is what actually settles the gauge.
+constexpr int SAMPLE_COUNT = 64;
 constexpr uint32_t PUBLISH_PERIOD_MS = 5000;
 
 bool s_ready = false;
+BatterySmoother_t s_smoother;
 
 void BatteryTask(void *pv) {
     (void)pv;
 
     for (;;) {
         Battery_t battery;
-        battery.millivolts = Battery_ReadMillivolts();
+        // Smoothed before it becomes a percentage, not after: filtering the
+        // percentage would quantise first and average the steps, which keeps
+        // the jitter and adds lag.
+        battery.millivolts = BatterySmoother_Push(&s_smoother, Battery_ReadMillivolts());
         battery.percent = Battery_PercentFromMillivolts(battery.millivolts);
         battery.on_usb = (battery.millivolts >= USB_POWERED_MV);
 
@@ -69,6 +62,7 @@ void Battery_Init() {
     // pin, which needs the widest range to stay off the top of the scale.
     analogReadResolution(12);
     analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
+    BatterySmoother_Reset(&s_smoother);
     s_ready = true;
 }
 
@@ -96,26 +90,7 @@ uint16_t Battery_ReadMillivolts() {
 }
 
 uint8_t Battery_PercentFromMillivolts(uint16_t millivolts) {
-    if (millivolts == 0) {
-        return 0; // no reading yet
-    }
-    if (millivolts <= CURVE[0].mv) {
-        return 0;
-    }
-    if (millivolts >= CURVE[CURVE_LEN - 1].mv) {
-        return 100;
-    }
-
-    for (size_t i = 1; i < CURVE_LEN; i++) {
-        if (millivolts <= CURVE[i].mv) {
-            const CurvePoint &lo = CURVE[i - 1];
-            const CurvePoint &hi = CURVE[i];
-            const uint32_t span_mv = hi.mv - lo.mv;
-            const uint32_t span_pct = hi.percent - lo.percent;
-            return (uint8_t)(lo.percent + ((millivolts - lo.mv) * span_pct) / span_mv);
-        }
-    }
-    return 100;
+    return BatteryLevel_PercentFromMillivolts(millivolts);
 }
 
 void Battery_StartMonitor() {
