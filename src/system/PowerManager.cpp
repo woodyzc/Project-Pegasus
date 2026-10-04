@@ -129,6 +129,21 @@ lv_timer_t *s_timer = nullptr;
 LongPress_t s_key;
 uint32_t s_off_notice_since_ms = 0;
 bool s_powering_off = false;
+
+// ⚠️ PowerOffNow() must run exactly once, and the board must not be left
+// looping if it fails.
+//
+// BoardPower_LatchOff() does not return when it works, and BoardPower.h says
+// so -- but "when it works" is the whole caveat. Without these two flags a
+// rail that did not collapse left s_powering_off set, the elapsed check
+// still passing, and the teardown re-running on EVERY tick: NimBLEDevice::
+// deinit() and SD_MMC.end() against an already-dismantled stack, ten times a
+// second, for ever.
+bool s_off_done = false;
+bool s_off_failed = false;
+
+// How long to wait before concluding the rail is not going to collapse.
+constexpr uint32_t POWER_OFF_GRACE_MS = 1500;
 PowerStage_t s_stage = POWER_STAGE_ACTIVE;
 uint8_t s_active_percent = 100;
 bool s_screen_off = false;
@@ -316,8 +331,24 @@ void Service(lv_timer_t *timer) {
     // The power key, before anything else: a rider holding the button has
     // asked for one thing and should not have to wait on the stage machine.
     if (s_powering_off) {
-        if ((millis() - s_off_notice_since_ms) >= POWER_OFF_NOTICE_MS) {
+        const uint32_t since = millis() - s_off_notice_since_ms;
+
+        if (!s_off_done && since >= POWER_OFF_NOTICE_MS) {
+            s_off_done = true;
             PowerOffNow();
+        }
+
+        // Still executing well after the latch was opened, so it did not take.
+        // Say so and stop: the teardown above has already deinitialised BLE
+        // and unmounted the card, so there is nothing to return to and
+        // pretending otherwise would send the rider to pages that read a card
+        // which is no longer mounted. A dead end with an explanation beats a
+        // loop, and beats a board that looks fine and is not.
+        if (s_off_done && !s_off_failed && since >= POWER_OFF_NOTICE_MS + POWER_OFF_GRACE_MS) {
+            s_off_failed = true;
+            if (s_notice != nullptr) {
+                lv_label_set_text(s_notice, "Power off failed.\nReset to recover.");
+            }
         }
         return;
     }
@@ -398,6 +429,9 @@ void PowerManager_Init() {
     // it, and without the disarm the board would power itself off a second
     // and a half after booting. LongPress.h has the three rules.
     LongPress_Reset(&s_key, BoardPower_KeyPressed());
+    s_powering_off = false;
+    s_off_done = false;
+    s_off_failed = false;
 
     DataCenter_Subscribe(TOPIC_GPS_INFO, &s_gps_account);
 
