@@ -51,7 +51,6 @@ MapPoint_t s_projected[MAX_POLY_POINTS];
 MapView_t s_view;
 lv_obj_t *s_recenter_btn = nullptr;
 lv_obj_t *s_status_label = nullptr;
-lv_obj_t *s_scale_label = nullptr;
 // The route picker, built on demand and destroyed on choosing. Held so a
 // second press of the button cannot stack two of them.
 lv_obj_t *s_picker = nullptr;
@@ -103,19 +102,12 @@ void OnGpsPublished(const char *topic, const void *data, uint32_t size, void *us
 
 Account s_gps_account("Page_Map/GPS", OnGpsPublished);
 
-void UpdateScale() {
-    if (s_scale_label == nullptr) {
-        return;
-    }
-    // A figure rather than a ruler: 240px of panel does not spare the room,
-    // and a number is unambiguous.
-    const double across = MapView_MetresAcross(&s_view);
-    if (across >= 1000.0) {
-        lv_label_set_text_fmt(s_scale_label, "%.1f km across", across / 1000.0);
-    } else {
-        lv_label_set_text_fmt(s_scale_label, "%d m across", (int)across);
-    }
-}
+// The "N m across" footer label was removed when MapView gained a proper
+// scale bar. Its own comment argued for a figure over a ruler because 240px
+// does not spare the room -- fair when there was no ruler, and the bar
+// answers the same question better: a rider measures it against the map
+// rather than converting a number. Two scale readouts on one screen is
+// clutter, and the one that goes is the one you cannot measure with.
 
 // The status corner, and the only place on the panel that can tell a GNSS
 // wiring mistake from a cold start.
@@ -240,7 +232,6 @@ void OnRecenterClicked(lv_event_t *e) {
     (void)e;
     MapView_Recenter(&s_view);
     RoadView_Refresh();
-    UpdateScale();
     UpdateRecenterButton();
 }
 
@@ -255,7 +246,6 @@ void OnZoomClicked(lv_event_t *e) {
     // The roads are drawn from the view's scale, and LVGL has no idea this
     // changed it.
     RoadView_Refresh();
-    UpdateScale();
     UpdateRecenterButton();
 }
 
@@ -297,7 +287,6 @@ void RefreshTimerCallback(lv_timer_t *timer) {
     // in another file, it is invisible from here, and it would take the roads
     // away the moment the dashboard stopped being the page below.
     RoadView_Refresh();
-    UpdateScale();
 }
 
 void ClosePicker() {
@@ -364,7 +353,6 @@ void OnRouteChosen(lv_event_t *e) {
     MapView_FitTrack(&s_view);
     RoadView_Refresh();
     UpdateRecenterButton();
-    UpdateScale();
 }
 
 // The list of .gpx files on the card, over the map.
@@ -641,11 +629,6 @@ void PageMap::onViewLoad() {
     }
 
     // ---- Footer ----
-    s_scale_label = lv_label_create(parent);
-    lv_obj_set_style_text_font(s_scale_label, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(s_scale_label, lv_color_hex(COLOR_CAPTION), 0);
-    lv_obj_align(s_scale_label, LV_ALIGN_BOTTOM_LEFT, 8, -4);
-    lv_label_set_text(s_scale_label, "");
 
     UpdateRecenterButton();
 
@@ -662,7 +645,6 @@ void PageMap::onViewLoad() {
             MapView_FitTrack(&s_view);
         }
         RoadView_Refresh();
-        UpdateScale();
     }
 
     // The corner's first text, rather than leaving the creation placeholder up
@@ -697,7 +679,6 @@ void PageMap::onViewUnload() {
     DataCenter_Unsubscribe(TOPIC_GPS_INFO, &s_gps_account);
 
     s_status_label = nullptr;
-    s_scale_label = nullptr;
     s_recenter_btn = nullptr;
     // Not deleted: it is a child of the page's root, which LVGL is tearing
     // down around us. Only the pointer needs clearing.

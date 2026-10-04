@@ -62,6 +62,12 @@ bool Barometer_Found();
 // like a correct one in the data.
 bool Barometer_Filtered();
 
+// Whether the NVM-ready bit was seen during init. NOT a health check: the
+// part configures and reads correctly either way, and this is false on every
+// warm restart while being true on a cold power-on. Surfaced only because
+// that difference is real, unexplained, and was briefly mistaken for a fault.
+bool Barometer_NvmReady();
+
 // The 7-bit address that answered: 0x47, 0x46, or 0 when nothing did.
 uint8_t Barometer_Address();
 

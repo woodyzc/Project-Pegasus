@@ -20,11 +20,17 @@ constexpr uint8_t REG_CHIP_ID = 0x01;
 constexpr uint8_t REG_TEMP_XLSB = 0x1D; // 0x1D..0x1F temp, 0x20..0x22 press
 constexpr uint8_t REG_DSP_CONFIG = 0x30;
 constexpr uint8_t REG_DSP_IIR = 0x31;
+constexpr uint8_t REG_STATUS = 0x28;
 constexpr uint8_t REG_OSR_CONFIG = 0x36;
 constexpr uint8_t REG_ODR_CONFIG = 0x37;
 
 constexpr uint8_t CHIP_ID_PRIM = 0x50;
 constexpr uint8_t CHIP_ID_SEC = 0x51;
+
+// STATUS (0x28) bit 1. Bosch calls it BMP5_INT_NVM_RDY and reads it from this
+// register in get_nvm_status(); the BMP5_INT_ prefix is shared with
+// INT_STATUS and does not mean it lives there.
+constexpr uint8_t STATUS_NVM_RDY = 0x02;
 
 
 // OSR_CONFIG: bit 6 enables pressure, bits 3..5 are its oversampling, bits
@@ -95,6 +101,9 @@ uint8_t s_addr = 0;
 uint8_t s_chip_id = 0;
 bool s_found = false;
 bool s_filtered = false;
+// Whether the NVM wait saw its bit. Reported, because it is the one thing
+// known to differ between a cold power-on and a warm restart.
+bool s_nvm_ready = false;
 
 BaroSmoother_t s_smoother;
 volatile float s_altitude_m = 0.0f;
@@ -173,31 +182,44 @@ void Barometer_Init() {
         return; // something is there; it is not this sensor. Keep the id to show.
     }
 
-    // ⚠️ There is deliberately NO wait for NVM here, and the wait that used to
-    // be is worth describing because it broke the sensor on 2026-10-04.
+    // Wait for the NVM copy to finish, and then CONTINUE WHETHER OR NOT IT
+    // DOES. The fall-through is load-bearing and has now been proved twice.
     //
-    // It polled STATUS (0x28) for BMP5_INT_NVM_RDY (0x02) and then fell
-    // through regardless. Three things were wrong with it:
+    // ⚠️ History, because this cost a working sensor and a wrong conclusion.
     //
-    //   * that bit lives in INT_STATUS (0x27), not STATUS, so the poll could
-    //     never see it and always ran its full 100ms;
-    //   * Bosch uses it around NVM *programming* operations, not as a
-    //     boot-time gate -- their own bmp5_init does not wait on anything of
-    //     the kind;
-    //   * and its justification, "configuring through an incomplete NVM copy
-    //     leaves the trim registers half-loaded", described a part this is
-    //     not. The BMP580 compensates on-chip; there are no trim coefficients
-    //     to load, as this driver's own header says two screens up.
+    // A review observed that the loop warned about half-loaded trim registers
+    // and then configured the part anyway. Acting on that -- returning on the
+    // timeout -- disabled the barometer outright: the panel read "0x47
+    // answered, chip id 0x50", the part plainly present and refused.
     //
-    // It was harmless only because it fell through. A review observed that
-    // the code ignored its own warning, the warning was taken at face value,
-    // and returning on the timeout disabled a working barometer outright --
-    // the panel went to "0x47 answered, chip id 0x50". A comment that is
-    // wrong is worse than no comment, because someone eventually believes it.
+    // Diagnosing THAT, I concluded the bit was in the wrong register
+    // (BMP5_INT_NVM_RDY is grouped under "NVM and Interrupt status asserted
+    // macros", and the BMP5_INT_ prefix reads as INT_STATUS) and removed the
+    // wait entirely. Also wrong: Bosch's own get_nvm_status() reads
+    // BMP5_REG_STATUS -- 0x28, this register -- and tests exactly this bit.
+    // The prefix is shared between two registers and means nothing.
     //
-    // The datasheet's actual requirement after power-up is a couple of
-    // milliseconds (BMP5_DELAY_US_SOFT_RESET is 2000us). That is all this is.
-    delay(3);
+    // What the hardware actually showed: the wait SUCCEEDS on a cold
+    // power-on and TIMES OUT on a warm restart, where the sensor is never
+    // power-cycled and is still running in normal mode from the previous
+    // boot. Why that is, this firmware does not know -- a bit only meaningful
+    // after a POR, or a bus the previous boot left mid-transaction, are both
+    // plausible and neither is tested. What IS established is that the part
+    // configures and reads correctly afterwards either way, every time.
+    //
+    // So the 100ms is a courtesy on a cold boot and a no-op on a warm one,
+    // and the thing not to do is make it fatal.
+    bool nvm_ready = false;
+    for (int i = 0; i < 20 && !nvm_ready; i++) {
+        uint8_t status = 0;
+        if (ReadRegs(REG_STATUS, &status, 1) && (status & STATUS_NVM_RDY)) {
+            nvm_ready = true;
+        }
+        if (!nvm_ready) {
+            delay(5);
+        }
+    }
+    s_nvm_ready = nvm_ready;
 
     // Oversampling before power mode: the part latches this configuration
     // when it enters normal mode.
@@ -256,6 +278,7 @@ void Barometer_Init() {
 
 bool Barometer_Found() { return s_found; }
 bool Barometer_Filtered() { return s_filtered; }
+bool Barometer_NvmReady() { return s_nvm_ready; }
 uint8_t Barometer_Address() { return s_addr; }
 uint8_t Barometer_ChipId() { return s_chip_id; }
 
