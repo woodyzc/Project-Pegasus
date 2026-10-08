@@ -27,11 +27,15 @@ void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double cent
        and Map_ProjectPrepared still matches Map_Project point for point. */
     proj->cos_h = 1.0;
     proj->sin_h = 0.0;
+    proj->cos_h_f = 1.0f;
+    proj->sin_h_f = 0.0f;
     proj->rotated = false;
     proj->valid = (metres_per_pixel > 0.0);
     if (!proj->valid) {
         proj->px_per_deg_lon = 0.0;
         proj->px_per_deg_lat = 0.0;
+        proj->px_per_deg_lon_f = 0.0f;
+        proj->px_per_deg_lat_f = 0.0f;
         return;
     }
 
@@ -41,6 +45,13 @@ void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double cent
     const double lon_scale = cos(center_lat * M_PI / 180.0);
     proj->px_per_deg_lon = MAP_EARTH_METRES_PER_DEGREE * lon_scale / metres_per_pixel;
     proj->px_per_deg_lat = MAP_EARTH_METRES_PER_DEGREE / metres_per_pixel;
+
+    /* Mirrored once per frame so the per-point path never touches a double
+       multiply. Kept alongside the doubles rather than replacing them: the
+       doubles are what Map_Project and the tests compare against, and the
+       pair agreeing is the thing worth preserving. */
+    proj->px_per_deg_lon_f = (float)proj->px_per_deg_lon;
+    proj->px_per_deg_lat_f = (float)proj->px_per_deg_lat;
 }
 
 void Map_SetProjectionHeading(MapProjection_t *proj, double heading_deg) {
@@ -53,6 +64,8 @@ void Map_SetProjectionHeading(MapProjection_t *proj, double heading_deg) {
     /* A heading of zero is north-up, which is the untransformed case, so it
        takes the cheap path rather than multiplying by an identity. */
     proj->rotated = (proj->sin_h != 0.0 || proj->cos_h != 1.0);
+    proj->cos_h_f = (float)proj->cos_h;
+    proj->sin_h_f = (float)proj->sin_h;
 }
 
 double Map_RotatedRadiusPx(int16_t width, int16_t height) {
@@ -71,13 +84,19 @@ void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, in
         *out_y = proj->center_y;
         return;
     }
-    const double dx = (lon - proj->center_lon) * proj->px_per_deg_lon;
+    /* Subtract in double, scale in float. See the note on px_per_deg_lon_f:
+       the coordinates need double, the small difference does not, and the
+       difference is where the arithmetic is. */
+    const float dlon = (float)(lon - proj->center_lon);
+    const float dlat = (float)(lat - proj->center_lat);
+
+    const float dx = dlon * proj->px_per_deg_lon_f;
     /* Screen y grows downward while latitude grows north, hence the sign. */
-    const double dy = -(lat - proj->center_lat) * proj->px_per_deg_lat;
+    const float dy = -dlat * proj->px_per_deg_lat_f;
 
     if (!proj->rotated) {
-        *out_x = ClampCoord((double)proj->center_x + dx);
-        *out_y = ClampCoord((double)proj->center_y + dy);
+        *out_x = ClampCoord((double)proj->center_x + (double)dx);
+        *out_y = ClampCoord((double)proj->center_y + (double)dy);
         return;
     }
 
@@ -85,8 +104,10 @@ void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, in
        at the top of the screen rather than at the right of it. Worked through
        for heading 90: a point due east has (dx, dy) = (r, 0) and comes out at
        (0, -r), which is straight up. */
-    *out_x = ClampCoord((double)proj->center_x + dx * proj->cos_h + dy * proj->sin_h);
-    *out_y = ClampCoord((double)proj->center_y - dx * proj->sin_h + dy * proj->cos_h);
+    *out_x = ClampCoord((double)proj->center_x +
+                        (double)(dx * proj->cos_h_f + dy * proj->sin_h_f));
+    *out_y = ClampCoord((double)proj->center_y +
+                        (double)(-dx * proj->sin_h_f + dy * proj->cos_h_f));
 }
 
 void Map_Project(double lat, double lon, double center_lat, double center_lon,

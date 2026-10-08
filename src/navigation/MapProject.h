@@ -64,6 +64,25 @@ typedef struct {
     double sin_h;
     bool rotated;
     bool valid;
+
+    // ---- Single-precision mirrors, for the per-point arithmetic ----
+    //
+    // ⚠️ The ESP32-S3 has a single-precision FPU and NO double-precision
+    // one, so every `double` operation here is software floating point. This
+    // function is called once per road point -- about ten thousand times per
+    // frame on a wide view -- and the panel measured 35-47ms of road drawing
+    // that turned out to be almost entirely this.
+    //
+    // The subtraction stays in double and must: longitude is ~77 degrees
+    // carried to 1e-7, which is eight significant digits and past what a
+    // float holds. The DIFFERENCE is small, so everything after it is exact
+    // enough in float -- and that is where the multiplies and the rotation
+    // are. Centre and scale are per-frame, so computing these costs nothing
+    // per point.
+    float px_per_deg_lon_f;
+    float px_per_deg_lat_f;
+    float cos_h_f;
+    float sin_h_f;
 } MapProjection_t;
 
 void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double center_lon,
