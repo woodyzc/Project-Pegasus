@@ -1,7 +1,6 @@
 #include "Page_Settings.h"
 
 #include <Arduino.h>
-#include <esp_ota_ops.h>
 #include <WiFi.h>
 
 #include "../hal/Barometer.h"
@@ -1336,35 +1335,25 @@ void PageSettings::onViewLoad() {
     snprintf(buf, sizeof(buf), "%s (boot %u)", Settings_LastResetText(),
              (unsigned)Settings_BootCount());
     MakeInfoRow(info_card, "Last reset", buf);
-    // ⚠️ NOT __DATE__/__TIME__, which is what this was and which lies.
+    // ⚠️ Injected by tools/build_stamp.py, and that file explains why at
+    // length. Neither of the two obvious sources works here:
     //
-    // Those macros are baked into whichever translation unit contains them --
-    // this one -- so they only change when THIS file is recompiled. Change
-    // RoadView.cpp alone and PlatformIO rebuilds RoadView.cpp alone, the
-    // stamp stays at whenever Page_Settings.cpp last happened to compile, and
-    // the panel reports a build time from before the change it is running.
+    //   * __DATE__/__TIME__ only moves when THIS file recompiles, so any
+    //     single-file change elsewhere leaves it reporting a build from
+    //     before the change it is running.
+    //   * esp_ota_get_app_description() reads the image header, which under
+    //     PlatformIO belongs to Espressif's precompiled Arduino core -- it
+    //     reads project "arduino-lib-builder", "Mar  5 2024", and an ELF
+    //     SHA that is constant across every firmware this project will ever
+    //     produce.
     //
-    // That was caught on 2026-10-07 by two photographs showing an identical
-    // "Oct 7 2026 18:40:50" across firmwares whose measured behaviour
-    // differed threefold. This is the line used to answer "did the flash
-    // take", so it being wrong is worse than it being absent.
-    //
-    // esp_ota_get_app_description() reads the image header, which is written
-    // at LINK time -- every build, whatever changed -- and carries the ELF
-    // SHA256. Eight hex digits of that is the thing that actually identifies
-    // a firmware: two builds a second apart differ in it, and a reflash of
-    // the same code does not.
-    {
-        const esp_app_desc_t *desc = esp_ota_get_app_description();
-        if (desc != nullptr) {
-            snprintf(buf, sizeof(buf), "%s %s #%02x%02x%02x%02x", desc->date, desc->time,
-                     desc->app_elf_sha256[0], desc->app_elf_sha256[1], desc->app_elf_sha256[2],
-                     desc->app_elf_sha256[3]);
-        } else {
-            snprintf(buf, sizeof(buf), "unknown");
-        }
-        MakeInfoRow(info_card, "Build", buf);
-    }
+    // Both were shipped and both were caught by photographs of this panel.
+    // The line answers "did the flash take", so wrong is worse than absent.
+#ifdef PEGASUS_BUILD_STAMP
+    MakeInfoRow(info_card, "Build", PEGASUS_BUILD_STAMP);
+#else
+    MakeInfoRow(info_card, "Build", "no stamp (built without tools/build_stamp.py)");
+#endif
 
     // The IMU, which exists to answer one question -- is the bike moving --
     // and gates the odometer, the idle timer and the SPEED cell on the answer
