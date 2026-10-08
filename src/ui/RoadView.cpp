@@ -14,6 +14,18 @@ volatile uint32_t g_visible = 0;
 volatile uint32_t g_cull_us = 0;
 volatile uint32_t g_draw_only_us = 0;
 
+// ⚠️ Kept separately, because the obvious way to read it does not work.
+//
+// The settings row shows the LAST draw -- and letting go of the map triggers
+// a full-detail repaint, so by the time the rider has navigated to Settings
+// the drag figure has already been overwritten by the one it was supposed to
+// be compared against. Asking someone to "watch the number while dragging"
+// is asking them to look at two pages at once.
+//
+// So the drag draws record here and stay put until the next drag.
+volatile uint32_t g_draw_only_us_drag = 0;
+volatile uint16_t g_segments_drag = 0;
+
 struct RoadStyle {
     uint32_t colour;
     lv_coord_t width;
@@ -440,6 +452,10 @@ void RoadDrawCb(lv_event_t *e) {
 
     g_visible = visible_count;
     g_draw_only_us = micros() - draw_started;
+    if (g_interactive) {
+        g_draw_only_us_drag = g_draw_only_us;
+        g_segments_drag = (uint16_t)segments;
+    }
     g_draw_us = micros() - started;
     g_segments = segments;
 }
@@ -544,4 +560,12 @@ uint32_t RoadView_LastCullUs() {
 
 uint32_t RoadView_LastDrawOnlyUs() {
     return g_draw_only_us;
+}
+
+uint32_t RoadView_LastDragDrawUs() {
+    return g_draw_only_us_drag;
+}
+
+uint16_t RoadView_LastDragSegments() {
+    return g_segments_drag;
 }

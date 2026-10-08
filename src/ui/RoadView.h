@@ -66,6 +66,13 @@ uint32_t RoadView_LastVisibleWays();
 uint32_t RoadView_LastCullUs();
 uint32_t RoadView_LastDrawOnlyUs();
 
+// The last draw that happened WHILE the map was being dragged, held until the
+// next drag. Reading the ordinary figure for this is impossible: releasing
+// the map repaints at full detail, so the drag number is gone before anyone
+// can navigate to the page that shows it.
+uint32_t RoadView_LastDragDrawUs();
+uint16_t RoadView_LastDragSegments();
+
 #ifdef __cplusplus
 }
 #endif

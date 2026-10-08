@@ -1433,10 +1433,19 @@ void PageSettings::onViewLoad() {
     // is slow with this map" cannot be answered without it, because serial
     // cannot be opened on this board.
     if (RoadMap_IsLoaded()) {
-        snprintf(buf, sizeof(buf), "%u/%u ways, %u seg, %ums",
+        // Two figures, because they answer different questions and only one
+        // of them can be read live. The first is the map standing still. The
+        // second is the last draw taken WHILE it was being dragged, held
+        // since -- which is the number that decides whether panning feels
+        // smooth, and which cannot be watched as it happens because
+        // releasing the map repaints at full detail before anyone can get to
+        // this page.
+        snprintf(buf, sizeof(buf), "%u/%u ways, %u seg, %ums (drag %u seg, %ums)",
                  (unsigned)RoadView_LastVisibleWays(), (unsigned)RoadMap_WayCount(),
                  (unsigned)RoadView_LastSegments(),
-                 (unsigned)(RoadView_LastDrawOnlyUs() / 1000));
+                 (unsigned)(RoadView_LastDrawOnlyUs() / 1000),
+                 (unsigned)RoadView_LastDragSegments(),
+                 (unsigned)(RoadView_LastDragDrawUs() / 1000));
         MakeInfoRow(info_card, "Roads", buf);
     }
 
