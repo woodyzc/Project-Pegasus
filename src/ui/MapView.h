@@ -102,6 +102,10 @@ typedef struct {
     // name is what actually distinguishes them.
     size_t done_src_track_points;
     char done_src_track_name[32];
+    // The fix the mark was last advanced against, so a pan or a zoom does not
+    // repeat a whole-track scan that cannot change its answer.
+    double done_src_fix_lat;
+    double done_src_fix_lon;
 
     // Track-up. The smoother decides what "up" is and when it has moved
     // enough to be worth a redraw; this view only asks it.

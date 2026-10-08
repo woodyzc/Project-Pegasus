@@ -35,6 +35,15 @@ void RoadView_Attach(MapView_t *view);
 // view updates the trail's points, which invalidates the trail -- and leaves
 // the road layer holding the projection it was last drawn with, so the streets
 // stay put while the track slides across them.
+// Draw less while the view is being dragged, and everything again when it
+// stops. See the note on ROAD_DRAG_MIN_SEGMENT_PX: the road layer is redrawn
+// once per frame throughout a pan, and at ~94us per lv_draw_line that is what
+// sets the frame rate.
+//
+// Clearing it repaints at full detail; setting it does not, because whatever
+// set it is about to invalidate anyway.
+void RoadView_SetInteractive(bool interactive);
+
 void RoadView_Refresh();
 
 // Microseconds spent in the last draw, and segments drawn. This is the number

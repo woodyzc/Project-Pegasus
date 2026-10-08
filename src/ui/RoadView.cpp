@@ -112,6 +112,26 @@ constexpr uint16_t ROAD_VISIBLE_MAX = 1024;
 // near-identical points OSM records along a straight road.
 constexpr int ROAD_MIN_SEGMENT_PX = 3;
 
+// ---- Detail while the finger is down ----
+//
+// Panning calls RoadView_Refresh on every LV_EVENT_PRESSING, so the road
+// layer is redrawn once per frame for as long as the drag lasts. At the
+// figures this board reports -- 587 segments in 55ms -- that alone caps
+// panning at about 18fps however fast the events arrive, which is what "not
+// very smooth" is made of.
+//
+// The segments are not the expensive part; lv_draw_line is, at roughly 94us
+// each with the rounded caps these use. So the lever is to draw FEWER of
+// them while the view is moving, and all of them again the moment it stops.
+//
+// This is what every map application does and it is honest about what it
+// trades: detail the rider cannot read anyway during a drag, for a map that
+// keeps up with their finger. Nothing is lost when they let go.
+constexpr int ROAD_DRAG_MIN_SEGMENT_PX = 9;
+constexpr uint32_t ROAD_DRAG_MAX_SEGMENTS = 260;
+
+bool g_interactive = false;
+
 // Region codes for rejecting a segment that cannot cross the view.
 //
 // Culling is per WAY, and a way only has to touch the view to survive it --
@@ -351,7 +371,10 @@ void RoadDrawCb(lv_event_t *e) {
         }
     }
 
-    for (int pass = 0; pass < ROAD_CLASS_COUNT && segments < ROAD_MAX_SEGMENTS; pass++) {
+    const uint32_t max_segments = g_interactive ? ROAD_DRAG_MAX_SEGMENTS : ROAD_MAX_SEGMENTS;
+    const int min_segment_px = g_interactive ? ROAD_DRAG_MIN_SEGMENT_PX : ROAD_MIN_SEGMENT_PX;
+
+    for (int pass = 0; pass < ROAD_CLASS_COUNT && segments < max_segments; pass++) {
         const uint8_t klass = ORDER[pass];
         const uint16_t from = slice_start[klass];
         const uint16_t to = (uint16_t)(from + class_count[klass]);
@@ -364,7 +387,7 @@ void RoadDrawCb(lv_event_t *e) {
         dsc.round_start = 1;
         dsc.round_end = 1;
 
-        for (uint16_t v = from; v < to && segments < ROAD_MAX_SEGMENTS &&
+        for (uint16_t v = from; v < to && segments < max_segments &&
                                 class_segments < ROAD_CLASS_SEGMENTS[klass];
              v++) {
             RoadWay_t way;
@@ -397,7 +420,7 @@ void RoadDrawCb(lv_event_t *e) {
                     const int dy = p.y > prev.y ? p.y - prev.y : prev.y - p.y;
                     // Always draw the final point, or a way shorter than the
                     // threshold would vanish entirely rather than simplify.
-                    if (dx + dy < ROAD_MIN_SEGMENT_PX && k + 1 < way.count) {
+                    if (dx + dy < min_segment_px && k + 1 < way.count) {
                         continue;
                     }
                     // Both ends off the same side: the segment cannot cross
@@ -477,6 +500,19 @@ void RoadView_Attach(MapView_t *view) {
     // Behind the trail, in front of the container's background. Index 0 is the
     // back of the child list, and MapView creates the trail before this runs.
     lv_obj_move_to_index(layer, 0);
+}
+
+void RoadView_SetInteractive(bool interactive) {
+    if (g_interactive == interactive) {
+        return;
+    }
+    g_interactive = interactive;
+    // Repaint on the way OUT of a drag, so full detail comes back the instant
+    // the finger lifts. On the way in, the pan that set this is about to
+    // invalidate anyway.
+    if (!interactive) {
+        RoadView_Refresh();
+    }
 }
 
 void RoadView_Refresh() {

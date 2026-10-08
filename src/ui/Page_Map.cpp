@@ -223,9 +223,22 @@ void OnMapPressing(lv_event_t *e) {
         return;
     }
 
+    // Reduced detail for as long as the finger is down; OnMapReleased puts it
+    // back. See RoadView.h -- the road layer is redrawn once per frame
+    // throughout a drag, and it is what sets the frame rate.
+    RoadView_SetInteractive(true);
     MapView_PanPixels(&s_view, vect.x, vect.y);
     RoadView_Refresh();
     UpdateRecenterButton();
+}
+
+// Both events, not just RELEASED: a drag that leaves the object, or is taken
+// over by a gesture, ends in PRESS_LOST instead -- and a map stuck at drag
+// detail because the finger slid off the edge would look like a rendering
+// fault rather than a missing handler.
+void OnMapReleased(lv_event_t *e) {
+    (void)e;
+    RoadView_SetInteractive(false);
 }
 
 void OnRecenterClicked(lv_event_t *e) {
@@ -545,6 +558,8 @@ void PageMap::onViewLoad() {
     // to be kept in step with it for no gain.
     lv_obj_add_flag(s_view.container, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_view.container, OnMapPressing, LV_EVENT_PRESSING, nullptr);
+    lv_obj_add_event_cb(s_view.container, OnMapReleased, LV_EVENT_RELEASED, nullptr);
+    lv_obj_add_event_cb(s_view.container, OnMapReleased, LV_EVENT_PRESS_LOST, nullptr);
 
     // ---- Zoom ----
     // Right edge, stacked, deliberately large. This is the one control on the

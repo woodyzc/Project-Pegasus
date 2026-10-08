@@ -381,6 +381,8 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->have_done_src = false;
     view->done_src_track_points = 0;
     view->done_src_track_name[0] = '\0';
+    view->done_src_fix_lat = 0.0;
+    view->done_src_fix_lon = 0.0;
     // Claimed on appear, never by default: a view nobody is looking at must
     // not own the camera.
     view->camera_owner = false;
@@ -649,7 +651,16 @@ void MapView_Redraw(MapView_t *view) {
     // Advance the high-water mark, in source indices. Nearest-point rather
     // than anything cleverer: this only has to answer "how far along have we
     // ever been", and max() is what makes it monotonic.
-    if (view->have_fix && track_points > 0) {
+    // ⚠️ Only when the FIX has moved. This walks the whole source track, and
+    // Redraw is called on every LV_EVENT_PRESSING during a pan -- about 33
+    // times a second -- where neither the fix nor the track has changed and
+    // the answer cannot differ. Cheap next to the road layer, but free is
+    // cheaper, and the guard is two comparisons.
+    const bool fix_moved = (view->fix_lat != view->done_src_fix_lat) ||
+                           (view->fix_lon != view->done_src_fix_lon);
+    if (view->have_fix && track_points > 0 && fix_moved) {
+        view->done_src_fix_lat = view->fix_lat;
+        view->done_src_fix_lon = view->fix_lon;
         const TrackBuffer_t *src = GpxTrack_Buffer();
         double best = 0.0;
         size_t nearest = 0;
