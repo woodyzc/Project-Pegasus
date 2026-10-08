@@ -386,6 +386,25 @@ void RoadDrawCb(lv_event_t *e) {
     const uint32_t max_segments = g_interactive ? ROAD_DRAG_MAX_SEGMENTS : ROAD_MAX_SEGMENTS;
     const int min_segment_px = g_interactive ? ROAD_DRAG_MIN_SEGMENT_PX : ROAD_MIN_SEGMENT_PX;
 
+    // The pixel threshold expressed back in scaled source degrees, so a point
+    // can be rejected without being projected. px_per_deg_* already folds in
+    // the scale and the latitude cosine; a zero or absurd value means the
+    // projection is not usable, and decimating nothing is the safe answer.
+    int32_t skip_rlat = 0;
+    int32_t skip_rlon = 0;
+    if (proj.px_per_deg_lat > 1e-9 && proj.px_per_deg_lon > 1e-9) {
+        const double lat_deg = (double)min_segment_px / proj.px_per_deg_lat;
+        const double lon_deg = (double)min_segment_px / proj.px_per_deg_lon;
+        const double lat_raw = lat_deg * ROADMAP_COORD_SCALE;
+        const double lon_raw = lon_deg * ROADMAP_COORD_SCALE;
+        if (lat_raw > 0.0 && lat_raw < 2.0e9) {
+            skip_rlat = (int32_t)lat_raw;
+        }
+        if (lon_raw > 0.0 && lon_raw < 2.0e9) {
+            skip_rlon = (int32_t)lon_raw;
+        }
+    }
+
     for (int pass = 0; pass < ROAD_CLASS_COUNT && segments < max_segments; pass++) {
         const uint8_t klass = ORDER[pass];
         const uint16_t from = slice_start[klass];
@@ -419,22 +438,53 @@ void RoadDrawCb(lv_event_t *e) {
             lv_point_t prev = {0, 0};
             uint8_t prev_code = 0;
             bool have_prev = false;
+            int32_t prev_rlat = 0;
+            int32_t prev_rlon = 0;
             for (uint16_t k = 0; k < way.count; k++) {
+                const int32_t rlat = way.points[k * 2];
+                const int32_t rlon = way.points[k * 2 + 1];
+
+                // ⚠️ Decimate BEFORE projecting, not after.
+                //
+                // This used to project every point and then throw most of
+                // them away, which made the threshold a saving on
+                // lv_draw_line and no saving at all on the work that actually
+                // dominates. OSM is metre-resolution geometry: at any usable
+                // zoom the large majority of points fall inside the threshold,
+                // so the large majority of projections were computed in order
+                // to be discarded.
+                //
+                // And a projection is not cheap here. Map_ProjectPrepared is
+                // all double, and the ESP32-S3 has only a single-precision
+                // FPU -- every one of them is software floating point. ~214
+                // visible ways at tens of points each is around ten thousand
+                // of those, which is the 35-47ms the panel reports.
+                //
+                // The measurement that found this: raising the threshold cut
+                // segments 498 -> 264 and the time went UP, 35ms -> 47ms. A
+                // cost that does not fall when you halve the thing you are
+                // charging it to is not that thing's cost.
+                //
+                // The test is a box in source units rather than |dx|+|dy| in
+                // pixels. Slightly more conservative, exact enough at these
+                // scales, and it costs two integer compares against a
+                // projection.
+                if (have_prev && k + 1 < way.count) {
+                    const int32_t dlat = rlat > prev_rlat ? rlat - prev_rlat : prev_rlat - rlat;
+                    const int32_t dlon = rlon > prev_rlon ? rlon - prev_rlon : prev_rlon - rlon;
+                    if (dlat < skip_rlat && dlon < skip_rlon) {
+                        continue;
+                    }
+                }
+
                 int16_t x, y;
-                Map_ProjectPrepared(&proj, way.points[k * 2] / ROADMAP_COORD_SCALE,
-                                    way.points[k * 2 + 1] / ROADMAP_COORD_SCALE, &x, &y);
+                Map_ProjectPrepared(&proj, (double)rlat / ROADMAP_COORD_SCALE,
+                                    (double)rlon / ROADMAP_COORD_SCALE, &x, &y);
                 lv_point_t p = {(lv_coord_t)(area.x1 + x), (lv_coord_t)(area.y1 + y)};
 
                 const uint8_t code = OutCode(&p, &area);
 
                 if (have_prev) {
-                    const int dx = p.x > prev.x ? p.x - prev.x : prev.x - p.x;
-                    const int dy = p.y > prev.y ? p.y - prev.y : prev.y - p.y;
-                    // Always draw the final point, or a way shorter than the
-                    // threshold would vanish entirely rather than simplify.
-                    if (dx + dy < min_segment_px && k + 1 < way.count) {
-                        continue;
-                    }
                     // Both ends off the same side: the segment cannot cross
                     // the view, so there is nothing for LVGL to clip.
                     if ((code & prev_code) == 0) {
@@ -445,6 +495,8 @@ void RoadDrawCb(lv_event_t *e) {
                 }
                 prev = p;
                 prev_code = code;
+                prev_rlat = rlat;
+                prev_rlon = rlon;
                 have_prev = true;
             }
         }
