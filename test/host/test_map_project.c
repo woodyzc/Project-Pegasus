@@ -33,6 +33,292 @@ static int32_t lat_store[CAP];
 static int32_t lon_store[CAP];
 static MapPoint_t poly[CAP];
 
+// ---------------------------------------------------------------------------
+// The polyline builder, as it was before 2026-10-07
+// ---------------------------------------------------------------------------
+// Kept here verbatim in shape, as the reference the fast search is pinned
+// against. The rewrite stopped projecting every point to find the visible
+// range -- two scans inward, with an integer box in front -- and the whole
+// claim is that it produces the SAME two indices and therefore the same
+// polyline. A claim like that is either tested or it is a hope: the failure
+// mode is an off-by-one in a scan bound, which draws a slightly wrong stretch
+// of route on a screen nobody is comparing against a reference.
+//
+// Map_PointVisible is static in MapProject.c, so its rule is restated rather
+// than called. That is deliberate too -- if someone widens the margin there
+// and not here, these tests should be what notices.
+static int RefVisible(int x, int y, int cx, int cy) {
+    const int margin = 8;
+    return x >= -margin && y >= -margin && x <= cx * 2 + margin && y <= cy * 2 + margin;
+}
+
+static size_t RefBuildPolyline(const TrackBuffer_t *track, const MapProjection_t *proj,
+                               MapPoint_t *out, size_t max_points) {
+    size_t written = 0;
+    size_t first = 0;
+    size_t last = 0;
+    int found = 0;
+    int16_t last_x = 0;
+    int16_t last_y = 0;
+    size_t span;
+    size_t stride;
+
+    if (track == NULL || proj == NULL || out == NULL || max_points == 0 || track->count == 0) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < track->count; i++) {
+        double lat, lon;
+        int16_t x, y;
+        if (!TrackBuffer_Get(track, i, &lat, &lon)) {
+            continue;
+        }
+        Map_ProjectPrepared(proj, lat, lon, &x, &y);
+        if (!RefVisible(x, y, proj->center_x, proj->center_y)) {
+            continue;
+        }
+        if (!found) {
+            first = i;
+            found = 1;
+        }
+        last = i;
+    }
+    if (!found) {
+        return 0;
+    }
+
+    if (first > 0) {
+        first--;
+    }
+    if (last + 1 < track->count) {
+        last++;
+    }
+
+    span = last - first + 1;
+    stride = (span + max_points - 1) / max_points;
+    if (stride == 0) {
+        stride = 1;
+    }
+
+    for (size_t i = first; i <= last; i += stride) {
+        double lat, lon;
+        int16_t x, y;
+        if (!TrackBuffer_Get(track, i, &lat, &lon)) {
+            continue;
+        }
+        Map_ProjectPrepared(proj, lat, lon, &x, &y);
+        if (written > 0 && x == last_x && y == last_y) {
+            continue;
+        }
+        out[written].x = x;
+        out[written].y = y;
+        last_x = x;
+        last_y = y;
+        written++;
+        if (written >= max_points) {
+            break;
+        }
+    }
+    return written;
+}
+
+// Big enough that TrackBuffer_Add never halves and thins the input: the
+// thinning is TrackBuffer's own business and tested there, and letting it fire
+// here would compare two builders against a track neither of them chose.
+#define REF_CAP 6000
+static int32_t s_ref_lat[REF_CAP];
+static int32_t s_ref_lon[REF_CAP];
+
+typedef enum {
+    SHAPE_DIAGONAL,     /* one long straight run */
+    SHAPE_OUT_AND_BACK, /* the same points forward then reversed */
+    SHAPE_LOOP,
+    SHAPE_EXCURSION,    /* leaves the area entirely and comes back */
+    SHAPE_SINGLE,
+    SHAPE_COUNT
+} RefShape_t;
+
+static void BuildShape(TrackBuffer_t *track, RefShape_t shape, double lat0, double lon0) {
+    TrackBuffer_Init(track, s_ref_lat, s_ref_lon, REF_CAP);
+
+    switch (shape) {
+    case SHAPE_DIAGONAL:
+        for (int i = 0; i < 5000; i++) {
+            TrackBuffer_Add(track, lat0 + i * 0.00002, lon0 + i * 0.00003);
+        }
+        break;
+    case SHAPE_OUT_AND_BACK:
+        for (int i = 0; i < 1200; i++) {
+            TrackBuffer_Add(track, lat0 + i * 0.00004, lon0 + i * 0.00001);
+        }
+        for (int i = 1200; i-- > 0;) {
+            TrackBuffer_Add(track, lat0 + i * 0.00004, lon0 + i * 0.00001);
+        }
+        break;
+    case SHAPE_LOOP:
+        for (int i = 0; i < 2000; i++) {
+            const double t = (double)i / 2000.0 * 6.28318530718;
+            TrackBuffer_Add(track, lat0 + 0.01 * sin(t), lon0 + 0.014 * cos(t));
+        }
+        break;
+    case SHAPE_EXCURSION:
+        for (int i = 0; i < 400; i++) {
+            TrackBuffer_Add(track, lat0 + i * 0.00003, lon0 + i * 0.00003);
+        }
+        for (int i = 0; i < 400; i++) {
+            /* Kilometres away: every one of these is culled, and the drawn
+               line must not chord across the gap. */
+            TrackBuffer_Add(track, lat0 + 0.4 + i * 0.0001, lon0 + 0.5 + i * 0.0001);
+        }
+        for (int i = 0; i < 400; i++) {
+            TrackBuffer_Add(track, lat0 + 0.012 + i * 0.00003, lon0 + 0.012 + i * 0.00003);
+        }
+        break;
+    case SHAPE_SINGLE:
+        TrackBuffer_Add(track, lat0, lon0);
+        break;
+    default:
+        break;
+    }
+}
+
+static void test_fast_search_matches_the_old_full_pass(void) {
+    printf("- the fast visible-range search draws what the full pass drew: ");
+
+    static MapPoint_t got[512];
+    static MapPoint_t want[512];
+
+    /* Centres: on the track, beside it, and far enough away that nothing is
+       visible at all. Scales from "a driveway" to "the whole county". */
+    const double anchors[][2] = {{38.8800, -77.1400}, {0.0, 0.0}, {60.2000, 24.9000},
+                                 {-33.9000, 151.2000}};
+    const double scales[] = {0.5, 3.0, 17.5, 80.0, 400.0};
+    const double headings[] = {0.0, 37.0, 90.0, 180.0, 271.0};
+    const double offsets[][2] = {{0.0, 0.0}, {0.004, 0.004}, {-0.02, 0.03}, {5.0, 5.0}};
+    const size_t budgets[] = {64, 256, 512};
+    const int16_t halves[][2] = {{120, 131}, {120, 100}, {40, 40}};
+
+    int compared = 0;
+
+    for (size_t a = 0; a < sizeof(anchors) / sizeof(anchors[0]); a++) {
+        for (int shape = 0; shape < SHAPE_COUNT; shape++) {
+            TrackBuffer_t track;
+            BuildShape(&track, (RefShape_t)shape, anchors[a][0], anchors[a][1]);
+
+            for (size_t s = 0; s < sizeof(scales) / sizeof(scales[0]); s++) {
+                for (size_t h = 0; h < sizeof(headings) / sizeof(headings[0]); h++) {
+                    for (size_t o = 0; o < sizeof(offsets) / sizeof(offsets[0]); o++) {
+                        for (size_t b = 0; b < sizeof(budgets) / sizeof(budgets[0]); b++) {
+                            for (size_t v = 0; v < sizeof(halves) / sizeof(halves[0]); v++) {
+                                MapProjection_t proj;
+                                Map_PrepareProjection(&proj, anchors[a][0] + offsets[o][0],
+                                                      anchors[a][1] + offsets[o][1], scales[s],
+                                                      halves[v][0], halves[v][1]);
+                                Map_SetProjectionHeading(&proj, headings[h]);
+
+                                const size_t n_want =
+                                    RefBuildPolyline(&track, &proj, want, budgets[b]);
+                                const size_t n_got =
+                                    Map_BuildPolylinePrepared(&track, &proj, got, budgets[b]);
+
+                                if (n_got != n_want) {
+                                    check(0, "same number of drawn points as the full pass");
+                                    continue;
+                                }
+                                int same = 1;
+                                for (size_t i = 0; i < n_want; i++) {
+                                    if (got[i].x != want[i].x || got[i].y != want[i].y) {
+                                        same = 0;
+                                        break;
+                                    }
+                                }
+                                check(same, "same drawn points as the full pass");
+                                compared++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* A test that compared nothing would pass silently. */
+    check(compared > 3000, "the sweep actually ran");
+
+    /* And at least one configuration must have drawn something, or the whole
+       sweep could be agreeing on "nothing visible" everywhere. */
+    {
+        TrackBuffer_t track;
+        BuildShape(&track, SHAPE_DIAGONAL, 38.88, -77.14);
+        MapProjection_t proj;
+        Map_PrepareProjection(&proj, 38.88 + 0.001, -77.14 + 0.001, 3.0, 120, 131);
+        check(Map_BuildPolylinePrepared(&track, &proj, got, 256) > 10,
+              "a centred track draws a real line");
+    }
+    printf("done\n");
+}
+
+static void test_source_box_admits_the_rotated_corners(void) {
+    printf("- a turned view keeps the corners it would otherwise lose: ");
+
+    static MapPoint_t got[512];
+    static MapPoint_t want[512];
+
+    /* A point in the corner of a rotated viewport is outside the box an
+       unrotated half-extent pair would build, and inside the view. If the
+       prefilter were built from half-extents rather than the half-diagonal,
+       this is where the drawn line would start late or end early. */
+    TrackBuffer_t track;
+    TrackBuffer_Init(&track, s_ref_lat, s_ref_lon, REF_CAP);
+    const double lat0 = 38.88;
+    const double lon0 = -77.14;
+    for (int i = 0; i < 900; i++) {
+        /* A long diagonal, which is the direction a square viewport's
+           diagonal reaches furthest. */
+        TrackBuffer_Add(&track, lat0 + (i - 450) * 0.00002, lon0 + (i - 450) * 0.000025);
+    }
+
+    for (int deg = 0; deg < 360; deg += 15) {
+        MapProjection_t proj;
+        Map_PrepareProjection(&proj, lat0, lon0, 2.0, 120, 131);
+        Map_SetProjectionHeading(&proj, (double)deg);
+
+        const size_t n_want = RefBuildPolyline(&track, &proj, want, 256);
+        const size_t n_got = Map_BuildPolylinePrepared(&track, &proj, got, 256);
+        check(n_got == n_want, "rotated: same count");
+        if (n_got == n_want) {
+            int same = 1;
+            for (size_t i = 0; i < n_want; i++) {
+                if (got[i].x != want[i].x || got[i].y != want[i].y) {
+                    same = 0;
+                    break;
+                }
+            }
+            check(same, "rotated: same points");
+        }
+    }
+    printf("done\n");
+}
+
+static void test_degenerate_scale_still_builds(void) {
+    printf("- a zero scale does not take the box path: ");
+    /* px_per_deg is zero, so no box can be built and every point has to stay
+       a candidate. Without that fallback the prefilter would reject the whole
+       track and the map would go blank rather than collapse to a dot. */
+    static MapPoint_t got[64];
+    TrackBuffer_t track;
+    BuildShape(&track, SHAPE_DIAGONAL, 38.88, -77.14);
+
+    MapProjection_t proj;
+    Map_PrepareProjection(&proj, 38.88, -77.14, 0.0, 120, 131);
+    const size_t n = Map_BuildPolylinePrepared(&track, &proj, got, 64);
+    check(n == 1, "every point pins to the centre and collapses to one");
+    if (n >= 1) {
+        check(got[0].x == 120 && got[0].y == 131, "and that point is the centre");
+    }
+    printf("done\n");
+}
+
 int main(void) {
     TrackBuffer_t track;
     int16_t x;
@@ -363,6 +649,10 @@ int main(void) {
         check(bx == 55 && by == 66, "zero scale pins to the centre");
     }
     printf("done\n");
+
+    test_fast_search_matches_the_old_full_pass();
+    test_source_box_admits_the_rotated_corners();
+    test_degenerate_scale_still_builds();
 
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     printf("RESULT: %s\n", failures == 0 ? "PASS" : "FAIL");
