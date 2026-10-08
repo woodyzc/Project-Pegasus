@@ -6,7 +6,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "../hal/Barometer.h"
 #include "../hal/Battery.h"
 #include "../hal/Imu.h"
 #include "../system/Stillness.h"
@@ -303,7 +302,6 @@ lv_obj_t *s_p2_trip_cell = nullptr;
 // because the once-a-second refresh sits above it and calls it.
 void RenderPage2();
 static void SetTextIfChanged(lv_obj_t *label, const char *text);
-static void SetTextIfChangedFmt(lv_obj_t *label, const char *fmt, double value);
 
 
 // A triangle riding above the bar, pointing down at the rider's position. The
@@ -371,17 +369,6 @@ uint32_t s_hr_last_ms = 0;
 uint32_t s_cadence_last_ms = 0;
 lv_obj_t *s_battery_label = nullptr;
 
-// Air temperature, from the BMP580 -- the same read that supplies pressure,
-// so it costs no extra bus traffic (Barometer_Reading is the cached
-// accessor, deliberately not Barometer_Read).
-//
-// ⚠️ It is the PART's temperature, inside a closed case, beside a backlit
-// panel and an ESP32 at 240MHz. It will read above ambient, and by how much
-// is a property of this case rather than of the sensor -- which is why
-// Settings_GetTempOffsetC() exists and defaults to zero. Measure the delta
-// against a thermometer once and set it; until then the figure is honest
-// about being the device's temperature and not the air's.
-lv_obj_t *s_temp_label = nullptr;
 
 // Satellite count, in the status strip beside the clock. The strip is drawn on
 // the page rather than inside the navigation tile, so this reads the same in
@@ -1481,29 +1468,6 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_tbt_last_ms = 0;
     }
 
-    // The temperature, beside the battery. Cheap enough to do on this tick:
-    // Barometer_Reading() is the cached accessor and touches no bus.
-    //
-    // Blanked rather than skipped when there is no reading -- a barometer
-    // that has gone quiet must not leave its last temperature standing, which
-    // is the rule §8 states for every live figure on this panel.
-    if (s_temp_label != nullptr) {
-        float pa = 0.0f;
-        float degc = 0.0f;
-        if (Barometer_Reading(&pa, &degc)) {
-            const float corrected = degc + (float)Settings_GetTempOffsetC();
-            // Follows the same unit switch as speed and distance: a panel
-            // reading mph has no business showing Celsius.
-            if (Settings_GetSpeedUnit() == SPEED_UNIT_MPH) {
-                SetTextIfChangedFmt(s_temp_label, "%.0fF", (double)(corrected * 1.8f + 32.0f));
-            } else {
-                SetTextIfChangedFmt(s_temp_label, "%.0fC", (double)corrected);
-            }
-        } else {
-            SetTextIfChanged(s_temp_label, "");
-        }
-    }
-
     // Refreshed whether or not it is showing. A hidden label costs one string
     // format a second and removes any chance of the page being a tick stale
     // the moment it appears.
@@ -1704,17 +1668,6 @@ static void SetTextIfChanged(lv_obj_t *label, const char *text) {
         return;
     }
     lv_label_set_text(label, text);
-}
-
-// SetTextIfChanged with a format string. Same reason: lv_label_set_text
-// invalidates unconditionally, and this runs on a timer (CLAUDE.md §8a).
-static void SetTextIfChangedFmt(lv_obj_t *label, const char *fmt, double value) {
-    if (label == nullptr) {
-        return;
-    }
-    char buf[16];
-    snprintf(buf, sizeof(buf), fmt, value);
-    SetTextIfChanged(label, buf);
 }
 
 void RenderPage2() {
@@ -2227,33 +2180,8 @@ void PageDashboard::onViewLoad() {
     // The device's own battery, published to TOPIC_BATTERY by the Core 0
     // monitor in hal/Battery.cpp -- not HeartRate_t.battery, which is the
     // strap's.
-    // A flex row, for the reason the clock row above gives: lv_obj_align_to
-    // resolves once, against a width measured at that instant, and both of
-    // these change width in use -- "76%" to "100%", "9C" to "-11C". A row is
-    // re-laid out whenever either resizes, so they cannot run into each other.
-    lv_obj_t *right_row = lv_obj_create(parent);
-    lv_obj_remove_style_all(right_row);
-    lv_obj_set_size(right_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_clear_flag(right_row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(right_row, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_flex_flow(right_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(right_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(right_row, 8, 0);
-    lv_obj_align(right_row, LV_ALIGN_TOP_RIGHT, -PAD, 7);
-
-    // No degree sign: every font here covers 0x20-0x7F only (CLAUDE.md §9),
-    // so U+00B0 would draw as nothing. The settings page writes "31C" for the
-    // same reason and this matches it.
-    s_temp_label = lv_label_create(right_row);
-    lv_obj_set_style_text_font(s_temp_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(s_temp_label, lv_color_hex(COLOR_CAPTION), 0);
-    lv_label_set_text(s_temp_label, "");
-
-    s_battery_label = lv_label_create(right_row);
-    lv_obj_set_style_text_font(s_battery_label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(s_battery_label, lv_color_hex(COLOR_CAPTION), 0);
-    lv_label_set_text(s_battery_label, LV_SYMBOL_BATTERY_FULL " --%");
+    s_battery_label = MakeLabel(parent, LV_SYMBOL_BATTERY_FULL " --%", &lv_font_montserrat_12,
+                                COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -PAD, 7);
 
     // ---- Satellites ----
     // The strip's free corner: the clock sits mid (pulled 8px left) and the
@@ -2568,7 +2496,6 @@ void PageDashboard::onViewUnload() {
     s_nav_cell = nullptr;
     s_nav_is_map = false;
     s_battery_label = nullptr;
-    s_temp_label = nullptr;
     // The count and its source are deliberately NOT cleared with the label:
     // they describe the fix, not the widget, and the page is rebuilt while a
     // ride is under way. Zeroing them here would redraw a live 9-satellite

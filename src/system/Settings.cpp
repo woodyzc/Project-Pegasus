@@ -20,7 +20,6 @@ constexpr char KEY_RADIO_PENDING[] = "radiopend";
 constexpr uint8_t RADIO_PENDING_LIMIT = 2;
 constexpr char KEY_NAV_MODE[] = "navmode";
 constexpr char KEY_HR_REST[] = "hrrest";
-constexpr char KEY_TEMP_OFF[] = "tempoff";
 constexpr char KEY_HR_MAX[] = "hrmax";
 constexpr char KEY_BOOT_COUNT[] = "boots";
 constexpr char KEY_SLEEP[] = "sleepen";
@@ -78,7 +77,6 @@ NavMode_t s_nav_mode = DEFAULT_NAV_MODE;
 // Opt-in: see Settings.h. An untested wake source that leaves the device
 // looking dead is a poor default however mild the recovery.
 bool s_sleep_enabled = false;
-int8_t s_temp_offset_c = 0;
 // Default on: the rider asked for it, and north-up costs a mental rotation at
 // every junction.
 bool s_track_up = true;
@@ -142,7 +140,6 @@ void Settings_Init() {
         s_sleep_enabled = s_prefs.getUChar(KEY_SLEEP, 0) != 0;
         s_track_up = s_prefs.getUChar(KEY_TRACKUP, 1) != 0;
         s_hr_rest = s_prefs.getUChar(KEY_HR_REST, DEFAULT_HR_REST);
-        s_temp_offset_c = (int8_t)s_prefs.getChar(KEY_TEMP_OFF, 0);
         s_hr_max = s_prefs.getUChar(KEY_HR_MAX, DEFAULT_HR_MAX);
     }
 
@@ -316,26 +313,6 @@ void Settings_SetSpeedUnit(SpeedUnit_t unit) {
     s_speed_unit = unit;
     if (s_ready) {
         s_prefs.putUChar(KEY_SPEED_UNIT, (uint8_t)s_speed_unit);
-    }
-}
-
-int8_t Settings_GetTempOffsetC() {
-    return s_temp_offset_c;
-}
-
-void Settings_SetTempOffsetC(int8_t offset) {
-    if (offset < -20) {
-        offset = -20;
-    }
-    if (offset > 20) {
-        offset = 20;
-    }
-    if (offset == s_temp_offset_c) {
-        return;
-    }
-    s_temp_offset_c = offset;
-    if (s_ready) {
-        s_prefs.putChar(KEY_TEMP_OFF, s_temp_offset_c);
     }
 }
 
