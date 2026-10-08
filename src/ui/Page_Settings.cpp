@@ -2,10 +2,14 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <stdarg.h> // SetRowTextFmt
+#include <stdio.h>
+#include <string.h>
 
 #include "../hal/Barometer.h"
 #include "../hal/Imu.h"
 #include "../navigation/RoadMap.h"
+#include "MapView.h"
 #include "RoadView.h"
 #include "../system/TimeSource.h" // WiFi.macAddress() -- reads the eFused MAC, no radio started
 
@@ -184,6 +188,50 @@ void OnUnitToggled(lv_event_t *e) {
     lv_label_set_text(s_unit_value, Settings_SpeedUnitLabel());
 }
 
+// ---- Writing a row only when it has something new to say ----
+//
+// lv_label_set_text invalidates whether or not the value changed (CLAUDE.md
+// 8a), and InfoTimerCallback writes a dozen rows once a second for figures
+// that mostly change once a minute or never. So scrolling this page -- which
+// is long, and is the page someone is on precisely when they want to read it
+// carefully -- competed with a full re-rasterisation of every row, once a
+// second.
+//
+// Compared against what the label already holds rather than against a cached
+// copy, the same way Page_Dashboard's SetTextIfChanged does. lv_label_get_text
+// hands back the label's own buffer, so there is no second copy to keep in
+// step -- which matters more here than on the dashboard: this is the
+// diagnostic page, and a row that silently stopped updating would be exactly
+// the lying diagnostic CLAUDE.md 8 keeps warning about. A cache cannot go
+// stale against the label if the label IS the cache.
+void SetRowText(lv_obj_t *label, const char *text) {
+    if (label == nullptr || text == nullptr) {
+        return;
+    }
+    const char *current = lv_label_get_text(label);
+    if (current != nullptr && strcmp(current, text) == 0) {
+        return;
+    }
+    lv_label_set_text(label, text);
+}
+
+// Generous: the longest row here is the Route RX line at about 90 characters
+// and the power rows carry a newline and a reason string. Truncation would
+// show as a cut-off row rather than as a wrong one, but there is no reason to
+// run close.
+void SetRowTextFmt(lv_obj_t *label, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void SetRowTextFmt(lv_obj_t *label, const char *fmt, ...) {
+    if (label == nullptr || fmt == nullptr) {
+        return;
+    }
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    SetRowText(label, buf);
+}
+
 void SetRideButton(lv_obj_t *btn, lv_obj_t *icon, lv_obj_t *label, bool live, uint32_t live_bg,
                    uint32_t live_ink) {
     if (btn == nullptr) {
@@ -216,7 +264,23 @@ void SetRideButton(lv_obj_t *btn, lv_obj_t *icon, lv_obj_t *label, bool live, ui
 // the old value and leave the button live for up to a second, which is exactly
 // long enough for a second press. The handlers pass what they just asked for;
 // the one-second timer passes the truth and corrects any disagreement.
+// -1 until the buttons have been drawn once, so the first call always draws
+// whatever the state is rather than trusting a default.
+int s_ride_buttons_armed = -1;
+
 void RefreshRideButtons(bool armed) {
+    // Guarded on the state, because SetRideButton sets STYLES and a style
+    // invalidates exactly as unconditionally as a label does -- CLAUDE.md 8a
+    // says so in as many words, and this is where it was being ignored. This
+    // is called from InfoTimerCallback, so six objects were re-invalidated
+    // every second for a flag that changes when the rider presses a button:
+    // twice a ride, not twice a minute.
+    const int want = armed ? 1 : 0;
+    if (s_ride_buttons_armed == want) {
+        return;
+    }
+    s_ride_buttons_armed = want;
+
     SetRideButton(s_ride_start_btn, s_ride_start_icon, s_ride_start_label, !armed,
                   COLOR_BTN_START_BG, COLOR_OK);
     SetRideButton(s_ride_finish_btn, s_ride_finish_icon, s_ride_finish_label, armed,
@@ -564,11 +628,11 @@ void RefreshPowerStatus() {
     if (s_power_battery != nullptr) {
         Battery_t battery;
         if (DataCenter_Pull(TOPIC_BATTERY, &battery, sizeof(battery))) {
-            lv_label_set_text_fmt(s_power_battery, "Battery: %u mV, %u%%, on USB: %s",
+            SetRowTextFmt(s_power_battery, "Battery: %u mV, %u%%, on USB: %s",
                                   (unsigned)battery.millivolts, (unsigned)battery.percent,
                                   battery.on_usb ? "yes" : "NO");
         } else {
-            lv_label_set_text(s_power_battery, "Battery: nothing published yet");
+            SetRowText(s_power_battery, "Battery: nothing published yet");
         }
     }
 
@@ -588,7 +652,7 @@ void RefreshPowerStatus() {
     // nothing to do with.
     const char *blocked = PowerManager_InhibitText();
     if (blocked[0] != '\0') {
-        lv_label_set_text_fmt(s_power_status, "Screen: %s @ %uMHz (idled %ux).\nWill not sleep: %s.",
+        SetRowTextFmt(s_power_status, "Screen: %s @ %uMHz (idled %ux).\nWill not sleep: %s.",
                               PowerManager_StageText(), (unsigned)PowerManager_CpuMhz(),
                               (unsigned)PowerManager_DownclockCount(), blocked);
     } else {
@@ -597,7 +661,7 @@ void RefreshPowerStatus() {
         // applies depends on whether a ride has been recorded and finished.
         const uint32_t after_ms = PowerManager_SleepAfterMs();
         const uint32_t left_s = (idle_ms >= after_ms) ? 0u : ((after_ms - idle_ms) / 1000u);
-        lv_label_set_text_fmt(s_power_status, "Screen: %s @ %uMHz (idled %ux).\nSleeps in %u s.",
+        SetRowTextFmt(s_power_status, "Screen: %s @ %uMHz (idled %ux).\nSleeps in %u s.",
                               PowerManager_StageText(), (unsigned)PowerManager_CpuMhz(),
                               (unsigned)PowerManager_DownclockCount(), (unsigned)left_s);
     }
@@ -620,19 +684,19 @@ void InfoTimerCallback(lv_timer_t *timer) {
     (void)timer;
 
     const uint32_t seconds = millis() / 1000UL;
-    lv_label_set_text_fmt(s_uptime_value, "%luh %02lum %02lus", (unsigned long)(seconds / 3600UL),
+    SetRowTextFmt(s_uptime_value, "%luh %02lum %02lus", (unsigned long)(seconds / 3600UL),
                           (unsigned long)((seconds / 60UL) % 60UL), (unsigned long)(seconds % 60UL));
-    lv_label_set_text_fmt(s_heap_value, "%u KB free / PSRAM %u KB free",
+    SetRowTextFmt(s_heap_value, "%u KB free / PSRAM %u KB free",
                           (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getFreePsram() / 1024));
 
     // Recording starts on the first fix, which is usually after this page was
     // built, so a value set only at load would read "waiting for fix" for the
     // whole ride and suggest the log was broken when it was working.
     if (s_hrlink_value != nullptr) {
-        lv_label_set_text_fmt(s_hrlink_value, "Link: %s", BLE_HR_StatusText());
+        SetRowTextFmt(s_hrlink_value, "Link: %s", BLE_HR_StatusText());
     }
     if (s_cadencelink_value != nullptr) {
-        lv_label_set_text(s_cadencelink_value, BLE_CSC_StatusText());
+        SetRowText(s_cadencelink_value, BLE_CSC_StatusText());
     }
 
     if (s_imu_value != nullptr) {
@@ -647,7 +711,7 @@ void InfoTimerCallback(lv_timer_t *timer) {
         } else {
             snprintf(buf, sizeof(buf), "none - GPS drift is not gated");
         }
-        lv_label_set_text_fmt(s_imu_value, "IMU: %s", buf);
+        SetRowTextFmt(s_imu_value, "IMU: %s", buf);
     }
 
     // The whole point of this row is to be read WHILE a transfer is failing,
@@ -676,7 +740,7 @@ void InfoTimerCallback(lv_timer_t *timer) {
                             : (mf == NAVROUTE_RX_ALLOC) ? "PSRAM alloc failed"
                             : (mf == NAVROUTE_RX_OK)    ? "ok"
                                                         : "never seen";
-        lv_label_set_text_fmt(s_routerx_value, "Route RX: %lu writes, %u/%u, last: %s, manifest: %s",
+        SetRowTextFmt(s_routerx_value, "Route RX: %lu writes, %u/%u, last: %s, manifest: %s",
                               (unsigned long)writes, (unsigned)received, (unsigned)total, why, mfwhy);
     }
 
@@ -688,12 +752,12 @@ void InfoTimerCallback(lv_timer_t *timer) {
             // The link is up in GPX mode too -- it carries the phone's
             // position, which a breadcrumb has nothing to draw without. Only
             // the turn DISPLAY is mode-dependent.
-            lv_label_set_text_fmt(s_tbtlink_value, "TBT: %s (turns hidden in GPX mode)",
+            SetRowTextFmt(s_tbtlink_value, "TBT: %s (turns hidden in GPX mode)",
                                   BLE_TBT_IsConnected() ? "phone connected" : "advertising");
         } else if (BLE_TBT_IsConnected()) {
-            lv_label_set_text(s_tbtlink_value, "TBT: phone connected");
+            SetRowText(s_tbtlink_value, "TBT: phone connected");
         } else {
-            lv_label_set_text_fmt(s_tbtlink_value, "TBT: %s, advertising %s%s",
+            SetRowTextFmt(s_tbtlink_value, "TBT: %s, advertising %s%s",
                                   BLE_TBT_StartResultText(),
                                   BLE_TBT_IsAdvertising() ? "YES" : "NO",
                                   BLE_TBT_RestartCount() > 0 ? " (restarted)" : "");
@@ -712,7 +776,7 @@ void InfoTimerCallback(lv_timer_t *timer) {
         if (RideLog_IsRecording()) {
             char name[48];
             RideLog_FileName(name, sizeof(name));
-            lv_label_set_text_fmt(s_ridelog_value, "Ride log: %s (%u pts)", name,
+            SetRowTextFmt(s_ridelog_value, "Ride log: %s (%u pts)", name,
                                   (unsigned)RideLog_PointCount());
         } else if (!RideLog_IsArmed()) {
             // Disarmed is not "waiting for fix", and conflating them is how a
@@ -730,12 +794,12 @@ void InfoTimerCallback(lv_timer_t *timer) {
                          (unsigned)RideLog_DiscardedCount());
             }
             if (RideLog_AutoEndCount() > 0) {
-                lv_label_set_text_fmt(s_ridelog_value,
+                SetRowTextFmt(s_ridelog_value,
                                       "Ride log: off - ended after an hour still (%ux). "
                                       "Start a ride to record again.%s",
                                       (unsigned)RideLog_AutoEndCount(), discarded);
             } else {
-                lv_label_set_text_fmt(s_ridelog_value,
+                SetRowTextFmt(s_ridelog_value,
                                       "Ride log: off. Start a ride to record.%s", discarded);
             }
         } else {
@@ -744,10 +808,10 @@ void InfoTimerCallback(lv_timer_t *timer) {
             // way to get here, and this line used to claim it was.
             const char *why = RideLog_NotRecordingReason();
             if (why != nullptr) {
-                lv_label_set_text_fmt(s_ridelog_value,
+                SetRowTextFmt(s_ridelog_value,
                                       "Ride log: ARMED BUT NOT RECORDING - %s.", why);
             } else {
-                lv_label_set_text(s_ridelog_value, "Ride log: armed, waiting for fix");
+                SetRowText(s_ridelog_value, "Ride log: armed, waiting for fix");
             }
         }
     }
@@ -944,6 +1008,13 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_text_color(finish_label, lv_color_hex(COLOR_ACCENT), 0);
 
     // Before the first frame, so the pair is never drawn both-live for a tick.
+    //
+    // And the guard inside it is reset first: it remembers which state the
+    // buttons were last DRAWN in, and these are new objects with none of that
+    // styling on them. PageManager caches this page so this runs once a boot
+    // -- but a cache that describes objects has to be dropped when the
+    // objects are, or the buttons come up unstyled and stay that way.
+    s_ride_buttons_armed = -1;
     RefreshRideButtons(RideLog_IsArmed());
 
     lv_obj_t *summary_btn = lv_btn_create(trip_card);
@@ -1001,7 +1072,7 @@ void PageSettings::onViewLoad() {
     s_hrlink_value = lv_label_create(hr_card);
     lv_obj_set_style_text_font(s_hrlink_value, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(s_hrlink_value, lv_color_hex(COLOR_VALUE), 0);
-    lv_label_set_text(s_hrlink_value, "Link: --");
+    SetRowText(s_hrlink_value, "Link: --");
 
     // The cadence sensor, in the same card and for the same reason the
     // turn-by-turn link is here: one NimBLE stack, one radio, and three
@@ -1015,7 +1086,7 @@ void PageSettings::onViewLoad() {
     s_cadencelink_value = lv_label_create(hr_card);
     lv_obj_set_style_text_font(s_cadencelink_value, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(s_cadencelink_value, lv_color_hex(COLOR_VALUE), 0);
-    lv_label_set_text(s_cadencelink_value, "Cadence: --");
+    SetRowText(s_cadencelink_value, "Cadence: --");
     // Two lines once a sensor is connected: the rpm, then the raw fields
     // behind it. Wrapped rather than clipped, because the second line is only
     // useful in full.
@@ -1029,7 +1100,7 @@ void PageSettings::onViewLoad() {
     lv_obj_set_style_text_color(s_tbtlink_value, lv_color_hex(COLOR_VALUE), 0);
     lv_label_set_long_mode(s_tbtlink_value, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_tbtlink_value, LV_PCT(100));
-    lv_label_set_text(s_tbtlink_value, "TBT: --");
+    SetRowText(s_tbtlink_value, "TBT: --");
 
     // ---- Heart-rate zones ----
     // Unlike the source above, these take effect immediately: they are only
@@ -1465,6 +1536,24 @@ void PageSettings::onViewLoad() {
                  (unsigned)RoadView_LastDragSegments(),
                  (unsigned)(RoadView_LastDragDrawUs() / 1000));
         MakeInfoRow(info_card, "Roads", buf);
+    }
+
+    // The recorded/planned track, which is a separate layer from the roads and
+    // a separate cost. Worth its own row because the two scale with different
+    // things: the roads with how much map is in view, the track with how long
+    // the route is. A 20,000-point GPX used to charge the full length to every
+    // frame of a pan.
+    //
+    // src/drawn is the ratio that says whether the search is doing its job --
+    // thousands against a couple of hundred is the expected shape. "prog" is
+    // the once-a-second progress scan, which is charged to the fix rather than
+    // to the frame and so hides from an FPS reading.
+    if (GpxTrack_PointCount() > 0) {
+        snprintf(buf, sizeof(buf), "%u src, %u drawn, %uus (drag %uus, prog %uus)",
+                 (unsigned)MapView_LastSourcePoints(), (unsigned)MapView_LastDrawnPoints(),
+                 (unsigned)MapView_LastBuildUs(), (unsigned)MapView_LastBuildDragUs(),
+                 (unsigned)MapView_LastProgressScanUs());
+        MakeInfoRow(info_card, "Track", buf);
     }
 
     // The clock, and where it came from. "Blank clock" has three causes that

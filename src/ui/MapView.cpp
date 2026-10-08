@@ -1,5 +1,6 @@
 #include "MapView.h"
 
+#include <Arduino.h>
 #include <math.h>
 #include <string.h>
 
@@ -18,6 +19,17 @@
 #include "../system/Settings.h"
 
 namespace {
+
+// The figures MapView_LastBuildUs() and friends hand to the settings page.
+// File scope rather than per-view: there are two MapView_t instances (the
+// dashboard tile and the route page) and the question being asked is about the
+// board, not about one of them.
+uint32_t g_build_us = 0;
+uint32_t g_build_drag_us = 0;
+uint32_t g_src_points = 0;
+uint32_t g_drawn_points = 0;
+uint32_t g_progress_scan_us = 0;
+bool g_interactive = false;
 
 constexpr uint32_t COLOR_MAP_BG = 0x0B1116;
 // The trail, in two colours: what is behind the rider and what is ahead.
@@ -473,6 +485,9 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // Created after the overlay so it draws on top of the bar it labels.
     view->scale_label = lv_label_create(view->container);
     lv_label_set_text(view->scale_label, "");
+    // Seeded to agree with what was just written, or the first Redraw would
+    // compare its new text against uninitialised bytes.
+    view->scale_text[0] = '\0';
     lv_obj_set_style_text_font(view->scale_label, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(view->scale_label, lv_color_hex(COLOR_HUD), 0);
     lv_obj_clear_flag(view->scale_label, LV_OBJ_FLAG_SCROLLABLE);
@@ -615,8 +630,18 @@ void MapView_Redraw(MapView_t *view) {
                           (int16_t)(view->width / 2), (int16_t)(view->height / 2));
     Map_SetProjectionHeading(&proj, MapView_HeadingDeg(view));
 
+    const uint32_t build_started_us = micros();
     const size_t written =
         Map_BuildPolylinePrepared(GpxTrack_Buffer(), &proj, view->projected, view->capacity);
+    {
+        const uint32_t elapsed = micros() - build_started_us;
+        g_build_us = elapsed;
+        if (g_interactive) {
+            g_build_drag_us = elapsed;
+        }
+        g_src_points = (uint32_t)GpxTrack_PointCount();
+        g_drawn_points = (uint32_t)written;
+    }
 
     for (size_t i = 0; i < written; i++) {
         view->points[i].x = view->projected[i].x;
@@ -662,22 +687,59 @@ void MapView_Redraw(MapView_t *view) {
         view->done_src_fix_lat = view->fix_lat;
         view->done_src_fix_lon = view->fix_lon;
         const TrackBuffer_t *src = GpxTrack_Buffer();
-        double best = 0.0;
+        const uint32_t scan_started_us = micros();
+
+        // ⚠️ This walks the WHOLE track, so it is written in integers.
+        //
+        // In double it was ~20,000 iterations of TrackBuffer_Get (two
+        // software multiplies each, converting e7 to degrees) plus a squared
+        // distance, once a second, on the LVGL task -- a hitch a rider feels
+        // as the panel stuttering in time with the fix. The ESP32-S3 has no
+        // double-precision FPU; see MapProject.h.
+        //
+        // Only points within the off-track budget can change the outcome, and
+        // that is what makes the integer form exact rather than approximate:
+        // a point outside the box has |dlat| or |dlon| past the budget, so its
+        // distance is past the budget too, so `on_track` below would reject it
+        // even if it won. Inside the box every difference is at most the
+        // budget -- about 18,000 e7 units -- and squares well inside int32.
+        //
+        // The one divergence from the old global search is a point exactly AT
+        // the budget tying with an earlier out-of-box point. That decides
+        // which of two equidistant vertices marks progress, and nothing reads
+        // it finely enough to care.
+        const int32_t fix_lat_e7 = (int32_t)(view->fix_lat * 1e7);
+        const int32_t fix_lon_e7 = (int32_t)(view->fix_lon * 1e7);
+        // One value feeds both the box and the test below, so the box is
+        // exactly the bounding square of the region the test accepts -- not an
+        // approximation of it. The rounding up by one e7 unit is a centimetre,
+        // and it goes the only direction that cannot lose a point.
+        const int32_t budget_e7 =
+            (int32_t)(((double)MAP_DONE_MAX_OFFTRACK_M / 111320.0) * 1e7) + 1;
+        const int32_t lat_lo = fix_lat_e7 - budget_e7;
+        const int32_t lat_hi = fix_lat_e7 + budget_e7;
+        const int32_t lon_lo = fix_lon_e7 - budget_e7;
+        const int32_t lon_hi = fix_lon_e7 + budget_e7;
+
+        int32_t best = 0; // squared e7 units
         size_t nearest = 0;
         bool found = false;
         for (size_t i = 0; i < track_points; i++) {
-            double lat = 0.0;
-            double lon = 0.0;
-            if (!TrackBuffer_Get(src, i, &lat, &lon)) {
+            const int32_t lat_e7 = src->lat_e7[i];
+            if (lat_e7 < lat_lo || lat_e7 > lat_hi) {
                 continue;
             }
-            // Squared degrees, with longitude left unscaled. Good enough to
+            const int32_t lon_e7 = src->lon_e7[i];
+            if (lon_e7 < lon_lo || lon_e7 > lon_hi) {
+                continue;
+            }
+            // Squared e7 degrees, with longitude left unscaled. Good enough to
             // pick a vertex: the error it introduces is a cosine of latitude
             // on one axis, which cannot move the answer past a neighbouring
             // point at any spacing a track actually uses.
-            const double dlat = lat - view->fix_lat;
-            const double dlon = lon - view->fix_lon;
-            const double d2 = (dlat * dlat) + (dlon * dlon);
+            const int32_t dlat = lat_e7 - fix_lat_e7;
+            const int32_t dlon = lon_e7 - fix_lon_e7;
+            const int32_t d2 = (dlat * dlat) + (dlon * dlon);
             if (!found || d2 < best) {
                 best = d2;
                 nearest = i;
@@ -693,16 +755,17 @@ void MapView_Redraw(MapView_t *view) {
         // self-corrected on the next fix; buying monotonicity means buying
         // that risk, and this is the price of it.
         //
-        // Degrees squared, compared against a budget converted at the equator
-        // -- which under-reads longitude at higher latitudes and so is
-        // conservative in the direction that matters: it rejects more, never
-        // less.
-        const double budget_deg = (double)MAP_DONE_MAX_OFFTRACK_M / 111320.0;
-        const bool on_track = found && (best <= (budget_deg * budget_deg));
+        // Raw e7 units squared, against a budget converted at the equator --
+        // which treats a degree of longitude as a degree of latitude and so
+        // over-states the longitude term everywhere but the equator. That
+        // rejects more than a true-distance test would, never less, which is
+        // the safe direction for a mark that cannot be taken back.
+        const bool on_track = found && (best <= (budget_e7 * budget_e7));
         if (on_track && (!view->have_done_src || nearest > view->done_src)) {
             view->done_src = nearest;
             view->have_done_src = true;
         }
+        g_progress_scan_us = micros() - scan_started_us;
     }
 
     // Where to cut the drawn line: the drawn vertex nearest the furthest
@@ -760,14 +823,28 @@ void MapView_Redraw(MapView_t *view) {
             if (view->scale_label != nullptr) {
                 char buf[16];
                 if (MapScale_Format(metres, buf, sizeof(buf))) {
-                    lv_label_set_text(view->scale_label, buf);
-                    lv_obj_align(view->scale_label, LV_ALIGN_BOTTOM_RIGHT, -HUD_MARGIN_PX,
-                                 -(HUD_MARGIN_PX + 6));
+                    // ⚠️ Compare before writing. This is the hottest
+                    // instance of the rule in CLAUDE.md 8a: Redraw runs on
+                    // every LV_EVENT_PRESSING, about 33 times a second while
+                    // the finger is down, and A PAN CANNOT CHANGE THE SCALE --
+                    // only a zoom can. So every one of those writes
+                    // re-rasterised the same three characters and re-ran a
+                    // layout, in exactly the frames the board has least to
+                    // spare. lv_obj_align is inside the guard with it: it is
+                    // only needed when the text changes width ("200m" to
+                    // "1km"), which is the same moment.
+                    if (strncmp(view->scale_text, buf, sizeof(view->scale_text)) != 0) {
+                        snprintf(view->scale_text, sizeof(view->scale_text), "%s", buf);
+                        lv_label_set_text(view->scale_label, buf);
+                        lv_obj_align(view->scale_label, LV_ALIGN_BOTTOM_RIGHT, -HUD_MARGIN_PX,
+                                     -(HUD_MARGIN_PX + 6));
+                    }
                 }
             }
         } else {
             view->scale_px = 0;
-            if (view->scale_label != nullptr) {
+            if (view->scale_label != nullptr && view->scale_text[0] != '\0') {
+                view->scale_text[0] = '\0';
                 lv_label_set_text(view->scale_label, "");
             }
         }
@@ -979,4 +1056,28 @@ void MapView_ForgetCamera() {
 
 bool MapView_IsManual(const MapView_t *view) {
     return view != nullptr && (view->pan_locked || view->zoom_locked);
+}
+
+void MapView_SetInteractive(bool interactive) {
+    g_interactive = interactive;
+}
+
+uint32_t MapView_LastBuildUs() {
+    return g_build_us;
+}
+
+uint32_t MapView_LastBuildDragUs() {
+    return g_build_drag_us;
+}
+
+uint32_t MapView_LastSourcePoints() {
+    return g_src_points;
+}
+
+uint32_t MapView_LastDrawnPoints() {
+    return g_drawn_points;
+}
+
+uint32_t MapView_LastProgressScanUs() {
+    return g_progress_scan_us;
 }

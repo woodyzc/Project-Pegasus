@@ -79,6 +79,11 @@ typedef struct {
     // is what an unusable scale should do rather than drawing a bar that lies.
     int scale_px;
     lv_obj_t *scale_label;
+    // What that label already says. lv_label_set_text invalidates whether or
+    // not the text differs (CLAUDE.md 8a), and the scale bar is rewritten on
+    // every redraw -- so this is what stops a pan, which cannot change the
+    // scale at all, from re-rasterising the figure on every frame of itself.
+    char scale_text[16];
 
     // ⚠️ Progress along the SOURCE track, and it only ever moves forward.
     //
@@ -194,3 +199,32 @@ bool MapView_RestoreCamera(MapView_t *view);
 // Forgets it, so the next page to open frames the track again. For loading a
 // different route, where the old camera points at another part of the world.
 void MapView_ForgetCamera();
+// ---- What the last redraw cost (CLAUDE.md 8a) ----
+//
+// On the panel rather than over serial, for the reason 8 gives: there is no
+// usable serial console on this board, and "the map feels slow with this
+// route loaded" cannot be answered by reasoning about it. Guessing at
+// performance here has cost four rounds before now; a figure costs a
+// micros() call.
+//
+// Two of them, because only one can be read live. The first is the map
+// standing still; the second is the last build taken WHILE the finger was
+// down, held since -- which is the number that decides whether panning feels
+// smooth, and which cannot be watched as it happens because releasing the map
+// repaints before anyone can reach the settings page.
+void MapView_SetInteractive(bool interactive);
+uint32_t MapView_LastBuildUs();
+uint32_t MapView_LastBuildDragUs();
+
+// Source points walked, against drawn points produced. The gap between them
+// is the whole reason the visible-range search is written the way it is: a
+// 20,000-point route draws at most a couple of hundred.
+uint32_t MapView_LastSourcePoints();
+uint32_t MapView_LastDrawnPoints();
+
+// The progress scan -- "how far along this route have we ever been" -- which
+// walks the whole track and runs only when the fix moves. Separate because it
+// is charged to the fix rather than to the frame, and so shows up as a once-a-
+// second hitch rather than as a slow pan.
+uint32_t MapView_LastProgressScanUs();
+

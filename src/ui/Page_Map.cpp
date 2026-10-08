@@ -227,6 +227,9 @@ void OnMapPressing(lv_event_t *e) {
     // back. See RoadView.h -- the road layer is redrawn once per frame
     // throughout a drag, and it is what sets the frame rate.
     RoadView_SetInteractive(true);
+    // The track layer only wants to be TOLD, so its own figure can be told
+    // apart from a static one -- it draws the same geometry either way.
+    MapView_SetInteractive(true);
     MapView_PanPixels(&s_view, vect.x, vect.y);
     RoadView_Refresh();
     UpdateRecenterButton();
@@ -239,6 +242,7 @@ void OnMapPressing(lv_event_t *e) {
 void OnMapReleased(lv_event_t *e) {
     (void)e;
     RoadView_SetInteractive(false);
+    MapView_SetInteractive(false);
 }
 
 void OnRecenterClicked(lv_event_t *e) {
