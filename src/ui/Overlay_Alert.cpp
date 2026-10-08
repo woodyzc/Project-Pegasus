@@ -25,13 +25,18 @@ constexpr uint32_t COLOR_SMS = 0xFFD166;  // COLOR_WARN
 constexpr uint32_t COLOR_CHAT = 0x2FC6B7; // COLOR_CELL_SPEED
 
 // ---- Geometry: the metric band, and not one pixel above it ----
-// Page_Dashboard puts its navigation region at y 0..184 and its metric cells
-// at 184..304, with the heart-rate zone strip below. These are the cells.
+// Page_Dashboard puts its navigation region at y 0..200 and its metric cells
+// at 200..320. These are the cells.
+//
+// Both numbers moved by 16 when the heart-rate zone strip was removed and
+// navigation took its space. §3 records that this geometry is hard-coded
+// against Page_Dashboard's layout so the two move together -- this is that
+// moving, and it is the whole reason the note exists.
 //
 // Hard-coded rather than derived, because the dashboard computes its layout
 // inside onViewLoad() and exports nothing. If that layout moves, this moves
 // with it -- the comment in Page_Dashboard's layout block says so.
-constexpr lv_coord_t BANNER_Y = 184;
+constexpr lv_coord_t BANNER_Y = 200;
 constexpr lv_coord_t BANNER_H = 120;
 constexpr lv_coord_t ACCENT_W = 6;
 constexpr lv_coord_t PAD = 12;

@@ -111,6 +111,20 @@ void Settings_SetMapTrackUp(bool track_up);
 // against the other and never moves the other one -- unlike the HR-source and
 // nav-mode pair above, where one genuinely cannot be honoured without changing
 // its partner. Here the rider asked for one number, so the other stays put.
+// Correction applied to the barometer's temperature before it is shown.
+//
+// ⚠️ The BMP580 measures its own die, inside a closed case beside a backlit
+// panel and an ESP32 at 240MHz, so it reads ABOVE air temperature. How far
+// above is a property of this case and this mounting, not of the sensor, so
+// it cannot be a compile-time constant and is not guessed at: the default is
+// zero, which shows the device's temperature honestly rather than pretending
+// to know the air's.
+//
+// To set it: let the board sit powered for twenty minutes beside a
+// thermometer, then enter (thermometer - panel). Range -20..+20 C.
+int8_t Settings_GetTempOffsetC();
+void Settings_SetTempOffsetC(int8_t offset);
+
 uint8_t Settings_GetHrRestBpm();
 uint8_t Settings_GetHrMaxBpm();
 void Settings_SetHrRestBpm(uint8_t bpm);

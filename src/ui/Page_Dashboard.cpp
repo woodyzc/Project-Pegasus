@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "../hal/Barometer.h"
 #include "../hal/Battery.h"
 #include "../hal/Imu.h"
 #include "../system/Stillness.h"
@@ -301,7 +302,9 @@ lv_obj_t *s_p2_trip_cell = nullptr;
 // Defined further down, beside the rest of the second page. Declared here
 // because the once-a-second refresh sits above it and calls it.
 void RenderPage2();
-lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+static void SetTextIfChanged(lv_obj_t *label, const char *text);
+static void SetTextIfChangedFmt(lv_obj_t *label, const char *fmt, double value);
+
 
 // A triangle riding above the bar, pointing down at the rider's position. The
 // lit segment says which zone; this says where inside it, which is the
@@ -320,16 +323,9 @@ lv_obj_t *s_zone_segments[HR_ZONE_COUNT] = {nullptr, nullptr, nullptr, nullptr, 
 // container that moves as one. Plain lv_obj rectangles, the same thing every
 // other widget on this page is made of, with no rendering mode behind them
 // that can be absent.
-constexpr lv_coord_t ZONE_MARKER_W = 15;
-constexpr lv_coord_t ZONE_MARKER_H = 8;
-constexpr lv_coord_t ZONE_MARKER_ROWS = 4;
-constexpr lv_coord_t ZONE_MARKER_ROW_H = ZONE_MARKER_H / ZONE_MARKER_ROWS; // 2
-constexpr lv_coord_t ZONE_MARKER_STEP = 4; // width lost per row, so 15/11/7/3
-lv_obj_t *s_zone_marker = nullptr;
 
 // Bar geometry, recorded when the bar is built so the marker can be placed
 // without the layout constants leaking out of onViewLoad.
-lv_coord_t s_zone_bar_w = 0;
 
 // The navigation slot holds one of two things depending on the chosen mode:
 // a turn card in TBT, or a live breadcrumb map in GPX. Only one is created,
@@ -374,6 +370,18 @@ uint32_t s_tbt_last_ms = 0;
 uint32_t s_hr_last_ms = 0;
 uint32_t s_cadence_last_ms = 0;
 lv_obj_t *s_battery_label = nullptr;
+
+// Air temperature, from the BMP580 -- the same read that supplies pressure,
+// so it costs no extra bus traffic (Barometer_Reading is the cached
+// accessor, deliberately not Barometer_Read).
+//
+// ⚠️ It is the PART's temperature, inside a closed case, beside a backlit
+// panel and an ESP32 at 240MHz. It will read above ambient, and by how much
+// is a property of this case rather than of the sensor -- which is why
+// Settings_GetTempOffsetC() exists and defaults to zero. Measure the delta
+// against a thermometer once and set it; until then the figure is honest
+// about being the device's temperature and not the air's.
+lv_obj_t *s_temp_label = nullptr;
 
 // Satellite count, in the status strip beside the clock. The strip is drawn on
 // the page rather than inside the navigation tile, so this reads the same in
@@ -715,14 +723,6 @@ lv_obj_t *MakeUnit(lv_obj_t *cell, const char *text) {
 // no reading means no zone, and a coloured "--" would still be asserting
 // something about the rider.
 void ClearHeartRateZone() {
-    for (int i = 0; i < HR_ZONE_COUNT; i++) {
-        if (s_zone_segments[i] != nullptr) {
-            lv_obj_set_style_bg_opa(s_zone_segments[i], LV_OPA_40, 0);
-        }
-    }
-    if (s_zone_marker != nullptr) {
-        lv_obj_add_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN);
-    }
     s_hr_zone = -1;
     if (s_hr_label != nullptr) {
         lv_obj_set_style_text_color(s_hr_label, lv_color_hex(COLOR_HR_CELL_INK), 0);
@@ -732,50 +732,14 @@ void ClearHeartRateZone() {
 void UpdateHeartRateZone(uint8_t bpm) {
     const uint8_t rest = Settings_GetHrRestBpm();
     const uint8_t max = Settings_GetHrMaxBpm();
-    const int zone = HrZone_Index(bpm, rest, max);
 
-    // The number takes its zone's colour too. The bar is 8px at the very
-    // bottom of the panel; the bpm figure is the thing already being looked at,
-    // so colouring it means the zone registers without the eye travelling.
-    s_hr_zone = zone;
+    // The zone BAR is gone -- the owner did not want it and its 16px went to
+    // the map. The number keeps its zone colour, which costs no space at all
+    // and is the half that worked without the eye travelling: the bpm figure
+    // is the thing already being looked at.
+    s_hr_zone = HrZone_Index(bpm, rest, max);
     if (s_hr_label != nullptr) {
-        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(ZONE_COLORS_ON_WHITE[zone]), 0);
-    }
-
-    // The lit segment is the readout: colour and position carry the zone at a
-    // glance on a bouncing bike, where the words "Zone 3" do not.
-    for (int i = 0; i < HR_ZONE_COUNT; i++) {
-        if (s_zone_segments[i] != nullptr) {
-            lv_obj_set_style_bg_opa(s_zone_segments[i], (i == zone) ? LV_OPA_COVER : LV_OPA_40, 0);
-        }
-    }
-
-    if (s_zone_marker != nullptr) {
-        // EqualWidthFraction, not Fraction: the segments are all one width now,
-        // so a position measured in reserve would drift out of the lit segment.
-        const double position = HrZone_EqualWidthFraction(bpm, rest, max);
-
-        // Place the APEX on the position and hang the marker either side of
-        // it, rather than sliding the whole marker across a shortened travel.
-        // The shortened travel is the tempting version and it is wrong: it
-        // compresses the marker's range to 225px while the segments still
-        // divide 240, so by zone 4 the triangle points a segment to the left
-        // of the one that is lit.
-        //
-        // Clamping the marker instead of the apex confines the error to the
-        // two ends, where the triangle would otherwise hang off the panel:
-        // at rest and at maximum the apex sits half a triangle inside the
-        // edge, and both are still well within their own segment.
-        const lv_coord_t apex = (lv_coord_t)lround(position * (double)s_zone_bar_w);
-        lv_coord_t x = apex - ZONE_MARKER_W / 2;
-        if (x < 0) {
-            x = 0;
-        }
-        if (x > s_zone_bar_w - ZONE_MARKER_W) {
-            x = s_zone_bar_w - ZONE_MARKER_W;
-        }
-        lv_obj_set_x(s_zone_marker, x);
-        lv_obj_clear_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(ZONE_COLORS_ON_WHITE[s_hr_zone]), 0);
     }
 }
 
@@ -1517,6 +1481,29 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_tbt_last_ms = 0;
     }
 
+    // The temperature, beside the battery. Cheap enough to do on this tick:
+    // Barometer_Reading() is the cached accessor and touches no bus.
+    //
+    // Blanked rather than skipped when there is no reading -- a barometer
+    // that has gone quiet must not leave its last temperature standing, which
+    // is the rule §8 states for every live figure on this panel.
+    if (s_temp_label != nullptr) {
+        float pa = 0.0f;
+        float degc = 0.0f;
+        if (Barometer_Reading(&pa, &degc)) {
+            const float corrected = degc + (float)Settings_GetTempOffsetC();
+            // Follows the same unit switch as speed and distance: a panel
+            // reading mph has no business showing Celsius.
+            if (Settings_GetSpeedUnit() == SPEED_UNIT_MPH) {
+                SetTextIfChangedFmt(s_temp_label, "%.0fF", (double)(corrected * 1.8f + 32.0f));
+            } else {
+                SetTextIfChangedFmt(s_temp_label, "%.0fC", (double)corrected);
+            }
+        } else {
+            SetTextIfChanged(s_temp_label, "");
+        }
+    }
+
     // Refreshed whether or not it is showing. A hidden label costs one string
     // format a second and removes any chance of the page being a tick stale
     // the moment it appears.
@@ -1719,6 +1706,17 @@ static void SetTextIfChanged(lv_obj_t *label, const char *text) {
     lv_label_set_text(label, text);
 }
 
+// SetTextIfChanged with a format string. Same reason: lv_label_set_text
+// invalidates unconditionally, and this runs on a timer (CLAUDE.md §8a).
+static void SetTextIfChangedFmt(lv_obj_t *label, const char *fmt, double value) {
+    if (label == nullptr) {
+        return;
+    }
+    char buf[16];
+    snprintf(buf, sizeof(buf), fmt, value);
+    SetTextIfChanged(label, buf);
+}
+
 void RenderPage2() {
     if (s_page2 == nullptr) {
         return;
@@ -1897,14 +1895,14 @@ void PageDashboard::onViewLoad() {
     const lv_coord_t SCREEN_H = 320;
     const lv_coord_t PAD = 6; // inside a tile, between its edge and its text
 
-    // The vertical budget is now measured from the bottom up, because the two
-    // regions down there have hard minimums and navigation does not. A metric
-    // cell cannot go below 60px without the 40px value colliding with its
-    // caption, and the zone block needs 16 to give the marker a row of its own
-    // above the colours. Navigation takes what is left, which is 184 -- it was
-    // a flat 60% of the panel (192) until the marker needed those 8px.
-    const lv_coord_t ZONE_BAR_H = 8;                           // the colour bands
-    const lv_coord_t ZONE_MARK_H = 8;                          // the triangle above them
+    // The vertical budget is measured from the bottom up, because the metric
+    // cells have a hard minimum and navigation does not: a cell cannot go
+    // below 60px without the 40px value colliding with its caption.
+    //
+    // The heart-rate zone block used to own the bottom 16px -- 8 for the
+    // colour bands and 8 for the marker above them. It was removed at the
+    // owner's request, and navigation takes the space: 184 to 200. That is
+    // the region where pixels actually buy something, since it draws a map.
     const lv_coord_t CELL_H = 60;
     // Two unequal columns, not the even split this used to be.
     //
@@ -1918,16 +1916,14 @@ void PageDashboard::onViewLoad() {
     const lv_coord_t COL1 = 0;
     const lv_coord_t COL2 = STATS_W;
 
-    const lv_coord_t ZONE_BAR_Y = SCREEN_H - ZONE_BAR_H;       // 312
-    const lv_coord_t ZONE_MARK_Y = ZONE_BAR_Y - ZONE_MARK_H;   // 304
-    const lv_coord_t ROW2 = ZONE_MARK_Y - CELL_H;              // 244
-    const lv_coord_t ROW1 = ROW2 - CELL_H;                     // 184
+    const lv_coord_t ROW2 = SCREEN_H - CELL_H;                 // 260
+    const lv_coord_t ROW1 = ROW2 - CELL_H;                     // 200
 
     // Navigation starts at the very top: the status line (gear, clock,
     // battery) sits directly over it with no rule between them, so the two
     // read as one region rather than two stacked widgets.
     const lv_coord_t NAV_Y = 0;
-    const lv_coord_t NAV_H = ROW1 - NAV_Y;                     // 184
+    const lv_coord_t NAV_H = ROW1 - NAV_Y;                     // 200
     const lv_coord_t FULL_W = SCREEN_W;
 
     // Height the status line occupies inside the navigation region. Not a
@@ -2231,8 +2227,33 @@ void PageDashboard::onViewLoad() {
     // The device's own battery, published to TOPIC_BATTERY by the Core 0
     // monitor in hal/Battery.cpp -- not HeartRate_t.battery, which is the
     // strap's.
-    s_battery_label = MakeLabel(parent, LV_SYMBOL_BATTERY_FULL " --%", &lv_font_montserrat_12,
-                                COLOR_CAPTION, LV_ALIGN_TOP_RIGHT, -PAD, 7);
+    // A flex row, for the reason the clock row above gives: lv_obj_align_to
+    // resolves once, against a width measured at that instant, and both of
+    // these change width in use -- "76%" to "100%", "9C" to "-11C". A row is
+    // re-laid out whenever either resizes, so they cannot run into each other.
+    lv_obj_t *right_row = lv_obj_create(parent);
+    lv_obj_remove_style_all(right_row);
+    lv_obj_set_size(right_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_clear_flag(right_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(right_row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_flow(right_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(right_row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(right_row, 8, 0);
+    lv_obj_align(right_row, LV_ALIGN_TOP_RIGHT, -PAD, 7);
+
+    // No degree sign: every font here covers 0x20-0x7F only (CLAUDE.md §9),
+    // so U+00B0 would draw as nothing. The settings page writes "31C" for the
+    // same reason and this matches it.
+    s_temp_label = lv_label_create(right_row);
+    lv_obj_set_style_text_font(s_temp_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_temp_label, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_text(s_temp_label, "");
+
+    s_battery_label = lv_label_create(right_row);
+    lv_obj_set_style_text_font(s_battery_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_battery_label, lv_color_hex(COLOR_CAPTION), 0);
+    lv_label_set_text(s_battery_label, LV_SYMBOL_BATTERY_FULL " --%");
 
     // ---- Satellites ----
     // The strip's free corner: the clock sits mid (pulled 8px left) and the
@@ -2318,7 +2339,7 @@ void PageDashboard::onViewLoad() {
     // status line at 28 and the zone marker at 304.
     {
         const lv_coord_t P2_Y = STATUS_H;
-        const lv_coord_t P2_H = ZONE_MARK_Y - P2_Y;    // 276
+        const lv_coord_t P2_H = SCREEN_H - P2_Y;       // 292, up 16 with the zone bar gone
 
         // Two unequal columns, and the inequality is the point.
         //
@@ -2444,7 +2465,6 @@ void PageDashboard::onViewLoad() {
     // each widget runs into the screen edge with no frame around it.
     MakeSeparator(parent, 0, ROW1 - 1, SCREEN_W, 1);      // navigation / metrics
     MakeSeparator(parent, 0, ROW2 - 1, SCREEN_W, 1);      // between metric rows
-    MakeSeparator(parent, 0, ZONE_MARK_Y - 1, SCREEN_W, 1); // metrics / zone block
     // One vertical line down the metric block only -- the navigation slot and
     // the zone bar above and below it are full width and must not be cut.
     MakeSeparator(parent, COL2 - 1, ROW1, 1, ROW2 + CELL_H - ROW1);
@@ -2460,54 +2480,6 @@ void PageDashboard::onViewLoad() {
     // zones were hard to tell apart at a glance. Five equal blocks read as a
     // scale. The cost is that the marker can no longer be placed by reserve,
     // which is what HrZone_EqualWidthFraction is for.
-    s_zone_bar_w = SCREEN_W;
-    lv_coord_t seg_x = 0;
-    for (int i = 0; i < HR_ZONE_COUNT; i++) {
-        // Edge-to-edge arithmetic rather than a fixed width per segment, so
-        // the five always cover exactly SCREEN_W even when it does not divide
-        // by five. No seams, no overrun on the last one.
-        const lv_coord_t next_x = (lv_coord_t)(((i + 1) * SCREEN_W) / HR_ZONE_COUNT);
-
-        lv_obj_t *segment = lv_obj_create(parent);
-        // Touching, not spaced: the five colours already separate them, and
-        // the bar reads as one gauge rather than five buttons.
-        lv_obj_set_size(segment, next_x - seg_x, ZONE_BAR_H);
-        lv_obj_set_pos(segment, seg_x, ZONE_BAR_Y);
-        lv_obj_set_style_bg_color(segment, lv_color_hex(ZONE_COLORS[i]), 0);
-        lv_obj_set_style_bg_opa(segment, LV_OPA_40, 0);
-        lv_obj_set_style_border_width(segment, 0, 0);
-        lv_obj_set_style_radius(segment, 2, 0);
-        lv_obj_clear_flag(segment, LV_OBJ_FLAG_SCROLLABLE);
-        s_zone_segments[i] = segment;
-
-        seg_x = next_x;
-    }
-
-    // The triangle, in its own row above the colours so it never covers the
-    // band it is pointing at. Widest row at the top, apex at the bottom.
-    s_zone_marker = lv_obj_create(parent);
-    lv_obj_set_size(s_zone_marker, ZONE_MARKER_W, ZONE_MARKER_H);
-    lv_obj_set_pos(s_zone_marker, 0, ZONE_MARK_Y);
-    lv_obj_set_style_bg_opa(s_zone_marker, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_zone_marker, 0, 0);
-    lv_obj_set_style_pad_all(s_zone_marker, 0, 0);
-    lv_obj_clear_flag(s_zone_marker, LV_OBJ_FLAG_SCROLLABLE);
-
-    for (lv_coord_t row = 0; row < ZONE_MARKER_ROWS; row++) {
-        const lv_coord_t w = ZONE_MARKER_W - row * ZONE_MARKER_STEP;
-        lv_obj_t *step = lv_obj_create(s_zone_marker);
-        lv_obj_set_size(step, w, ZONE_MARKER_ROW_H);
-        // Centred on the container, so the apex lands on its middle column.
-        lv_obj_set_pos(step, (ZONE_MARKER_W - w) / 2, row * ZONE_MARKER_ROW_H);
-        // White: it has to read against all five bands and the background.
-        lv_obj_set_style_bg_color(step, lv_color_hex(COLOR_VALUE), 0);
-        lv_obj_set_style_bg_opa(step, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(step, 0, 0);
-        lv_obj_set_style_radius(step, 0, 0);
-        lv_obj_clear_flag(step, LV_OBJ_FLAG_SCROLLABLE);
-    }
-
-    lv_obj_add_flag(s_zone_marker, LV_OBJ_FLAG_HIDDEN); // nothing to point at yet
 
     if (!s_nav_is_map) {
         ClearTbt();
@@ -2595,12 +2567,8 @@ void PageDashboard::onViewUnload() {
     s_p2_trip_cell = nullptr;
     s_nav_cell = nullptr;
     s_nav_is_map = false;
-    for (int i = 0; i < HR_ZONE_COUNT; i++) {
-        s_zone_segments[i] = nullptr;
-    }
-    s_zone_marker = nullptr;
-    s_zone_bar_w = 0;
     s_battery_label = nullptr;
+    s_temp_label = nullptr;
     // The count and its source are deliberately NOT cleared with the label:
     // they describe the fix, not the widget, and the page is rebuilt while a
     // ride is under way. Zeroing them here would redraw a live 9-satellite
