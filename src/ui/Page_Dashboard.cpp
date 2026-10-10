@@ -1514,10 +1514,14 @@ void RefreshTimerCallback(lv_timer_t *timer) {
         s_tbt_last_ms = 0;
     }
 
-    // Refreshed whether or not it is showing. A hidden label costs one string
-    // format a second and removes any chance of the page being a tick stale
-    // the moment it appears.
-    RenderPage2();
+    // Only while it is showing. This runs on the 100ms tick, not once a
+    // second as this note used to claim, so a hidden page cost ten rounds of
+    // float formatting a second for labels nobody could see. ShowPage2()
+    // renders it once on the way in, which is what keeps it from ever
+    // appearing a tick stale.
+    if (s_on_page2) {
+        RenderPage2();
+    }
 
     // The grade used to be computed here, from the IMU's pitch, and it was
     // never right even in principle: an accelerometer measures specific force
@@ -1632,6 +1636,9 @@ void ShowPage2(bool on) {
     }
     s_on_page2 = on;
     if (on) {
+        // Filled before it is shown, so it is never a tick stale on arrival --
+        // the timer only keeps it current while it is on screen.
+        RenderPage2();
         lv_obj_clear_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(s_page2, LV_OBJ_FLAG_HIDDEN);
@@ -1743,13 +1750,11 @@ void RenderPage2() {
         // dark-on-white ink onto a dark background.
         SetTextIfChanged(s_p2_hr, lv_label_get_text(s_hr_label));
         // Guarded too: setting a style invalidates exactly as setting text
-        // does, and the zone changes far more slowly than this tick.
-        static int drawn_zone = -2;
-        if (drawn_zone != s_hr_zone) {
-            drawn_zone = s_hr_zone;
-            lv_obj_set_style_text_color(
-                s_p2_hr, lv_color_hex(s_hr_zone >= 0 ? ZONE_COLORS[s_hr_zone] : COLOR_VALUE), 0);
-        }
+        // does, and the zone changes far more slowly than this tick. Against
+        // the label's own colour rather than a remembered zone, which would
+        // describe a label that no longer exists if the page were rebuilt.
+        SetTextColorIfChanged(
+            s_p2_hr, lv_color_hex(s_hr_zone >= 0 ? ZONE_COLORS[s_hr_zone] : COLOR_VALUE));
     }
 
     // The short form here, the full one on the ride summary: that panel has

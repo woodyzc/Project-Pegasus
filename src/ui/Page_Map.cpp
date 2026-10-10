@@ -1,5 +1,6 @@
 #include "Page_Map.h"
 
+#include <stdio.h>
 #include <string.h>
 
 
@@ -136,14 +137,29 @@ Account s_gps_account("Page_Map/GPS", OnGpsPublished);
 // "No .gpx on card" used to live here and lost its slot to (3): an empty
 // route picker one tap away says the same thing, and a missing card still
 // reports itself through (1).
+// Writes the corner only when it has something new to say. The label sits ON
+// the map, and lv_label_set_text and the colour setter both invalidate whether
+// or not anything changed (CLAUDE.md 8a) -- so the twice-a-second refresh
+// below repainted the patch of map under the corner, roads and route
+// included, to show the same "9 sats" again.
+void SetStatus(const char *text, uint32_t colour) {
+    const char *current = lv_label_get_text(s_status_label);
+    if (current == nullptr || strcmp(current, text) != 0) {
+        lv_label_set_text(s_status_label, text);
+    }
+    const lv_color_t c = lv_color_hex(colour);
+    if (lv_obj_get_style_text_color(s_status_label, LV_PART_MAIN).full != c.full) {
+        lv_obj_set_style_text_color(s_status_label, c, 0);
+    }
+}
+
 void UpdateStatusLabel() {
     if (s_status_label == nullptr) {
         return;
     }
 
     if (GpxTrack_PointCount() == 0 && !GpxTrack_CardMounted()) {
-        lv_label_set_text(s_status_label, "No SD card");
-        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_WARN), 0);
+        SetStatus("No SD card", COLOR_WARN);
         return;
     }
 
@@ -168,28 +184,25 @@ void UpdateStatusLabel() {
     const bool talking =
         s_frames_moved_ms != 0 && lv_tick_elaps(s_frames_moved_ms) <= GNSS_SILENT_MS;
 
+    char text[24];
     GPS_Info_t gps;
     if (fix_fresh && DataCenter_Pull(TOPIC_GPS_INFO, &gps, sizeof(gps)) && gps.fix_valid) {
-        if (gps.from_module) {
-            lv_label_set_text_fmt(s_status_label, "%d sats", (int)gps.num_sv);
-        } else {
-            lv_label_set_text_fmt(s_status_label, "%d sats phone", (int)gps.num_sv);
-        }
-        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_ACCENT), 0);
+        snprintf(text, sizeof(text), gps.from_module ? "%d sats" : "%d sats phone",
+                 (int)gps.num_sv);
+        SetStatus(text, COLOR_ACCENT);
         return;
     }
 
     if (talking) {
-        lv_label_set_text_fmt(s_status_label, "Acquiring %u", (unsigned)frames);
-        lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_CAPTION), 0);
+        snprintf(text, sizeof(text), "Acquiring %u", (unsigned)frames);
+        SetStatus(text, COLOR_CAPTION);
         return;
     }
 
     // Nothing is arriving NOW. Wrong pins or baud if it never was; a dead or
     // unplugged receiver if it used to be. The corner cannot tell those apart
     // and should not pretend to -- both are "check the hardware".
-    lv_label_set_text(s_status_label, "No GNSS data");
-    lv_obj_set_style_text_color(s_status_label, lv_color_hex(COLOR_WARN), 0);
+    SetStatus("No GNSS data", COLOR_WARN);
 }
 
 // Only offered once the view has been moved by hand. A control that is always
