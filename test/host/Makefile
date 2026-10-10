@@ -117,7 +117,7 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_baro_altitude$(SUFFIX) test_grade$(SUFFIX) test_stillness$(SUFFIX) test_long_press$(SUFFIX) test_gyro_bias$(SUFFIX) test_battery_level$(SUFFIX) test_map_scale$(SUFFIX) \
         test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX) \
         test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX) test_csc_parse$(SUFFIX) \
-        test_nmea_parse$(SUFFIX)
+        test_nmea_parse$(SUFFIX) test_track_progress$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -221,6 +221,12 @@ test_ride_summary$(SUFFIX): test_ride_summary.c $(SYSTEM)/RideSummary.c
 # The wrap at north is the case: a smoother written the obvious way takes 350
 # towards 10 through 180, spinning the whole map a half-turn.
 test_map_heading$(SUFFIX): test_map_heading.c $(NAV)/MapHeading.c
+	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
+
+# How far along the loaded GPX the rider has got. The mark cannot go back, so
+# the cases are all ways of advancing it WRONGLY: a later leg passing nearby,
+# an out-and-back's return, one stray fix, riding the route in reverse.
+test_track_progress$(SUFFIX): test_track_progress.c $(NAV)/TrackProgress.c $(NAV)/TrackBuffer.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
 
 test_gpx_parse$(SUFFIX): test_gpx_parse.c $(NAV)/GpxParse.c

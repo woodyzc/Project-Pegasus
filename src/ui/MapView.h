@@ -4,6 +4,7 @@
 
 #include "../navigation/MapHeading.h"
 #include "../navigation/MapProject.h"
+#include "../navigation/TrackProgress.h"
 #include "../system/DataCenter.h"
 
 // A breadcrumb map that can be dropped into any parent at any size.
@@ -98,8 +99,11 @@ typedef struct {
     // from one redraw to the next. That instability is already why the split
     // stopped being a fraction of the track; it is also why the high-water
     // mark cannot live there.
-    size_t done_src;
-    bool have_done_src;
+    //
+    // HOW it advances is navigation/TrackProgress.h, and the first way it did
+    // -- nearest vertex anywhere on the track -- jumped onto any later leg
+    // that came close and greyed out everything before it, permanently.
+    TrackProgress_t progress;
     // What the mark was measured against. Point count ALONE is not an
     // identity: two routes with the same number of points are not unusual --
     // a re-export of the same ride, or two tracks from the same generator --

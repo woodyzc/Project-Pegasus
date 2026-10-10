@@ -6,13 +6,6 @@
 
 #include "../navigation/MapScale.h"
 
-// How far off the line a fix may be and still count as progress along it.
-// Generous: a 240px panel at a usable zoom is wider than this, and the point
-// is to reject a fix from somewhere else entirely rather than to police
-// accuracy.
-#ifndef MAP_DONE_MAX_OFFTRACK_M
-#define MAP_DONE_MAX_OFFTRACK_M 200.0
-#endif
 #include <stdint.h>
 
 #include "../navigation/GpxTrack.h"
@@ -389,8 +382,7 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // Explicit, because MapView_t is not required to arrive zeroed and a
     // high-water mark inherited from whatever was in memory would colour an
     // arbitrary stretch of a fresh route as already ridden.
-    view->done_src = 0;
-    view->have_done_src = false;
+    TrackProgress_Reset(&view->progress);
     view->done_src_track_points = 0;
     view->done_src_track_name[0] = '\0';
     view->done_src_fix_lat = 0.0;
@@ -669,102 +661,24 @@ void MapView_Redraw(MapView_t *view) {
         strncpy(view->done_src_track_name, track_name,
                 sizeof(view->done_src_track_name) - 1);
         view->done_src_track_name[sizeof(view->done_src_track_name) - 1] = '\0';
-        view->done_src = 0;
-        view->have_done_src = false;
+        TrackProgress_Reset(&view->progress);
     }
 
-    // Advance the high-water mark, in source indices. Nearest-point rather
-    // than anything cleverer: this only has to answer "how far along have we
-    // ever been", and max() is what makes it monotonic.
-    // ⚠️ Only when the FIX has moved. This walks the whole source track, and
-    // Redraw is called on every LV_EVENT_PRESSING during a pan -- about 33
-    // times a second -- where neither the fix nor the track has changed and
-    // the answer cannot differ. Cheap next to the road layer, but free is
-    // cheaper, and the guard is two comparisons.
+    // Advance the high-water mark, in source indices. See TrackProgress.h
+    // for how, and for why "nearest vertex anywhere" was the wrong answer.
+    // ⚠️ Only when the FIX has moved. Redraw is called on every
+    // LV_EVENT_PRESSING during a pan -- about 33 times a second -- where
+    // neither the fix nor the track has changed, and feeding the same fix
+    // again would also count it twice towards a re-acquisition.
     const bool fix_moved = (view->fix_lat != view->done_src_fix_lat) ||
                            (view->fix_lon != view->done_src_fix_lon);
     if (view->have_fix && track_points > 0 && fix_moved) {
         view->done_src_fix_lat = view->fix_lat;
         view->done_src_fix_lon = view->fix_lon;
-        const TrackBuffer_t *src = GpxTrack_Buffer();
         const uint32_t scan_started_us = micros();
-
-        // ⚠️ This walks the WHOLE track, so it is written in integers.
-        //
-        // In double it was ~20,000 iterations of TrackBuffer_Get (two
-        // software multiplies each, converting e7 to degrees) plus a squared
-        // distance, once a second, on the LVGL task -- a hitch a rider feels
-        // as the panel stuttering in time with the fix. The ESP32-S3 has no
-        // double-precision FPU; see MapProject.h.
-        //
-        // Only points within the off-track budget can change the outcome, and
-        // that is what makes the integer form exact rather than approximate:
-        // a point outside the box has |dlat| or |dlon| past the budget, so its
-        // distance is past the budget too, so `on_track` below would reject it
-        // even if it won. Inside the box every difference is at most the
-        // budget -- about 18,000 e7 units -- and squares well inside int32.
-        //
-        // The one divergence from the old global search is a point exactly AT
-        // the budget tying with an earlier out-of-box point. That decides
-        // which of two equidistant vertices marks progress, and nothing reads
-        // it finely enough to care.
-        const int32_t fix_lat_e7 = (int32_t)(view->fix_lat * 1e7);
-        const int32_t fix_lon_e7 = (int32_t)(view->fix_lon * 1e7);
-        // One value feeds both the box and the test below, so the box is
-        // exactly the bounding square of the region the test accepts -- not an
-        // approximation of it. The rounding up by one e7 unit is a centimetre,
-        // and it goes the only direction that cannot lose a point.
-        const int32_t budget_e7 =
-            (int32_t)(((double)MAP_DONE_MAX_OFFTRACK_M / 111320.0) * 1e7) + 1;
-        const int32_t lat_lo = fix_lat_e7 - budget_e7;
-        const int32_t lat_hi = fix_lat_e7 + budget_e7;
-        const int32_t lon_lo = fix_lon_e7 - budget_e7;
-        const int32_t lon_hi = fix_lon_e7 + budget_e7;
-
-        int32_t best = 0; // squared e7 units
-        size_t nearest = 0;
-        bool found = false;
-        for (size_t i = 0; i < track_points; i++) {
-            const int32_t lat_e7 = src->lat_e7[i];
-            if (lat_e7 < lat_lo || lat_e7 > lat_hi) {
-                continue;
-            }
-            const int32_t lon_e7 = src->lon_e7[i];
-            if (lon_e7 < lon_lo || lon_e7 > lon_hi) {
-                continue;
-            }
-            // Squared e7 degrees, with longitude left unscaled. Good enough to
-            // pick a vertex: the error it introduces is a cosine of latitude
-            // on one axis, which cannot move the answer past a neighbouring
-            // point at any spacing a track actually uses.
-            const int32_t dlat = lat_e7 - fix_lat_e7;
-            const int32_t dlon = lon_e7 - fix_lon_e7;
-            const int32_t d2 = (dlat * dlat) + (dlon * dlon);
-            if (!found || d2 < best) {
-                best = d2;
-                nearest = i;
-                found = true;
-            }
-        }
-        // ⚠️ Only a fix that is actually ON the track may advance the mark.
-        //
-        // The mark is permanent by design, so one bad fix is permanent too: a
-        // single valid-but-wrong position hundreds of metres away would mark
-        // everything up to its nearest vertex as ridden, for the rest of the
-        // route, with no way back. The old per-frame code had no memory and so
-        // self-corrected on the next fix; buying monotonicity means buying
-        // that risk, and this is the price of it.
-        //
-        // Raw e7 units squared, against a budget converted at the equator --
-        // which treats a degree of longitude as a degree of latitude and so
-        // over-states the longitude term everywhere but the equator. That
-        // rejects more than a true-distance test would, never less, which is
-        // the safe direction for a mark that cannot be taken back.
-        const bool on_track = found && (best <= (budget_e7 * budget_e7));
-        if (on_track && (!view->have_done_src || nearest > view->done_src)) {
-            view->done_src = nearest;
-            view->have_done_src = true;
-        }
+        TrackProgress_Feed(&view->progress, GpxTrack_Buffer(),
+                           (int32_t)lround(view->fix_lat * 1e7),
+                           (int32_t)lround(view->fix_lon * 1e7));
         g_progress_scan_us = micros() - scan_started_us;
     }
 
@@ -777,10 +691,10 @@ void MapView_Redraw(MapView_t *view) {
     // the first one and everything visible is ahead; clipped off in front,
     // it is the last and everything visible is done.
     size_t split = 0;
-    if (view->have_done_src && written > 0) {
+    if (view->progress.have_mark && written > 0) {
         double dlat = 0.0;
         double dlon = 0.0;
-        if (TrackBuffer_Get(GpxTrack_Buffer(), view->done_src, &dlat, &dlon)) {
+        if (TrackBuffer_Get(GpxTrack_Buffer(), view->progress.mark, &dlat, &dlon)) {
             int16_t fx = 0;
             int16_t fy = 0;
             Map_ProjectPrepared(&proj, dlat, dlon, &fx, &fy);
