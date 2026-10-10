@@ -39,51 +39,61 @@ NmeaParser_t s_parser;
 volatile bool s_has_fix = false;
 volatile uint32_t s_frames = 0;
 
+// One complete sentence's worth of fix, onto the bus.
+void PublishFix(const NmeaFix_t &fix) {
+    s_frames++;
+    s_has_fix = fix.fix_valid;
+
+    GPS_Info_t info;
+    info.fix_valid = fix.fix_valid;
+    info.num_sv = fix.num_sv;
+    info.lat = fix.lat_deg;
+    info.lon = fix.lon_deg;
+    info.speed = fix.speed_mps;
+    info.alt = fix.alt_m;
+    // heading_valid can be false (course-over-ground blank on a
+    // stopped rider) without that meaning "no module" -- num_sv and
+    // fix_valid already carry that distinction, so a blank heading
+    // is reported as 0 the same way a UBX headMot would be.
+    info.heading = fix.heading_valid ? fix.heading_deg : 0.0f;
+    info.time_valid = fix.time_valid;
+    info.year = fix.year;
+    info.month = fix.month;
+    info.day = fix.day;
+    info.hour = fix.hour;
+    info.minute = fix.minute;
+    info.second = fix.second;
+
+    // Says who it came from, so the phone-fix arbitration in
+    // BLE_TBT_Receiver can tell this apart from a position it
+    // republished itself. Both land on the same topic.
+    info.from_module = true;
+
+    // Published even without a fix: the UI wants to distinguish "no
+    // module" from "module present, still acquiring", and num_sv
+    // climbing is the visible sign of the latter -- GGA reports it
+    // every second regardless of fix quality.
+    DataCenter_Publish(TOPIC_GPS_INFO, &info);
+}
+
 void GpsTask(void *pv) {
     (void)pv;
 
+    // Read in chunks, not a byte at a time. HardwareSerial's available() and
+    // read() each take the driver's mutex and go through the IDF ring buffer
+    // on every call, so the byte loop paid for two of those per character --
+    // at the ~800 characters a second this module sends, for every sentence
+    // it sends, used or not. One read() of a chunk pays once.
+    uint8_t chunk[64];
     for (;;) {
-        while (s_uart.available() > 0) {
-            const uint8_t byte = (uint8_t)s_uart.read();
-            NmeaFix_t fix;
-
-            if (!Nmea_Feed(&s_parser, byte, &fix)) {
-                continue;
+        size_t got;
+        while ((got = s_uart.read(chunk, sizeof(chunk))) > 0) {
+            for (size_t i = 0; i < got; i++) {
+                NmeaFix_t fix;
+                if (Nmea_Feed(&s_parser, chunk[i], &fix)) {
+                    PublishFix(fix);
+                }
             }
-
-            s_frames++;
-            s_has_fix = fix.fix_valid;
-
-            GPS_Info_t info;
-            info.fix_valid = fix.fix_valid;
-            info.num_sv = fix.num_sv;
-            info.lat = fix.lat_deg;
-            info.lon = fix.lon_deg;
-            info.speed = fix.speed_mps;
-            info.alt = fix.alt_m;
-            // heading_valid can be false (course-over-ground blank on a
-            // stopped rider) without that meaning "no module" -- num_sv and
-            // fix_valid already carry that distinction, so a blank heading
-            // is reported as 0 the same way a UBX headMot would be.
-            info.heading = fix.heading_valid ? fix.heading_deg : 0.0f;
-            info.time_valid = fix.time_valid;
-            info.year = fix.year;
-            info.month = fix.month;
-            info.day = fix.day;
-            info.hour = fix.hour;
-            info.minute = fix.minute;
-            info.second = fix.second;
-
-            // Says who it came from, so the phone-fix arbitration in
-            // BLE_TBT_Receiver can tell this apart from a position it
-            // republished itself. Both land on the same topic.
-            info.from_module = true;
-
-            // Published even without a fix: the UI wants to distinguish "no
-            // module" from "module present, still acquiring", and num_sv
-            // climbing is the visible sign of the latter -- GGA reports it
-            // every second regardless of fix quality.
-            DataCenter_Publish(TOPIC_GPS_INFO, &info);
         }
 
         // GGA arrives at 1Hz and the UART buffer is far larger than one
