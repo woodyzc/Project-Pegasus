@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 #include <stdarg.h> // SetRowTextFmt
 #include <stdio.h>
 #include <string.h>
@@ -723,8 +724,24 @@ void InfoTimerCallback(lv_timer_t *timer) {
     const uint32_t seconds = millis() / 1000UL;
     SetRowTextFmt(s_uptime_value, "%luh %02lum %02lus", (unsigned long)(seconds / 3600UL),
                           (unsigned long)((seconds / 60UL) % 60UL), (unsigned long)(seconds % 60UL));
-    SetRowTextFmt(s_heap_value, "%u KB free / PSRAM %u KB free",
-                          (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getFreePsram() / 1024));
+    // Internal RAM is the one that runs out: NimBLE, WiFi, the task stacks
+    // and the DMA draw buffers all need it, and PSRAM has megabytes spare. So
+    // three figures for it -- free now, the least it has been since boot, and
+    // the largest single block, which is what a big allocation actually
+    // needs -- and the LVGL pool beside them. That pool is a fixed 64KB of
+    // internal RAM (LV_MEM_SIZE) and nothing had ever measured how much of it
+    // is used; its peak is what says whether it can give some back.
+    lv_mem_monitor_t lvmem;
+    lv_mem_monitor(&lvmem);
+    SetRowTextFmt(s_heap_value,
+                  "%u KB free (low %u, block %u) / PSRAM %u KB\nLVGL %u of %u KB, peak %u, frag %u%%",
+                  (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+                  (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
+                  (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
+                  (unsigned)(ESP.getFreePsram() / 1024),
+                  (unsigned)((lvmem.total_size - lvmem.free_size) / 1024),
+                  (unsigned)(lvmem.total_size / 1024), (unsigned)(lvmem.max_used / 1024),
+                  (unsigned)lvmem.frag_pct);
 
     // Recording starts on the first fix, which is usually after this page was
     // built, so a value set only at load would read "waiting for fix" for the
