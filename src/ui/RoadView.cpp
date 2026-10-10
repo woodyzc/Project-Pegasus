@@ -517,8 +517,18 @@ void Build(const BuildKey &key) {
         uint32_t class_segments = 0;
         s_class_from[klass] = (uint16_t)segments;
 
-        for (uint16_t v = from; v < to && segments < max_segments &&
-                                class_segments < ROAD_CLASS_SEGMENTS[klass];
+        // The class's share, scaled with the ceiling. ROAD_CLASS_SEGMENTS is
+        // written against ROAD_MAX_SEGMENTS, and a drag drops the ceiling to
+        // ROAD_DRAG_MAX_SEGMENTS while the shares used to stay put -- so
+        // water, drawn first with a share of 260, could spend the whole
+        // 260-segment drag budget before the artery pass ran, and the roads a
+        // rider navigates by vanished for exactly as long as the map was
+        // moving. The failure the shares exist to prevent, back in the one
+        // mode where the budget is tightest. Scaled, the drag shares are
+        // 75/75/167/75: the same proportions, the same oversubscription.
+        const uint32_t class_cap = ROAD_CLASS_SEGMENTS[klass] * max_segments / ROAD_MAX_SEGMENTS;
+
+        for (uint16_t v = from; v < to && segments < max_segments && class_segments < class_cap;
              v++) {
             RoadWay_t way;
             if (!RoadMap_Way(sorted[v], &way)) {
@@ -540,7 +550,7 @@ void Build(const BuildKey &key) {
             int32_t prev_rlat = 0;
             int32_t prev_rlon = 0;
             for (uint16_t k = 0; k < way.count && segments < max_segments &&
-                                 class_segments < ROAD_CLASS_SEGMENTS[klass];
+                                 class_segments < class_cap;
                  k++) {
                 const int32_t rlat = way.points[k * 2];
                 const int32_t rlon = way.points[k * 2 + 1];
