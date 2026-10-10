@@ -291,18 +291,22 @@ void RefreshTimerCallback(lv_timer_t *timer) {
 
     if (!gps.fix_valid) {
         // The trail stays drawn, framed on itself -- only the rider marker is
-        // meaningless without a fix, and MapView hides it.
+        // meaningless without a fix, and MapView hides it. Nothing moved, so
+        // the roads stay as they are.
         MapView_SetPosition(&s_view, &gps);
-        RoadView_Refresh();
         return;
     }
 
-    MapView_SetPosition(&s_view, &gps);
-    // The no-fix branch above refreshes too, and this one used to rely on
-    // Page_Dashboard's 100ms timer -- still alive underneath this page -- to
-    // do it as a side effect. That is not a dependency worth keeping: it lives
-    // in another file, it is invisible from here, and it would take the roads
-    // away the moment the dashboard stopped being the page below.
+    // Only when the view moved: a stopped bike's wander does not, and redrawing
+    // every road to shift them a few pixels was a tremor at every red light.
+    if (!MapView_SetPosition(&s_view, &gps)) {
+        return;
+    }
+    // Refreshed here rather than left to Page_Dashboard's 100ms timer -- still
+    // alive underneath this page -- which once did it as a side effect. That
+    // is not a dependency worth keeping: it lives in another file, it is
+    // invisible from here, and it would take the roads away the moment the
+    // dashboard stopped being the page below.
     RoadView_Refresh();
 }
 

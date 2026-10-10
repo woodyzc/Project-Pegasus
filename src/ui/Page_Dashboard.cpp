@@ -1130,8 +1130,8 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                 GPS_Info_t stale;
                 memset(&stale, 0, sizeof(stale));
                 stale.fix_valid = false;
+                // Hides the rider only; nothing moved, so the roads stay.
                 MapView_SetPosition(&s_map_view, &stale);
-                RoadView_Refresh();
             }
         }
 
@@ -1190,8 +1190,11 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             // The inline map follows the rider on the same publish that moves
             // the speed readout.
             if (s_nav_is_map) {
-                MapView_SetPosition(&s_map_view, &gps);
-                RoadView_Refresh();
+                // Roads only when the view moved -- a stopped bike's wander
+                // does not move it (MapView.cpp, MAP_STILL_DEADBAND_M).
+                if (MapView_SetPosition(&s_map_view, &gps)) {
+                    RoadView_Refresh();
+                }
             }
 
             // Local time, derived from the fix itself: the position picks the

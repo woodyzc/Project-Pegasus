@@ -93,9 +93,23 @@ constexpr uint32_t COLOR_MARKER_EDGE = COLOR_MAP_BG;
 // roughly a tenth of the map's height, which is what this is.
 //
 // It is still small enough not to hide the trail: the triangle covers about
-// 165 square px of a 240x184 tile, and it is the one thing allowed to sit on
+// 165 square px of a 240x200 tile, and it is the one thing allowed to sit on
 // top of the route because it is the rider's own position.
 constexpr double MARKER_RADIUS = 14.0;
+
+// How far a stopped bike's fix may wander before the map follows it.
+//
+// A receiver at a standstill reports a position that walks metres per sample,
+// and following it redrew the whole map -- roads, route, rider -- once a
+// second to shift it a few pixels: a visible tremor at every red light, paid
+// for in the frames the panel is most likely to be read in. The IMU says when
+// the bike is genuinely still (Stillness.h), and while it is, a step this
+// small is wander and is ignored.
+//
+// Not "ignore everything while still": a cold receiver converges while the
+// rider stands at the start, and that is a real correction the map must show.
+// Ten metres passes a converging fix and swallows ordinary wander.
+constexpr double MAP_STILL_DEADBAND_M = 10.0;
 
 // The triangle is FILLED, and that needs a draw callback rather than a widget.
 //
@@ -124,6 +138,18 @@ void FillTriangle(lv_draw_ctx_t *ctx, const lv_area_t &area, const lv_point_t p[
     for (int i = 1; i < 3; i++) {
         if (p[i].y < min_y) min_y = p[i].y;
         if (p[i].y > max_y) max_y = p[i].y;
+    }
+
+    // Only the rows the strip being drawn can show. LVGL draws a frame in
+    // 40-line strips and calls this for every one, and each row costs a few
+    // software-double divisions to find its ends -- so a strip nowhere near
+    // the triangle used to work out every row of it and draw none.
+    const lv_coord_t clip_top = (lv_coord_t)(ctx->clip_area->y1 - area.y1);
+    const lv_coord_t clip_bottom = (lv_coord_t)(ctx->clip_area->y2 - area.y1);
+    if (min_y < clip_top) min_y = clip_top;
+    if (max_y > clip_bottom) max_y = clip_bottom;
+    if (min_y > max_y) {
+        return;
     }
 
     lv_draw_rect_dsc_t fill;
@@ -181,8 +207,63 @@ void FillTriangle(lv_draw_ctx_t *ctx, const lv_area_t &area, const lv_point_t p[
 // Walked in pixels on the drawn polyline rather than in metres on the source,
 // so spacing stays even on screen at any zoom -- which is the only place it
 // is read.
-void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
+void LayOutChevrons(MapView_t *view) {
+    view->chevron_count = 0;
     if (view->drawn_count < 2 || view->drawn_ahead_from + 1 >= view->drawn_count) {
+        return;
+    }
+
+    // Single precision: the S3 has a float FPU and no double one, and the
+    // answer is rounded to whole pixels anyway.
+    float carry = (float)CHEVRON_SPACING_PX * 0.5f; // first one half a gap in
+    for (size_t i = view->drawn_ahead_from; i + 1 < view->drawn_count; i++) {
+        const float ax = view->points[i].x;
+        const float ay = view->points[i].y;
+        const float dx = (float)view->points[i + 1].x - ax;
+        const float dy = (float)view->points[i + 1].y - ay;
+        const float len = sqrtf((dx * dx) + (dy * dy));
+        if (len < 0.5f) {
+            continue; // a thinned polyline can repeat a point
+        }
+        const float ux = dx / len;
+        const float uy = dy / len;
+
+        // Apex half a length ahead, arms trailing half a length behind and out
+        // to each side. Centred on the point rather than built forward from
+        // it, so a chevron sits ON the line it marks instead of leading it.
+        const float hx = ux * (float)(CHEVRON_LEN_PX * 0.5);
+        const float hy = uy * (float)(CHEVRON_LEN_PX * 0.5);
+        const float px_ = -uy * (float)CHEVRON_HALF_W_PX;
+        const float py_ = ux * (float)CHEVRON_HALF_W_PX;
+
+        for (float at = carry; at < len; at += (float)CHEVRON_SPACING_PX) {
+            if (view->chevron_count >= MAP_MAX_CHEVRONS) {
+                return;
+            }
+            const float cx = ax + (ux * at);
+            const float cy = ay + (uy * at);
+            lv_point_t *c = view->chevrons[view->chevron_count++];
+            c[0].x = (lv_coord_t)(cx + hx);
+            c[0].y = (lv_coord_t)(cy + hy);
+            c[1].x = (lv_coord_t)(cx - hx + px_);
+            c[1].y = (lv_coord_t)(cy - hy + py_);
+            c[2].x = (lv_coord_t)(cx - hx - px_);
+            c[2].y = (lv_coord_t)(cy - hy - py_);
+        }
+        // Carry the remainder into the next segment, so spacing does not
+        // restart at every vertex -- on a thinned line that would cluster them
+        // wherever the geometry happens to bend.
+        carry = fmodf(carry - len, (float)CHEVRON_SPACING_PX);
+        if (carry < 0.0f) {
+            carry += (float)CHEVRON_SPACING_PX;
+        }
+    }
+}
+
+// Draws what LayOutChevrons placed, skipping any whose strokes cannot reach
+// the strip being drawn.
+void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
+    if (view->chevron_count == 0) {
         return;
     }
 
@@ -195,49 +276,29 @@ void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *vi
     chev.round_start = 1;
     chev.round_end = 1;
 
-    double carry = CHEVRON_SPACING_PX * 0.5; // first one half a gap in
-    for (size_t i = view->drawn_ahead_from; i + 1 < view->drawn_count; i++) {
-        const double ax = view->points[i].x;
-        const double ay = view->points[i].y;
-        const double bx = view->points[i + 1].x;
-        const double by = view->points[i + 1].y;
-        const double dx = bx - ax;
-        const double dy = by - ay;
-        const double len = sqrt((dx * dx) + (dy * dy));
-        if (len < 0.5) {
-            continue; // a thinned polyline can repeat a point
+    const lv_area_t *clip = ctx->clip_area;
+    const lv_coord_t pad = (lv_coord_t)(CHEVRON_STROKE_PX + 1);
+    for (uint16_t i = 0; i < view->chevron_count; i++) {
+        const lv_point_t *c = view->chevrons[i];
+        lv_coord_t min_x = c[0].x;
+        lv_coord_t max_x = c[0].x;
+        lv_coord_t min_y = c[0].y;
+        lv_coord_t max_y = c[0].y;
+        for (int k = 1; k < 3; k++) {
+            if (c[k].x < min_x) min_x = c[k].x;
+            if (c[k].x > max_x) max_x = c[k].x;
+            if (c[k].y < min_y) min_y = c[k].y;
+            if (c[k].y > max_y) max_y = c[k].y;
         }
-        const double ux = dx / len;
-        const double uy = dy / len;
-
-        for (double at = carry; at < len; at += CHEVRON_SPACING_PX) {
-            const double cx = ax + (ux * at);
-            const double cy = ay + (uy * at);
-
-            // Apex half a length ahead, arms trailing half a length behind
-            // and out to each side. Centred on the point rather than built
-            // forward from it, so a chevron sits ON the line it marks instead
-            // of leading it.
-            const double hx = ux * (CHEVRON_LEN_PX * 0.5);
-            const double hy = uy * (CHEVRON_LEN_PX * 0.5);
-            const double px_ = -uy * CHEVRON_HALF_W_PX;
-            const double py_ = ux * CHEVRON_HALF_W_PX;
-
-            lv_point_t apex = {(lv_coord_t)(area.x1 + cx + hx), (lv_coord_t)(area.y1 + cy + hy)};
-            lv_point_t arm1 = {(lv_coord_t)(area.x1 + cx - hx + px_),
-                               (lv_coord_t)(area.y1 + cy - hy + py_)};
-            lv_point_t arm2 = {(lv_coord_t)(area.x1 + cx - hx - px_),
-                               (lv_coord_t)(area.y1 + cy - hy - py_)};
-            lv_draw_line(ctx, &chev, &apex, &arm1);
-            lv_draw_line(ctx, &chev, &apex, &arm2);
+        if (area.y1 + max_y + pad < clip->y1 || area.y1 + min_y - pad > clip->y2 ||
+            area.x1 + max_x + pad < clip->x1 || area.x1 + min_x - pad > clip->x2) {
+            continue;
         }
-        // Carry the remainder into the next segment, so spacing does not
-        // restart at every vertex -- on a thinned line that would cluster them
-        // wherever the geometry happens to bend.
-        carry = fmod(carry - len, CHEVRON_SPACING_PX);
-        if (carry < 0.0) {
-            carry += CHEVRON_SPACING_PX;
-        }
+        lv_point_t apex = {(lv_coord_t)(area.x1 + c[0].x), (lv_coord_t)(area.y1 + c[0].y)};
+        lv_point_t arm1 = {(lv_coord_t)(area.x1 + c[1].x), (lv_coord_t)(area.y1 + c[1].y)};
+        lv_point_t arm2 = {(lv_coord_t)(area.x1 + c[2].x), (lv_coord_t)(area.y1 + c[2].y)};
+        lv_draw_line(ctx, &chev, &apex, &arm1);
+        lv_draw_line(ctx, &chev, &apex, &arm2);
     }
 }
 
@@ -297,6 +358,90 @@ void DrawScaleBar(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *vi
     }
 }
 
+// Places the rider's triangle through the frame's projection -- at the centre
+// of the view while the map follows the rider, and wherever the rider really
+// is once the map has been dragged away from them.
+void PlaceRider(MapView_t *view, const MapProjection_t *proj) {
+    if (!view->show_rider) {
+        return;
+    }
+    int16_t mx = 0;
+    int16_t my = 0;
+    Map_ProjectPrepared(proj, view->rider_lat, view->rider_lon, &mx, &my);
+
+    // With the map turned, the rider's triangle is fixed pointing up: the
+    // view is doing the turning now, and a marker that also turned would
+    // turn twice. North-up keeps the old behaviour, where the triangle is
+    // the only thing that says which way the rider faces.
+    const bool track_up = Settings_GetMapTrackUp() && MapHeading_Valid(&view->heading);
+    const double drawn_deg = track_up
+                                 ? ((double)view->rider_heading_deg - MapHeading_Degrees(&view->heading))
+                                 : (double)view->rider_heading_deg;
+    const double rad = drawn_deg * M_PI / 180.0;
+    const double cx = mx;
+    const double cy = my;
+    const double back = 2.4; // radians offset to the two trailing corners
+
+    view->marker_points[0].x = (lv_coord_t)(cx + MARKER_RADIUS * sin(rad));
+    view->marker_points[0].y = (lv_coord_t)(cy - MARKER_RADIUS * cos(rad));
+    view->marker_points[1].x = (lv_coord_t)(cx + MARKER_RADIUS * 0.8 * sin(rad + back));
+    view->marker_points[1].y = (lv_coord_t)(cy - MARKER_RADIUS * 0.8 * cos(rad + back));
+    view->marker_points[2].x = (lv_coord_t)(cx + MARKER_RADIUS * 0.8 * sin(rad - back));
+    view->marker_points[2].y = (lv_coord_t)(cy - MARKER_RADIUS * 0.8 * cos(rad - back));
+    view->marker_points[3] = view->marker_points[0]; // close the triangle
+}
+
+// The scale bar. Chosen from a round sequence so the label is a number a rider
+// can hold; see navigation/MapScale.h for why the distance leads and the pixel
+// length follows. Depends on the zoom alone, so it is kept whether or not a
+// route is loaded -- a map of roads with no route on it still wants one, and
+// used to get none, because this sat after Redraw's no-track return.
+void UpdateScaleBar(MapView_t *view) {
+    uint32_t metres = 0;
+    int px = 0;
+    if (MapScale_Choose(view->metres_per_pixel, SCALE_MAX_PX, &metres, &px)) {
+        view->scale_px = px;
+        if (view->scale_label != nullptr) {
+            char buf[16];
+            if (MapScale_Format(metres, buf, sizeof(buf))) {
+                // ⚠️ Compare before writing. This is the hottest instance of
+                // the rule in CLAUDE.md 8a: Redraw runs on every
+                // LV_EVENT_PRESSING, about 33 times a second while the finger
+                // is down, and A PAN CANNOT CHANGE THE SCALE -- only a zoom
+                // can. So every one of those writes re-rasterised the same
+                // three characters and re-ran a layout, in exactly the frames
+                // the board has least to spare. lv_obj_align is inside the
+                // guard with it: it is only needed when the text changes width
+                // ("200m" to "1km"), which is the same moment.
+                if (strncmp(view->scale_text, buf, sizeof(view->scale_text)) != 0) {
+                    snprintf(view->scale_text, sizeof(view->scale_text), "%s", buf);
+                    lv_label_set_text(view->scale_label, buf);
+                    lv_obj_align(view->scale_label, LV_ALIGN_BOTTOM_RIGHT, -HUD_MARGIN_PX,
+                                 -(HUD_MARGIN_PX + 6));
+                }
+            }
+        }
+    } else {
+        view->scale_px = 0;
+        if (view->scale_label != nullptr && view->scale_text[0] != '\0') {
+            view->scale_text[0] = '\0';
+            lv_label_set_text(view->scale_label, "");
+        }
+    }
+}
+
+// Whether the strip LVGL is drawing can reach a box given in container
+// coordinates. A frame is drawn in 40-line strips (RoadView.cpp says why that
+// matters), so most strips miss most of what this overlay draws.
+bool StripReaches(const lv_draw_ctx_t *ctx, const lv_area_t &area, lv_coord_t x1, lv_coord_t y1,
+                  lv_coord_t x2, lv_coord_t y2) {
+    const lv_area_t *clip = ctx->clip_area;
+    return !(area.y1 + y2 < clip->y1 || area.y1 + y1 > clip->y2 || area.x1 + x2 < clip->x1 ||
+             area.x1 + x1 > clip->x2);
+}
+
+void DrawRider(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view);
+
 void MarkerDrawCb(lv_event_t *e) {
     lv_obj_t *obj = lv_event_get_target(e);
     MapView_t *view = (MapView_t *)lv_obj_get_user_data(obj);
@@ -312,6 +457,26 @@ void MarkerDrawCb(lv_event_t *e) {
     // sits over both.
     DrawChevrons(ctx, area, view);
 
+    if (view->show_rider) {
+        DrawRider(ctx, area, view);
+    }
+
+    // Both in fixed corners, so a strip that cannot reach the corner skips
+    // the trigonometry as well as the drawing.
+    const lv_coord_t north_x2 = (lv_coord_t)(view->width - HUD_MARGIN_PX + 2);
+    const lv_coord_t north_x1 = (lv_coord_t)(north_x2 - 2 * NORTH_RADIUS_PX - 4);
+    if (StripReaches(ctx, area, north_x1, HUD_MARGIN_PX - 2, north_x2,
+                     HUD_MARGIN_PX + 2 * NORTH_RADIUS_PX + 2)) {
+        DrawNorth(ctx, area, view);
+    }
+    const lv_coord_t bar_y = (lv_coord_t)(view->height - HUD_MARGIN_PX - 2);
+    if (StripReaches(ctx, area, 0, bar_y - 6, view->width, bar_y + 2)) {
+        DrawScaleBar(ctx, area, view);
+    }
+}
+
+// The rider's triangle and its outline.
+void DrawRider(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
     // marker_points[0..2] are the corners; [3] repeats [0] to close the
     // outline stroke below.
     const lv_point_t *p = view->marker_points;
@@ -356,9 +521,6 @@ void MarkerDrawCb(lv_event_t *e) {
                         (lv_coord_t)(area.y1 + out[i + 1].y)};
         lv_draw_line(ctx, &edge, &a, &b);
     }
-
-    DrawNorth(ctx, area, view);
-    DrawScaleBar(ctx, area, view);
 }
 
 } // namespace
@@ -386,6 +548,7 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->camera_owner = false;
     view->drawn_count = 0;
     view->drawn_ahead_from = 0;
+    view->chevron_count = 0;
     view->scale_px = 0;
     view->scale_label = nullptr;
 
@@ -477,7 +640,12 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     lv_obj_set_style_text_font(view->scale_label, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(view->scale_label, lv_color_hex(COLOR_HUD), 0);
     lv_obj_clear_flag(view->scale_label, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(view->marker, LV_OBJ_FLAG_HIDDEN);
+    // No rider until a fix says where they are. The overlay itself stays
+    // visible -- see MapView_t::show_rider.
+    view->show_rider = false;
+    view->rider_lat = 0.0;
+    view->rider_lon = 0.0;
+    view->rider_heading_deg = 0.0f;
 }
 
 void MapView_FitTrack(MapView_t *view) {
@@ -507,30 +675,38 @@ void MapView_FitTrack(MapView_t *view) {
     MapView_Redraw(view);
 }
 
-void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
+bool MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
     if (view == nullptr || gps == nullptr) {
-        return;
+        return false;
     }
 
     if (!gps->fix_valid) {
-        lv_obj_add_flag(view->marker, LV_OBJ_FLAG_HIDDEN);
-        return;
+        if (view->show_rider) {
+            view->show_rider = false;
+            lv_obj_invalidate(view->marker);
+        }
+        return false;
     }
 
-    // Just recorded. Working out where this falls on the line is Redraw's
-    // job, because only Redraw knows which stretch of the track is actually
-    // being drawn -- and that changes with every pan and zoom.
-    view->fix_lat = gps->lat;
-    view->fix_lon = gps->lon;
-    view->have_fix = true;
+    // A stopped bike's wander is not movement. See MAP_STILL_DEADBAND_M --
+    // and note the IMU is only consulted below walking pace, so nothing a
+    // moving rider does can be mistaken for this (Stillness.h).
+    if (view->show_rider && Stillness_FixIsDrift(Imu_IsStill(), gps->speed)) {
+        const double cos_lat = cos(view->rider_lat * M_PI / 180.0);
+        const double dn = (gps->lat - view->rider_lat) * MAP_EARTH_METRES_PER_DEGREE;
+        const double de = (gps->lon - view->rider_lon) * MAP_EARTH_METRES_PER_DEGREE * cos_lat;
+        if ((dn * dn) + (de * de) < MAP_STILL_DEADBAND_M * MAP_STILL_DEADBAND_M) {
+            return false;
+        }
+    }
 
     // Once there is a fix the view follows the rider: what matters while
     // riding is where you are on the line, not the shape of the whole route.
     //
     // Unless the rider has dragged the map, in which case they are looking at
     // somewhere specific and yanking the view back to the bike every second
-    // makes the gesture pointless. The marker below still updates, so the
-    // rider's position stays visible while they look ahead.
+    // makes the gesture pointless. The marker still moves -- Redraw places it
+    // where the rider actually is, on or off the dragged view.
     if (!view->pan_locked) {
         view->center_lat = gps->lat;
         view->center_lon = gps->lon;
@@ -542,35 +718,13 @@ void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
     // noise, and rotating a map on that is worse than not rotating it.
     MapHeading_Feed(&view->heading, gps->fix_valid, gps->speed, gps->heading);
 
-    {
-        // With the map turned, the rider's triangle is fixed pointing up: the
-        // view is doing the turning now, and a marker that also turned would
-        // turn twice. North-up keeps the old behaviour, where the triangle is
-        // the only thing that says which way the rider faces.
-        const bool track_up = Settings_GetMapTrackUp() && MapHeading_Valid(&view->heading);
-        const double drawn_deg =
-            track_up ? (gps->heading - MapHeading_Degrees(&view->heading)) : gps->heading;
-        const double rad = drawn_deg * M_PI / 180.0;
-        const double cx = view->width / 2.0;
-        const double cy = view->height / 2.0;
-        const double back = 2.4; // radians offset to the two trailing corners
-
-        view->marker_points[0].x = (lv_coord_t)(cx + MARKER_RADIUS * sin(rad));
-        view->marker_points[0].y = (lv_coord_t)(cy - MARKER_RADIUS * cos(rad));
-        view->marker_points[1].x = (lv_coord_t)(cx + MARKER_RADIUS * 0.8 * sin(rad + back));
-        view->marker_points[1].y = (lv_coord_t)(cy - MARKER_RADIUS * 0.8 * cos(rad + back));
-        view->marker_points[2].x = (lv_coord_t)(cx + MARKER_RADIUS * 0.8 * sin(rad - back));
-        view->marker_points[2].y = (lv_coord_t)(cy - MARKER_RADIUS * 0.8 * cos(rad - back));
-        view->marker_points[3] = view->marker_points[0]; // close the triangle
-
-        // The points live in the struct and the callback reads them, so the
-        // object has to be told its content changed -- there is no
-        // lv_line_set_points to do it here any more.
-        lv_obj_invalidate(view->marker);
-        lv_obj_clear_flag(view->marker, LV_OBJ_FLAG_HIDDEN);
-    }
+    view->rider_lat = gps->lat;
+    view->rider_lon = gps->lon;
+    view->rider_heading_deg = gps->heading;
+    view->show_rider = true;
 
     MapView_Redraw(view);
+    return true;
 }
 
 void MapView_Redraw(MapView_t *view) {
@@ -599,22 +753,42 @@ void MapView_Redraw(MapView_t *view) {
         MapView_SaveCamera(view);
     }
 
-    if (!view->have_center || GpxTrack_PointCount() == 0) {
-        lv_line_set_points(view->trail, view->points, 0);
-        if (view->trail_done != nullptr) {
-            lv_line_set_points(view->trail_done, view->points, 0);
-        }
-        return;
-    }
+    // The overlay -- rider, chevrons, north arrow, scale bar -- is drawn from
+    // the view, so every redraw changes it. One invalidate of its whole area;
+    // the road layer asks for the same area and LVGL merges the two. Before
+    // this, a pan with no road map loaded repainted only the trail's own
+    // bounding boxes and left chevrons from the previous position behind.
+    lv_obj_invalidate(view->marker);
+
+    UpdateScaleBar(view);
 
     // Projection and same-pixel collapsing both live in Map_BuildPolyline,
     // which test/host covers, so the tested code is the code that runs.
     // One projection for the frame, shared with the road layer through
     // MapView_HeadingDeg, so the two cannot disagree about which way is up.
     MapProjection_t proj;
-    Map_PrepareProjection(&proj, view->center_lat, view->center_lon, view->metres_per_pixel,
-                          (int16_t)(view->width / 2), (int16_t)(view->height / 2));
-    Map_SetProjectionHeading(&proj, MapView_HeadingDeg(view));
+    if (view->have_center) {
+        Map_PrepareProjection(&proj, view->center_lat, view->center_lon, view->metres_per_pixel,
+                              (int16_t)(view->width / 2), (int16_t)(view->height / 2));
+        Map_SetProjectionHeading(&proj, MapView_HeadingDeg(view));
+        // Before the no-track return: a rider on a map with no route loaded
+        // is still a rider.
+        PlaceRider(view, &proj);
+    }
+
+    if (!view->have_center || GpxTrack_PointCount() == 0) {
+        lv_line_set_points(view->trail, view->points, 0);
+        if (view->trail_done != nullptr) {
+            lv_line_set_points(view->trail_done, view->points, 0);
+        }
+        // And the chevrons with it. They are drawn by the overlay from what the
+        // last Redraw left here, so without this a route that failed to load
+        // took its line away and left its arrows floating over the map.
+        view->drawn_count = 0;
+        view->drawn_ahead_from = 0;
+        view->chevron_count = 0;
+        return;
+    }
 
     const uint32_t build_started_us = micros();
     const size_t written =
@@ -685,44 +859,7 @@ void MapView_Redraw(MapView_t *view) {
     // thinned relative to the source.
     view->drawn_count = written;
     view->drawn_ahead_from = ahead_from;
-
-    // The scale bar. Chosen from a round sequence so the label is a number a
-    // rider can hold; see navigation/MapScale.h for why the distance leads and
-    // the pixel length follows.
-    {
-        uint32_t metres = 0;
-        int px = 0;
-        if (MapScale_Choose(view->metres_per_pixel, SCALE_MAX_PX, &metres, &px)) {
-            view->scale_px = px;
-            if (view->scale_label != nullptr) {
-                char buf[16];
-                if (MapScale_Format(metres, buf, sizeof(buf))) {
-                    // ⚠️ Compare before writing. This is the hottest
-                    // instance of the rule in CLAUDE.md 8a: Redraw runs on
-                    // every LV_EVENT_PRESSING, about 33 times a second while
-                    // the finger is down, and A PAN CANNOT CHANGE THE SCALE --
-                    // only a zoom can. So every one of those writes
-                    // re-rasterised the same three characters and re-ran a
-                    // layout, in exactly the frames the board has least to
-                    // spare. lv_obj_align is inside the guard with it: it is
-                    // only needed when the text changes width ("200m" to
-                    // "1km"), which is the same moment.
-                    if (strncmp(view->scale_text, buf, sizeof(view->scale_text)) != 0) {
-                        snprintf(view->scale_text, sizeof(view->scale_text), "%s", buf);
-                        lv_label_set_text(view->scale_label, buf);
-                        lv_obj_align(view->scale_label, LV_ALIGN_BOTTOM_RIGHT, -HUD_MARGIN_PX,
-                                     -(HUD_MARGIN_PX + 6));
-                    }
-                }
-            }
-        } else {
-            view->scale_px = 0;
-            if (view->scale_label != nullptr && view->scale_text[0] != '\0') {
-                view->scale_text[0] = '\0';
-                lv_label_set_text(view->scale_label, "");
-            }
-        }
-    }
+    LayOutChevrons(view);
 
     // The save is at the TOP of this function, not here -- see the note there.
     // It is in Redraw at all, rather than at page teardown, because

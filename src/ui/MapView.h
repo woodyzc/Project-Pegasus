@@ -17,6 +17,12 @@
 // their own arrays, and making that allocation explicit at the call site keeps
 // the cost visible rather than hidden inside a constructor.
 
+// Chevrons a view will lay out along the route still to ride. At 34px apart
+// that is over 3,000px of drawn route -- the whole visible track zoomed out on
+// a winding route, with room to spare. Past it the far end goes unmarked
+// rather than anything overflowing.
+#define MAP_MAX_CHEVRONS 96
+
 typedef struct {
     lv_obj_t *container;
     // The trail in two pieces: what has been ridden and what has not. Two
@@ -32,6 +38,23 @@ typedef struct {
 
     lv_point_t marker_points[4]; // heading triangle, last point closes it
 
+    // Whether the rider's triangle is drawn. A flag rather than hiding the
+    // object, because that object also carries the chevrons, the north arrow
+    // and the scale bar: hiding it on a lost fix took all three with it, so
+    // before the first fix -- and for every stale spell after it -- the route
+    // had no direction marks and the scale label sat over a bar that was not
+    // there.
+    bool show_rider;
+
+    // Where the rider is, which is NOT where the view is centred once the
+    // rider has dragged the map. Redraw places the triangle by projecting
+    // this; it used to be drawn at the centre of the view unconditionally, so
+    // after a drag it marked the place being looked at rather than the place
+    // the rider was.
+    double rider_lat;
+    double rider_lon;
+    float rider_heading_deg;
+
     lv_coord_t width;
     lv_coord_t height;
 
@@ -46,13 +69,6 @@ typedef struct {
 
     // Set once the rider drags. Stops SetPosition recentring on the fix.
     bool pan_locked;
-
-    // The last fix, kept so Redraw can work out where on the DRAWN line the
-    // rider is. False until one arrives, which is why a trail with no GPS
-    // draws entirely in the unridden colour rather than the ridden one.
-    double fix_lat;
-    double fix_lon;
-    bool have_fix;
 
     // ⚠️ Whether this view's redraws may write the shared camera.
     //
@@ -74,6 +90,15 @@ typedef struct {
     // the stretch still to ride, which is [ahead_from, count).
     size_t drawn_count;
     size_t drawn_ahead_from;
+
+    // The chevrons themselves, laid out by Redraw: apex then the two arm ends,
+    // in container coordinates. Computed there rather than in the overlay's
+    // draw callback because that callback runs once per 40-line strip LVGL
+    // draws a frame in -- up to seven times -- and walking the polyline in
+    // software double for every strip was the same answer worked out seven
+    // times over.
+    lv_point_t chevrons[MAP_MAX_CHEVRONS][3];
+    uint16_t chevron_count;
 
     // Scale bar, chosen by MapScale_Choose each Redraw. Zero hides it, which
     // is what an unusable scale should do rather than drawing a bar that lies.
@@ -114,7 +139,12 @@ void MapView_FitTrack(MapView_t *view);
 
 // Centres on the rider and points the marker along `heading`. Call on each
 // position update; a fix that is not valid hides the marker instead.
-void MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps);
+//
+// Returns whether the view moved, which is what decides whether the road layer
+// needs redrawing. A stopped bike's fix is mostly receiver wander, and
+// following it redrew the whole map every second to move it a few pixels; see
+// MAP_STILL_DEADBAND_M.
+bool MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps);
 
 // Reprojects and redraws at the current centre, scale and heading.
 void MapView_Redraw(MapView_t *view);

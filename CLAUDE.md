@@ -877,6 +877,18 @@ performance cost four rounds before anyone measured.
   ROUTE page. That threw away 57% of the panel. LVGL still delivers `CLICKED`
   on release after a gesture, so the fix is for the click handler to check
   `lv_indev_get_gesture_dir() != LV_DIR_NONE` and ignore it.
+- ⚠️ **A draw callback runs once per 40-line STRIP, not once per frame.** With
+  the partial buffer above, LVGL renders a frame as horizontal strips and sends
+  `LV_EVENT_DRAW_MAIN` to every object the strip crosses — seven times for the
+  ROUTE page's map, five for the dashboard tile. The road layer projected its
+  whole network inside that callback, so a repaint paid for the projection
+  seven times, and every figure it reported timed a single strip. Anything
+  expensive in a draw callback belongs in a cache keyed on what it depends on
+  (`RoadView.cpp`'s build, `MapView`'s chevrons, laid out in `Redraw`); the
+  callback should only draw what crosses `draw_ctx->clip_area`. Found in review
+  on 2026-10-10, by reading `lv_refr.c`, not by measuring — the panel's own
+  figures could not have shown it. `Display_FrameSeq()` is the frame boundary
+  for anything that wants to total a frame.
 
 ## 9. WiFi File Transfer
 
