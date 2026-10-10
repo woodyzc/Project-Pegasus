@@ -181,6 +181,10 @@ volatile bool s_disconnect_event = false;
 volatile bool s_shutdown_requested = false;
 volatile bool s_task_parked = false;
 
+// Set on the first pass through BLE_HR_Shutdown(), which refuses every later
+// one. See the note at the top of that function for why there is a later one.
+volatile bool s_shutdown_ran = false;
+
 // How long the task took to park, and whether it did. On the settings page
 // beside the disconnect result, because a park that times out means the stack
 // was torn down under a live task after all -- the exact thing this exists to
@@ -569,6 +573,35 @@ void BLE_HR_Shutdown() {
     // can be answered rather than guessed at. "clean in NNNms" means the
     // goodbye reached the peer and the fault is the peer's; "TIMED OUT" means
     // kShutdownDisconnectMs is too short and this end is at fault.
+
+    // ⚠️ ONCE, and the second call is not hypothetical.
+    //
+    // This is registered as a shutdown handler AND called directly by every
+    // deliberate teardown -- so the Restart button runs it, then calls
+    // ESP.restart(), and esp_restart() runs it again. The file server exits
+    // the same way. The first pass ends in NimBLEDevice::deinit(true); the
+    // second then reached BLE_CSC_Park()'s scan->stop(), which takes the
+    // NimBLE host mutex -- and deinit deletes that mutex without clearing its
+    // handle, so the take is on freed memory. Undefined behaviour, inside
+    // esp_restart(), with no serial to see it by.
+    //
+    // It cost more than the BLE stack. ESP-IDF runs shutdown handlers in
+    // REVERSE registration order, and RideLog_Shutdown() registers first, so
+    // it runs after this one: a second pass that never returns means the ride
+    // file is never closed. The panel's own evidence pointed here
+    // (2026-10-09): "Supervisor: parked in 1540ms" survived a restart, and a
+    // second pass that got as far as RecordPark() would have overwritten it
+    // with roughly zero.
+    //
+    // A flag rather than esp_unregister_shutdown_handler(), because the
+    // direct callers are not all on the restart path -- power-off and deep
+    // sleep come through here too, and what they all need is the same: once
+    // the stack is gone, nothing here touches it again.
+    if (s_shutdown_ran) {
+        return;
+    }
+    s_shutdown_ran = true;
+
     // ---- Stop BOTH supervisors before anything else ----
     // First, and before the disconnect below rather than after it, because the
     // disconnect is what would otherwise send the task straight into a

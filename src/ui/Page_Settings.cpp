@@ -595,6 +595,14 @@ void OnRestartClicked(lv_event_t *e) {
     // This path is a plain task context with the scheduler running, so the
     // disconnect has somewhere to complete. It blocks for up to about 1.5s,
     // which is invisible directly before a reset.
+    //
+    // The ride file first, and explicitly. It used to be closed only by
+    // RideLog's shutdown handler -- which esp_restart() runs AFTER the BLE
+    // one, so anything that went wrong in the radio teardown cost the rider
+    // the end of their ride as well. Closing does not disarm: the ride
+    // resumes in a new file after the restart, as it always has. The handler
+    // still runs and finds the writer already parked, which is harmless.
+    RideLog_Shutdown();
     BLE_HR_Shutdown();
     ESP.restart();
 }

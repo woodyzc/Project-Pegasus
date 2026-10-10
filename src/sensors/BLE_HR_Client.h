@@ -65,6 +65,10 @@ void BLE_HR_Start();
 // Disconnects cleanly so the peer stops holding the link open. Registered
 // automatically as a shutdown handler by BLE_HR_Start(); exposed for any
 // deliberate teardown path that does not go through esp_restart().
+//
+// Runs once per boot; every later call returns at once. That matters because
+// the deliberate paths call it and THEN restart, which runs it again as a
+// handler -- on a stack the first call already deleted.
 void BLE_HR_Shutdown();
 
 // What the previous shutdown achieved, read from NVS at init. Distinguishes a

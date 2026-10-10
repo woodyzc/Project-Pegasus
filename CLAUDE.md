@@ -717,6 +717,20 @@ These were each discovered the slow way. They are not optional trivia.
   task may hold NimBLE's mutex), bounded so the Restart button cannot hang, and
   the settings page reports whether the park actually happened. Reachable from
   the Restart button, from deep-sleep entry, and from any `esp_restart()`.
+- **A teardown that is also a shutdown handler runs twice.** `BLE_HR_Shutdown()`
+  is registered with `esp_register_shutdown_handler()` *and* called directly by
+  every deliberate teardown — so Restart (and the file server's exit) ran it,
+  called `ESP.restart()`, and `esp_restart()` ran it again on a stack the
+  first call had deleted. `NimBLEDevice::deinit()` deletes the host mutex
+  without clearing its handle, so the second call's `scan->stop()` took a
+  freed semaphore. Found in review on 2026-10-10, from the panel rather than a
+  crash report: "Supervisor: parked in 1540ms" survived a restart that a second
+  pass reaching `RecordPark()` would have overwritten with roughly zero. Now
+  once per boot. **Handlers run in REVERSE registration order**, so a handler
+  that dies takes every earlier-registered one with it — `RideLog_Shutdown()`
+  among them, which is why Restart now closes the ride file explicitly first.
+  Unconfirmed whether it panicked or merely misbehaved: "Last reset" after a
+  Restart on the old firmware would say.
 - **Never hand a static object to NimBLE's `setCallbacks`.** `NimBLEServer::
   setCallbacks(cb)` defaults its second argument, `deleteCallbacks`, to **true**,
   and `~NimBLEServer` then runs `delete` on whatever it was given. Every
