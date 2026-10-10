@@ -20,6 +20,13 @@ A flag computed here is regenerated on every invocation, and because its
 value changes, the file that uses it is recompiled. That is the property the
 other two lacked.
 
+ONLY that file. The first version appended the flag to the whole build
+environment, and a define whose value changes every run changes every
+compile command -- so SCons rebuilt all 528 objects on every build, LVGL,
+NimBLE and the Arduino core included: 37-44 seconds for a build with nothing
+edited (measured 2026-10-10). A build middleware attaches it to the one
+object that reads it, so an unchanged tree recompiles one file and relinks.
+
 The line this feeds answers "did the flash actually take", which is the
 question every hardware debugging session in this project starts with.
 """
@@ -28,5 +35,21 @@ import datetime
 
 Import("env")
 
+STAMPED_SOURCE = "Page_Settings.cpp"
+
 stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-env.Append(CPPDEFINES=[("PEGASUS_BUILD_STAMP", env.StringifyMacro(stamp))])
+
+
+def add_stamp(env, node):
+    if node.name != STAMPED_SOURCE:
+        return node
+    # list(): this SCons keeps CPPDEFINES as a deque, which will not
+    # concatenate with a list.
+    return env.Object(
+        node,
+        CPPDEFINES=list(env["CPPDEFINES"])
+        + [("PEGASUS_BUILD_STAMP", env.StringifyMacro(stamp))],
+    )
+
+
+env.AddBuildMiddleware(add_stamp)
