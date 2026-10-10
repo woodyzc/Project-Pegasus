@@ -1046,9 +1046,10 @@ void PageSettings::onViewLoad() {
     //
     // And the guard inside it is reset first: it remembers which state the
     // buttons were last DRAWN in, and these are new objects with none of that
-    // styling on them. PageManager caches this page so this runs once a boot
-    // -- but a cache that describes objects has to be dropped when the
-    // objects are, or the buttons come up unstyled and stay that way.
+    // styling on them. This page is rebuilt on every visit -- PageManager
+    // drops a page when it is popped -- and a cache that describes objects
+    // has to be dropped when the objects are, or the buttons come up unstyled
+    // and stay that way.
     s_ride_buttons_armed = -1;
     RefreshRideButtons(RideLog_IsArmed());
 

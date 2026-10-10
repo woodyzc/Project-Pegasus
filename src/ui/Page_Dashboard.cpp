@@ -143,10 +143,11 @@ constexpr uint32_t HR_STALE_MS = 5000;
 constexpr uint32_t CADENCE_STALE_MS = 5000;
 
 // One colour per training zone: blue, green, yellow, red, purple. Saturated
-// rather than the pastels the rest of the panel uses, because this bar is read
-// in sunlight at a glance and a washed-out band is the one thing it cannot
-// afford. The boundaries themselves live in HrZone.h, scaled to the rider's
-// own resting and maximum rate.
+// rather than the pastels the rest of the panel uses, because they are read in
+// sunlight at a glance on the dark ground -- since the zone bar went, that is
+// the second page's heart-rate figure -- and a washed-out zone colour is the
+// one thing that cannot afford. The boundaries themselves live in HrZone.h,
+// scaled to the rider's own resting and maximum rate.
 const uint32_t ZONE_COLORS[HR_ZONE_COUNT] = {
     0x0A84FF, // 1  low intensity    blue
     0x30D158, // 2  weight control   green
@@ -164,11 +165,11 @@ const uint32_t ZONE_COLORS[HR_ZONE_COUNT] = {
 //
 // So the zone identity survives -- still blue, green, yellow, red, purple, in
 // that order -- and only the lightness moves. A rider who has learnt "yellow
-// is zone 3" from the bar at the bottom of the screen reads the same yellow in
-// this cell; it is simply a yellow that exists on white.
+// is zone 3" from the second page reads the same yellow in this cell; it is
+// simply a yellow that exists on white.
 //
-// Everything still drawn on the dark ground keeps the originals: the zone bar,
-// and the second page's heart-rate figures.
+// Everything drawn on the dark ground keeps the originals, which since the
+// zone bar went means the second page's heart-rate figures.
 const uint32_t ZONE_COLORS_ON_WHITE[HR_ZONE_COUNT] = {
     0x0A5FC4, // 1  low intensity    blue
     0x1B8C3A, // 2  weight control   green
@@ -271,7 +272,7 @@ lv_obj_t *s_hr_max_label = nullptr;
 
 // ---- The second data page ----
 // One opaque container that covers the navigation region and the four metric
-// cells when shown, leaving the status line above it and the zone bar below.
+// cells when shown, leaving the status line above it.
 //
 // Covering rather than hiding-and-showing, because the alternative is holding
 // a handle to every object on the first page and getting one of them wrong.
@@ -301,29 +302,6 @@ lv_obj_t *s_p2_trip_cell = nullptr;
 // Defined further down, beside the rest of the second page. Declared here
 // because the once-a-second refresh sits above it and calls it.
 void RenderPage2();
-static void SetTextIfChanged(lv_obj_t *label, const char *text);
-
-
-// A triangle riding above the bar, pointing down at the rider's position. The
-// lit segment says which zone; this says where inside it, which is the
-// difference between holding the bottom of zone 4 and being about to fall out
-// of the top.
-//
-// LVGL 8 has no triangle to draw with: the symbol font carries chevrons and
-// arrows but no solid wedge, and a rotated object only works for images. This
-// was briefly an lv_canvas polygon, which made the board reboot -- a canvas in
-// LV_IMG_CF_TRUE_COLOR_ALPHA needs LV_COLOR_SCREEN_TRANSP, and with that off
-// (it is, and it is a whole-display rendering mode, not something to turn on
-// for one 15px marker) the software renderer's alpha-blend paths are compiled
-// out from under it.
-//
-// So: four stacked rows, each narrower than the last, in a transparent
-// container that moves as one. Plain lv_obj rectangles, the same thing every
-// other widget on this page is made of, with no rendering mode behind them
-// that can be absent.
-
-// Bar geometry, recorded when the bar is built so the marker can be placed
-// without the layout constants leaking out of onViewLoad.
 
 // The navigation slot holds one of two things depending on the chosen mode:
 // a turn card in TBT, or a live breadcrumb map in GPX. Only one is created,
@@ -1680,7 +1658,7 @@ void OnDashboardGesture(lv_event_t *e) {
     }
 
     // The navigation tile used to be excluded here, so that a flick over the
-    // map could not change pages. That is 184 of the panel's 320 rows -- 57%
+    // map could not change pages. That was 184 of the panel's 320 rows -- 57%
     // of the screen silently ignoring swipes, which is most of what "swiping
     // is stiff" turned out to be: it worked in the bottom third and nowhere
     // else, so it felt intermittent rather than absent.
@@ -1990,7 +1968,8 @@ void PageDashboard::onViewLoad() {
         s_nav_cell = MakeCell(parent, 0, NAV_Y, FULL_W, NAV_H, "");
 
         // ---- Filling the navigation tile ----
-        // 240x184 with the status band across the top. The old layout put a
+        // 240x200 with the status band across the top -- 184 until the zone
+        // bar went and navigation took its 16px. The old layout put a
         // 64px arrow and a 48pt "200 m" side by side and left most of the
         // tile empty, because the combined string needed 155px of width and
         // capped the arrow at whatever was left.
@@ -2044,11 +2023,13 @@ void PageDashboard::onViewLoad() {
         // A deliberate gap between rows, now that the layout is not
         // manufacturing one.
         //
-        // 4 and not 6, and the four pixels matter. The column is 150px
+        // 4 and not 6, and the four pixels mattered. The column was 150px
         // (NAV_H - STATUS_H - PAD) and the four rows are 88 + 6 + 15 + the
         // street name's line box. At montserrat_24 that box is 27px, which
         // makes 154 at a 6px gap -- so the block overflowed, and with nothing
-        // scrollable the overflow was simply clipped. What it cost was the
+        // scrollable the overflow was simply clipped. The column is 166px
+        // since the zone bar went, which would fit 6; the gap was left at 4
+        // rather than re-tuned. What it cost was the
         // bottom two rows of the street name's descenders: "Rockingham Road"
         // drew its g with the tail cut off at its widest point.
         //
@@ -2319,9 +2300,9 @@ void PageDashboard::onViewLoad() {
     TintCellText(cadence_cell, lv_color_hex(COLOR_BG));
 
     // ---- The second data page ----
-    // Covers the navigation region and the four cells, leaving the status line
-    // and the zone bar. Four full-width rows and one split one, between the
-    // status line at 28 and the zone marker at 304.
+    // Covers the navigation region and the four cells, leaving only the status
+    // line. Four full-width rows and one split one, between the status line at
+    // 28 and the bottom of the panel.
     {
         const lv_coord_t P2_Y = STATUS_H;
         const lv_coord_t P2_H = SCREEN_H - P2_Y;       // 292, up 16 with the zone bar gone
@@ -2450,21 +2431,9 @@ void PageDashboard::onViewLoad() {
     // each widget runs into the screen edge with no frame around it.
     MakeSeparator(parent, 0, ROW1 - 1, SCREEN_W, 1);      // navigation / metrics
     MakeSeparator(parent, 0, ROW2 - 1, SCREEN_W, 1);      // between metric rows
-    // One vertical line down the metric block only -- the navigation slot and
-    // the zone bar above and below it are full width and must not be cut.
+    // One vertical line down the metric block only -- the navigation slot
+    // above it is full width and must not be cut.
     MakeSeparator(parent, COL2 - 1, ROW1, 1, ROW2 + CELL_H - ROW1);
-
-    // ---- Heart-rate zone block ----
-    // Five bands from HrZone.h, scaled to the rider's own resting and maximum
-    // rate; the active one is lit and the rest dimmed. Colour and position
-    // carry the reading, no word to parse.
-    //
-    // Equal fifths, not one segment per span. The bands really are unequal in
-    // beats -- zone 4 covers 30% of the reserve and zone 5 only 10% -- and
-    // drawing that honestly gave a bar of 72/24/48/72/24px in which the narrow
-    // zones were hard to tell apart at a glance. Five equal blocks read as a
-    // scale. The cost is that the marker can no longer be placed by reserve,
-    // which is what HrZone_EqualWidthFraction is for.
 
     if (!s_nav_is_map) {
         ClearTbt();
@@ -2484,12 +2453,12 @@ void PageDashboard::onViewLoad() {
     DataCenter_Subscribe(TOPIC_NAV_TBT, &s_tbt_account);
 
     // Last thing built, so it is the last sibling and covers everything on the
-    // first page. The hairlines and the zone block are created after the
-    // container itself, and without this they draw straight across the second
-    // page -- stray rules cutting through cells that have their own.
+    // first page. The hairlines are created after the container itself, and
+    // without this they draw straight across the second page -- stray rules
+    // cutting through cells that have their own.
     //
-    // The status line and the zone bar are outside its rectangle, so raising
-    // it does not hide either.
+    // The status line is outside its rectangle, so raising it does not hide
+    // it.
     lv_obj_move_foreground(s_page2);
 
     s_refresh_timer = lv_timer_create(RefreshTimerCallback, 100, nullptr);

@@ -198,7 +198,7 @@ bool MapView_IsManual(const MapView_t *view);
 //
 // Saving where the map is looking rather than which page was looking at it
 // keeps the two in step. The scale travels as metres per pixel, which means
-// the same thing in a 184px tile and a 262px page; the taller one simply shows
+// the same thing in a 200px tile and a 262px page; the taller one simply shows
 // more of the same ground.
 // Only the view the rider is actually looking at may write the shared camera
 // from its redraws. Set on appear, cleared on disappear; explicit

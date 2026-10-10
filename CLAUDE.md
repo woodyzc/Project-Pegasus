@@ -301,8 +301,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     reply and should not be reading prose in traffic; the only question worth
     answering at speed is whether to stop, and a name answers it.
   - **The banner covers the metric cells and never the navigation region.**
-    y184 down is speed, trip, heart rate and elevation, all of which can be
-    read again a second later. The 184px above is the turn, which cannot. The
+    y200 down is speed, trip, heart rate and cadence, all of which can be
+    read again a second later. The 200px above is the turn, which cannot. The
     geometry is hard-coded in `Overlay_Alert.cpp` against `Page_Dashboard`'s
     layout, so the two move together.
   - The NVS bring-up watchdog in `Settings_Init()` used to force the mode to

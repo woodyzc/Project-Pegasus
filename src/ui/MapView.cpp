@@ -564,7 +564,7 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     //
     // so once a drag has latched onto any scrollable object, gesture
     // detection does not run at all. In GPX mode this container IS the top
-    // 184px of the dashboard, so a swipe that started on the map was decided
+    // 200px of the dashboard, so a swipe that started on the map was decided
     // to be a scroll and no page change ever followed. Swipes that began on
     // the metric cells worked, because those clear the flag -- which is
     // exactly what "stiff, works sometimes" felt like.

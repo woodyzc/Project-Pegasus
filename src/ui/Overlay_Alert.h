@@ -6,14 +6,14 @@
 // ---------------------------------------------------------------------------
 // Where it draws, and why that is the whole design
 // ---------------------------------------------------------------------------
-// Over the metric cells -- SPEED, TRIP, HEART RATE, ELEVATION -- and never
+// Over the metric cells -- SPEED, TRIP, HEART RATE, CADENCE -- and never
 // over the navigation region above them.
 //
 // Those metrics are things a rider can look up again a second later, or work
 // out from the road. A turn is not: a banner that hides the arrow at the
 // moment the junction arrives has taken something back that cannot be
 // recovered, in exchange for telling the rider about a message they cannot
-// answer. So the top 184px is off limits, and this occupies the band below it.
+// answer. So the top 200px is off limits, and this occupies the band below it.
 //
 // That also makes the banner harmless on the map page, where the lower band
 // shows the road already ridden.
