@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <string.h>
-#include <vector>
 
 const char *const TOPIC_GPS_INFO = "GPS_Info";
 const char *const TOPIC_HEART_RATE = "Sensor/HeartRate";
@@ -18,30 +17,47 @@ Account::Account(const char *id, DataCenter_Callback_t callback, void *user_arg)
 
 namespace {
 
+// Subscribers one topic can have. GPS_Info is the busiest at ten; Subscribe
+// refuses past this rather than growing, so a topic's list never allocates.
+constexpr size_t kMaxSubscribers = 16;
+
 struct Topic {
     const char *name;
     uint32_t size;
     uint8_t *buffer;    // heap-allocated, `size` bytes, holds the last-published value
     bool has_data;       // false until the first Publish()
-    std::vector<Account *> subscribers;
+    // A fixed array, not a std::vector, because Publish snapshots the list
+    // before calling anyone (see there) -- and a vector's snapshot was a heap
+    // allocation and a free on every publish, from the GPS, BLE and battery
+    // tasks alike, into internal RAM, which is the heap this board is
+    // shortest of.
+    Account *subscribers[kMaxSubscribers];
+    size_t subscriber_count;
 };
 
 // Well-known topics, one entry per data struct in DataCenter.h. Extend this
 // table (and add a TOPIC_* constant above) to publish a new data type.
 Topic s_topics[] = {
-    {TOPIC_GPS_INFO, sizeof(GPS_Info_t), nullptr, false, {}},
-    {TOPIC_HEART_RATE, sizeof(HeartRate_t), nullptr, false, {}},
-    {TOPIC_CADENCE, sizeof(Cadence_t), nullptr, false, {}},
-    {TOPIC_IMU_DATA, sizeof(IMU_Data_t), nullptr, false, {}},
-    {TOPIC_BATTERY, sizeof(Battery_t), nullptr, false, {}},
-    {TOPIC_NAV_TBT, sizeof(TBT_Directive_t), nullptr, false, {}},
-    {TOPIC_PHONE_ALERT, sizeof(Alert_Info_t), nullptr, false, {}},
+    {TOPIC_GPS_INFO, sizeof(GPS_Info_t), nullptr, false, {}, 0},
+    {TOPIC_HEART_RATE, sizeof(HeartRate_t), nullptr, false, {}, 0},
+    {TOPIC_CADENCE, sizeof(Cadence_t), nullptr, false, {}, 0},
+    {TOPIC_IMU_DATA, sizeof(IMU_Data_t), nullptr, false, {}, 0},
+    {TOPIC_BATTERY, sizeof(Battery_t), nullptr, false, {}, 0},
+    {TOPIC_NAV_TBT, sizeof(TBT_Directive_t), nullptr, false, {}, 0},
+    {TOPIC_PHONE_ALERT, sizeof(Alert_Info_t), nullptr, false, {}, 0},
 };
 constexpr size_t kTopicCount = sizeof(s_topics) / sizeof(s_topics[0]);
 
 SemaphoreHandle_t s_mutex = nullptr;
 
 Topic *FindTopic(const char *topic) {
+    // Every caller passes one of the TOPIC_* constants, so the pointer
+    // matches and the string compare is only the fallback.
+    for (size_t i = 0; i < kTopicCount; i++) {
+        if (s_topics[i].name == topic) {
+            return &s_topics[i];
+        }
+    }
     for (size_t i = 0; i < kTopicCount; i++) {
         if (strcmp(s_topics[i].name, topic) == 0) {
             return &s_topics[i];
@@ -72,14 +88,14 @@ bool DataCenter_Subscribe(const char *topic, Account *account) {
     bool ok = false;
     if (t != nullptr) {
         bool already = false;
-        for (Account *existing : t->subscribers) {
-            if (existing == account) {
+        for (size_t i = 0; i < t->subscriber_count; i++) {
+            if (t->subscribers[i] == account) {
                 already = true;
                 break;
             }
         }
-        if (!already) {
-            t->subscribers.push_back(account);
+        if (!already && t->subscriber_count < kMaxSubscribers) {
+            t->subscribers[t->subscriber_count++] = account;
             ok = true;
         }
     }
@@ -94,9 +110,12 @@ bool DataCenter_Unsubscribe(const char *topic, Account *account) {
     Topic *t = FindTopic(topic);
     bool ok = false;
     if (t != nullptr) {
-        for (size_t i = 0; i < t->subscribers.size(); i++) {
+        for (size_t i = 0; i < t->subscriber_count; i++) {
             if (t->subscribers[i] == account) {
-                t->subscribers.erase(t->subscribers.begin() + i);
+                for (size_t j = i + 1; j < t->subscriber_count; j++) {
+                    t->subscribers[j - 1] = t->subscribers[j];
+                }
+                t->subscriber_count--;
                 ok = true;
                 break;
             }
@@ -120,12 +139,15 @@ bool DataCenter_Publish(const char *topic, void *data) {
     t->has_data = true;
 
     // Snapshot the subscriber list so a callback that (un)subscribes doesn't
-    // invalidate the vector we're iterating.
-    std::vector<Account *> subscribers = t->subscribers;
+    // shift the array we're iterating. On the stack: 64 bytes.
+    Account *subscribers[kMaxSubscribers];
+    const size_t count = t->subscriber_count;
+    memcpy(subscribers, t->subscribers, count * sizeof(subscribers[0]));
     uint32_t size = t->size;
     uint8_t *buffer = t->buffer;
 
-    for (Account *account : subscribers) {
+    for (size_t i = 0; i < count; i++) {
+        Account *account = subscribers[i];
         if (account->Callback != nullptr) {
             account->Callback(topic, buffer, size, account->UserArg);
         }

@@ -218,7 +218,8 @@ void DataCenter_Init();
 
 // Subscribes `account` to `topic`. `topic` must be one of the well-known
 // TOPIC_* names above (or a topic added to the registration table).
-// Returns false if the topic is unknown or `account` is already subscribed.
+// Returns false if the topic is unknown, `account` is already subscribed, or
+// the topic already has its fixed maximum of subscribers (16; DataCenter.cpp).
 bool DataCenter_Subscribe(const char *topic, Account *account);
 
 // Removes `account` from `topic`'s subscriber list. Returns false if either
