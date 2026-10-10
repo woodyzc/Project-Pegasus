@@ -163,6 +163,33 @@ int main(void) {
     }
     printf("done\n");
 
+    // The map page is destroyed every time the rider leaves it, and the head
+    // unit can be restarted mid-ride -- either way the search starts from
+    // nothing, and here it starts on the way home. Both legs are on the line
+    // under the rider. By position alone the earlier index wins, which is the
+    // outbound leg, running the other way; the forward check then fails on
+    // every fix and the rider is never picked up at all (found in review,
+    // 2026-10-10: 600m ridden home with no mark).
+    printf("- picked up on the way home, it is the way home: ");
+    TrackProgress_Reset(&p);
+    for (double y = 600; y >= 300; y -= 7) {
+        Feed(&p, 0, y);
+    }
+    check(p.have_mark, "acquired on the return leg");
+    check(p.have_mark && p.mark > 50, "the return leg, not the outbound one");
+    check(p.have_mark && fabs(VertexY(p.mark) - 300) <= 30, "and level with the rider");
+    printf("done\n");
+
+    // Below the motion floor the direction is receiver wander, so the search
+    // goes by position alone. That must still let a slow rider be picked up.
+    printf("- walking the bike forwards is still picked up: ");
+    TrackProgress_Reset(&p);
+    for (double y = 0; y <= 40; y += 1.2) {
+        Feed(&p, 0, y);
+    }
+    check(p.have_mark && p.mark <= 2, "acquired at the start without a direction");
+    printf("done\n");
+
     // ---------------------------------------------------------------------
     // Stray fixes.
     // ---------------------------------------------------------------------

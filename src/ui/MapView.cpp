@@ -8,8 +8,11 @@
 
 #include <stdint.h>
 
+#include "../hal/Imu.h"
+#include "../navigation/GpxProgress.h"
 #include "../navigation/GpxTrack.h"
 #include "../system/Settings.h"
+#include "../system/Stillness.h"
 
 namespace {
 
@@ -21,7 +24,6 @@ uint32_t g_build_us = 0;
 uint32_t g_build_drag_us = 0;
 uint32_t g_src_points = 0;
 uint32_t g_drawn_points = 0;
-uint32_t g_progress_scan_us = 0;
 bool g_interactive = false;
 
 constexpr uint32_t COLOR_MAP_BG = 0x0B1116;
@@ -379,14 +381,6 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     view->have_center = false;
     view->zoom_locked = false;
     view->pan_locked = false;
-    // Explicit, because MapView_t is not required to arrive zeroed and a
-    // high-water mark inherited from whatever was in memory would colour an
-    // arbitrary stretch of a fresh route as already ridden.
-    TrackProgress_Reset(&view->progress);
-    view->done_src_track_points = 0;
-    view->done_src_track_name[0] = '\0';
-    view->done_src_fix_lat = 0.0;
-    view->done_src_fix_lon = 0.0;
     // Claimed on appear, never by default: a view nobody is looking at must
     // not own the camera.
     view->camera_owner = false;
@@ -640,47 +634,13 @@ void MapView_Redraw(MapView_t *view) {
         view->points[i].y = view->projected[i].y;
     }
 
-    // Where to cut the drawn line: the vertex nearest the rider, measured in
-    // pixels on the line that was actually drawn.
-    //
-    // Not a fraction of the source track, which is what this was. Since the
-    // builder now draws only the visible stretch, and thins it when it does
-    // not fit, source indices and drawn indices have no fixed relationship at
-    // all -- the fraction put the colour change wherever it liked.
-    // A different track means a different journey: a loaded route replacing
-    // the old one must not inherit its progress.
-    const size_t track_points = GpxTrack_PointCount();
-    const char *track_name = GpxTrack_LoadedName();
-    if (track_name == nullptr) {
-        track_name = "";
-    }
-    if (view->done_src_track_points != track_points ||
-        strncmp(view->done_src_track_name, track_name,
-                sizeof(view->done_src_track_name) - 1) != 0) {
-        view->done_src_track_points = track_points;
-        strncpy(view->done_src_track_name, track_name,
-                sizeof(view->done_src_track_name) - 1);
-        view->done_src_track_name[sizeof(view->done_src_track_name) - 1] = '\0';
-        TrackProgress_Reset(&view->progress);
-    }
-
-    // Advance the high-water mark, in source indices. See TrackProgress.h
-    // for how, and for why "nearest vertex anywhere" was the wrong answer.
-    // ⚠️ Only when the FIX has moved. Redraw is called on every
-    // LV_EVENT_PRESSING during a pan -- about 33 times a second -- where
-    // neither the fix nor the track has changed, and feeding the same fix
-    // again would also count it twice towards a re-acquisition.
-    const bool fix_moved = (view->fix_lat != view->done_src_fix_lat) ||
-                           (view->fix_lon != view->done_src_fix_lon);
-    if (view->have_fix && track_points > 0 && fix_moved) {
-        view->done_src_fix_lat = view->fix_lat;
-        view->done_src_fix_lon = view->fix_lon;
-        const uint32_t scan_started_us = micros();
-        TrackProgress_Feed(&view->progress, GpxTrack_Buffer(),
-                           (int32_t)lround(view->fix_lat * 1e7),
-                           (int32_t)lround(view->fix_lon * 1e7));
-        g_progress_scan_us = micros() - scan_started_us;
-    }
+    // How far along the route the rider has got. Kept by GpxProgress for the
+    // whole boot rather than by this view -- see GpxProgress.h for why.
+    // Serviced first, so a fix that landed since the timer's last tick is
+    // counted before the split is drawn rather than a tick later.
+    GpxProgress_Service();
+    size_t mark = 0;
+    const bool have_mark = GpxProgress_Mark(&mark);
 
     // Where to cut the drawn line: the drawn vertex nearest the furthest
     // point reached, measured in pixels on the line that was actually drawn.
@@ -691,10 +651,10 @@ void MapView_Redraw(MapView_t *view) {
     // the first one and everything visible is ahead; clipped off in front,
     // it is the last and everything visible is done.
     size_t split = 0;
-    if (view->progress.have_mark && written > 0) {
+    if (have_mark && written > 0) {
         double dlat = 0.0;
         double dlon = 0.0;
-        if (TrackBuffer_Get(GpxTrack_Buffer(), view->progress.mark, &dlat, &dlon)) {
+        if (TrackBuffer_Get(GpxTrack_Buffer(), mark, &dlat, &dlon)) {
             int16_t fx = 0;
             int16_t fy = 0;
             Map_ProjectPrepared(&proj, dlat, dlon, &fx, &fy);
@@ -990,8 +950,4 @@ uint32_t MapView_LastSourcePoints() {
 
 uint32_t MapView_LastDrawnPoints() {
     return g_drawn_points;
-}
-
-uint32_t MapView_LastProgressScanUs() {
-    return g_progress_scan_us;
 }

@@ -57,6 +57,9 @@ void TrackProgress_Reset(TrackProgress_t *p) {
     p->pending_count = 0;
     p->pending_from_lat_e7 = 0;
     p->pending_from_lon_e7 = 0;
+    p->last_lat_e7 = 0;
+    p->last_lon_e7 = 0;
+    p->have_last = false;
 }
 
 /* Tracking: the best on-track segment in the window ahead of the mark. */
@@ -93,12 +96,21 @@ static bool SearchWindow(const TrackProgress_t *p, const TrackBuffer_t *track, c
     return found;
 }
 
+/* Which way the rider went between the previous fix and this one, in the
+   same local metres as everything else -- or nothing, when they moved too
+   little for the direction to be more than receiver noise. */
+typedef struct {
+    float x;
+    float y;
+    bool valid;
+} Motion_t;
+
 /* (Re)acquiring: the earliest on-track segment from `from` to the end, unless
    a later one is clearly closer. Most segments are dismissed by an integer box
    before any arithmetic, which is what lets this run over a 20,000-point track
    once a second while the rider is off the window. */
-static bool SearchRest(const TrackBuffer_t *track, const Origin_t *o, size_t from,
-                       size_t *out_seg) {
+static bool SearchRest(const TrackBuffer_t *track, const Origin_t *o, const Motion_t *motion,
+                       size_t from, size_t *out_seg) {
     const int32_t half_lat = (int32_t)(TRACK_PROGRESS_ONTRACK_M / METRES_PER_E7_LAT) + 1;
     const int32_t half_lon = (int32_t)(TRACK_PROGRESS_ONTRACK_M / o->m_per_e7_lon) + 1;
     const int32_t lat_lo = o->lat_e7 - half_lat;
@@ -132,6 +144,17 @@ static bool SearchRest(const TrackBuffer_t *track, const Origin_t *o, size_t fro
         ToLocal(o, blat, blon, &bx, &by);
         d = SegmentDistance(ax, ay, bx, by, &t, &len);
         if (d > TRACK_PROGRESS_ONTRACK_M) {
+            continue;
+        }
+        /* Where the route covers the same ground twice -- an out-and-back,
+           a road used in both directions -- both passes are on the line, and
+           position alone settles it by index: always the earlier pass. Riding
+           home, that is the leg going the other way, and the forward check
+           below can then never pass, so the rider was never picked up at all.
+           The direction of travel is what tells the two apart, so a segment
+           running against it is not a candidate. A zero-length one has no
+           direction and drops out with it; its neighbours do not. */
+        if (motion->valid && (motion->x * (bx - ax) + motion->y * (by - ay)) <= 0.0f) {
             continue;
         }
         if (!found || d < best_d - TRACK_PROGRESS_TIE_M) {
@@ -181,11 +204,10 @@ bool TrackProgress_Feed(TrackProgress_t *p, const TrackBuffer_t *track, int32_t 
     size_t seg = 0;
     float cos_lat;
 
+    Motion_t motion = {0.0f, 0.0f, false};
+
     if (p == NULL || track == NULL || track->count < 2) {
         return false;
-    }
-    if (p->have_mark && p->mark + 1 >= track->count) {
-        return false; /* Already at the end; nothing left to advance into. */
     }
 
     cos_lat = cosf((float)lat_e7 * 1e-7f * 3.14159265f / 180.0f);
@@ -195,6 +217,26 @@ bool TrackProgress_Feed(TrackProgress_t *p, const TrackBuffer_t *track, int32_t 
     o.lat_e7 = lat_e7;
     o.lon_e7 = lon_e7;
     o.m_per_e7_lon = METRES_PER_E7_LAT * cos_lat;
+
+    /* The step since the previous fix. The origin is this fix, so the step is
+       minus the previous one's local position. Recorded before anything below
+       can return, so every fix becomes the next one's reference. */
+    if (p->have_last) {
+        float lx;
+        float ly;
+        ToLocal(&o, p->last_lat_e7, p->last_lon_e7, &lx, &ly);
+        motion.x = -lx;
+        motion.y = -ly;
+        motion.valid = (motion.x * motion.x + motion.y * motion.y) >=
+                       (TRACK_PROGRESS_MOTION_MIN_M * TRACK_PROGRESS_MOTION_MIN_M);
+    }
+    p->last_lat_e7 = lat_e7;
+    p->last_lon_e7 = lon_e7;
+    p->have_last = true;
+
+    if (p->have_mark && p->mark + 1 >= track->count) {
+        return false; /* Already at the end; nothing left to advance into. */
+    }
 
     if (p->have_mark && SearchWindow(p, track, &o, &seg)) {
         /* Locked on. Any evidence for a jump elsewhere is void. */
@@ -206,7 +248,7 @@ bool TrackProgress_Feed(TrackProgress_t *p, const TrackBuffer_t *track, int32_t 
         return false;
     }
 
-    if (!SearchRest(track, &o, p->have_mark ? p->mark : 0, &seg)) {
+    if (!SearchRest(track, &o, &motion, p->have_mark ? p->mark : 0, &seg)) {
         p->pending_count = 0;
         return false;
     }

@@ -9,6 +9,7 @@
 #include "../hal/Barometer.h"
 #include "../hal/Imu.h"
 #include "../navigation/RoadMap.h"
+#include "../navigation/GpxProgress.h"
 #include "MapView.h"
 #include "RoadView.h"
 #include "../system/TimeSource.h" // WiFi.macAddress() -- reads the eFused MAC, no radio started
@@ -104,6 +105,10 @@ lv_obj_t *s_routerx_value = nullptr;
 // Live for the obvious reason: it changes every time the bike is touched, and
 // its whole purpose is to be watched while someone moves the thing.
 lv_obj_t *s_imu_value = nullptr;
+// Live, because it is read on the road: left open while riding to watch the
+// mark advance, and to see that it survives a visit to the map -- which, while
+// it lived in the map's own view, it did not.
+lv_obj_t *s_progress_value = nullptr;
 lv_obj_t *s_cadencelink_value = nullptr;
 lv_obj_t *s_tbtlink_value = nullptr;
 lv_obj_t *s_heap_value = nullptr;
@@ -688,6 +693,26 @@ void OnFileTransferClicked(lv_event_t *e) {
     Overlay_FileTransfer_Show();
 }
 
+// How far along the loaded GPX the rider has got: the vertex that splits the
+// map's grey from its magenta. Shared by the builder and the timer, so the row
+// never shows a placeholder for its first second.
+void RefreshProgressRow() {
+    if (s_progress_value == nullptr) {
+        return;
+    }
+    const size_t points = GpxTrack_PointCount();
+    size_t mark = 0;
+    if (points == 0) {
+        SetRowText(s_progress_value, "Progress: no route loaded");
+    } else if (GpxProgress_Mark(&mark)) {
+        SetRowTextFmt(s_progress_value, "Progress: vertex %u of %u, %uus", (unsigned)mark,
+                      (unsigned)points, (unsigned)GpxProgress_LastFeedUs());
+    } else {
+        SetRowTextFmt(s_progress_value, "Progress: not on the route yet, %uus",
+                      (unsigned)GpxProgress_LastFeedUs());
+    }
+}
+
 void InfoTimerCallback(lv_timer_t *timer) {
     (void)timer;
 
@@ -721,6 +746,8 @@ void InfoTimerCallback(lv_timer_t *timer) {
         }
         SetRowTextFmt(s_imu_value, "IMU: %s", buf);
     }
+
+    RefreshProgressRow();
 
     // The whole point of this row is to be read WHILE a transfer is failing,
     // so it has to track one. See s_routerx_value.
@@ -1555,15 +1582,18 @@ void PageSettings::onViewLoad() {
     // frame of a pan.
     //
     // src/drawn is the ratio that says whether the search is doing its job --
-    // thousands against a couple of hundred is the expected shape. "prog" is
-    // the once-a-second progress scan, which is charged to the fix rather than
-    // to the frame and so hides from an FPS reading.
+    // thousands against a couple of hundred is the expected shape.
     if (GpxTrack_PointCount() > 0) {
-        snprintf(buf, sizeof(buf), "%u src, %u drawn, %uus (drag %uus, prog %uus)",
+        snprintf(buf, sizeof(buf), "%u src, %u drawn, %uus (drag %uus)",
                  (unsigned)MapView_LastSourcePoints(), (unsigned)MapView_LastDrawnPoints(),
-                 (unsigned)MapView_LastBuildUs(), (unsigned)MapView_LastBuildDragUs(),
-                 (unsigned)MapView_LastProgressScanUs());
+                 (unsigned)MapView_LastBuildUs(), (unsigned)MapView_LastBuildDragUs());
         MakeInfoRow(info_card, "Track", buf);
+
+        // Where the rider has got to on it, and what the last fix cost to
+        // place -- charged to the fix rather than to a frame, so it hides from
+        // an FPS reading. Live; see s_progress_value.
+        s_progress_value = MakeInfoRow(info_card, "Progress", "--");
+        RefreshProgressRow();
     }
 
     // The clock, and where it came from. "Blank clock" has three causes that
@@ -1651,6 +1681,7 @@ void PageSettings::onViewUnload() {
     s_hrlink_value = nullptr;
     s_routerx_value = nullptr;
     s_imu_value = nullptr;
+    s_progress_value = nullptr;
     s_cadencelink_value = nullptr;
     s_tbtlink_value = nullptr;
     s_heap_value = nullptr;

@@ -9,6 +9,7 @@
 #include "hal/LvglFs.h"
 #include "hal/Touch.h"
 #include "navigation/BLE_TBT_Receiver.h"
+#include "navigation/GpxProgress.h"
 #include "navigation/GpxTrack.h"
 #include "navigation/NavRoute.h"
 #include "navigation/RideLog.h"
@@ -223,6 +224,13 @@ void setup() {
     // page reads the world once at load (CLAUDE.md §8).
     GradeTracker_Init();
     RideLog_Init();
+    // How far along the loaded GPX the rider has got, which the map draws as
+    // grey behind and magenta ahead. Here rather than in the map, because the
+    // ROUTE page is rebuilt on every visit and hears fixes only while it is on
+    // screen -- so progress kept there started again every time the rider
+    // looked. After the card has been read, so the first fix finds the route
+    // it belongs to; before LvglTask_Start() because it creates an LVGL timer.
+    GpxProgress_Init();
 
     s_page_manager.SetGlobalLoadAnimType(PageManager::LOAD_ANIM_OVER_LEFT, 300);
     s_page_manager.Push(PAGE_NAME_DASHBOARD);

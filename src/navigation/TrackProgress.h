@@ -55,6 +55,11 @@
 //     the route cannot grey out everything before it, and neither can riding
 //     the route in reverse -- which, measured by position alone, would grey
 //     the whole of it from the far end on the first fix.
+//   * Where the route covers the same ground twice, the (re)acquiring search
+//     only considers segments running the way the rider is going. Without
+//     that, a rider picked up on the way home of an out-and-back was matched
+//     to the outbound leg -- the earlier index -- and the forward check then
+//     failed on every fix, so they were never picked up at all.
 //
 // Pure, and host-tested (test/host/test_track_progress.c), because every rule
 // here is about a sequence of fixes.
@@ -96,6 +101,12 @@ extern "C" {
 // line, the earlier is assumed. It is the honest default: it greys out less.
 #define TRACK_PROGRESS_TIE_M 10.0f
 
+// The step between two fixes that counts as a direction of travel. Below it --
+// a rider stopped, or walking the bike -- the step is mostly receiver wander,
+// and the out-of-window search goes by position alone. Two metres in a second
+// is 7 km/h.
+#define TRACK_PROGRESS_MOTION_MIN_M 2.0f
+
 typedef struct {
     // The last track VERTEX passed: vertices [0, mark] are ridden. It is the
     // start of the segment the rider last snapped to.
@@ -108,6 +119,11 @@ typedef struct {
     uint8_t pending_count;
     int32_t pending_from_lat_e7;
     int32_t pending_from_lon_e7;
+
+    // The previous fix, for the direction of travel.
+    int32_t last_lat_e7;
+    int32_t last_lon_e7;
+    bool have_last;
 } TrackProgress_t;
 
 void TrackProgress_Reset(TrackProgress_t *p);

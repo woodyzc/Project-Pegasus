@@ -4,7 +4,6 @@
 
 #include "../navigation/MapHeading.h"
 #include "../navigation/MapProject.h"
-#include "../navigation/TrackProgress.h"
 #include "../system/DataCenter.h"
 
 // A breadcrumb map that can be dropped into any parent at any size.
@@ -86,35 +85,17 @@ typedef struct {
     // scale at all, from re-rasterising the figure on every frame of itself.
     char scale_text[16];
 
-    // ⚠️ Progress along the SOURCE track, and it only ever moves forward.
+    // The ridden/ahead split is no longer state of the view. It is read from
+    // navigation/GpxProgress.h on every redraw, and the reasons it moved out
+    // are both about this struct's lifetime: the ROUTE page's view is rebuilt
+    // on every visit, and a view hears fixes only while its page is on
+    // screen. See that header.
     //
-    // The ridden/ahead split used to be recomputed from scratch every redraw
-    // as "nearest drawn vertex to the rider", which has no memory: turn
-    // around and ride back and the nearest vertex moves backwards, so route
-    // the rider had already covered went green again behind them.
-    //
-    // Kept as a source index rather than a drawn one because drawn indices
-    // are not stable between frames -- the builder clips to the viewport and
-    // thins what it draws, so the same drawn index means a different place
-    // from one redraw to the next. That instability is already why the split
-    // stopped being a fraction of the track; it is also why the high-water
-    // mark cannot live there.
-    //
-    // HOW it advances is navigation/TrackProgress.h, and the first way it did
-    // -- nearest vertex anywhere on the track -- jumped onto any later leg
-    // that came close and greyed out everything before it, permanently.
-    TrackProgress_t progress;
-    // What the mark was measured against. Point count ALONE is not an
-    // identity: two routes with the same number of points are not unusual --
-    // a re-export of the same ride, or two tracks from the same generator --
-    // and the second would silently inherit the first's ridden stretch. The
-    // name is what actually distinguishes them.
-    size_t done_src_track_points;
-    char done_src_track_name[32];
-    // The fix the mark was last advanced against, so a pan or a zoom does not
-    // repeat a whole-track scan that cannot change its answer.
-    double done_src_fix_lat;
-    double done_src_fix_lon;
+    // What it hands back is a SOURCE index, and has to be: drawn indices are
+    // not stable between frames -- the builder clips to the viewport and thins
+    // what it draws, so the same drawn index means a different place from one
+    // redraw to the next. Redraw finds the drawn vertex nearest that source
+    // point instead.
 
     // Track-up. The smoother decides what "up" is and when it has moved
     // enough to be worth a redraw; this view only asks it.
@@ -226,9 +207,4 @@ uint32_t MapView_LastBuildDragUs();
 uint32_t MapView_LastSourcePoints();
 uint32_t MapView_LastDrawnPoints();
 
-// The progress scan -- "how far along this route have we ever been" -- which
-// walks the whole track and runs only when the fix moves. Separate because it
-// is charged to the fix rather than to the frame, and so shows up as a once-a-
-// second hitch rather than as a slow pan.
-uint32_t MapView_LastProgressScanUs();
 
