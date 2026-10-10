@@ -666,22 +666,40 @@ void PageMap::onViewLoad() {
 
     // ---- Footer ----
 
-    UpdateRecenterButton();
+    // This is the view the rider is looking at, so its redraws own the shared
+    // camera -- whether or not a route is loaded. It used to be claimed only
+    // when one was, and choosing a route from the picker on this page never
+    // claimed it: so a map opened empty, given a route, panned and zoomed,
+    // saved none of it, and coming back restored the dashboard tile's framing
+    // instead. onViewUnload gives it back unconditionally; taking it is now
+    // unconditional to match.
+    MapView_SetCameraOwner(&s_view, true);
 
+    // Where the map was last looking, if anywhere -- with or without a route,
+    // and that half is not optional once this view owns the camera: a view
+    // left at its defaults would save them over the rider's framing on its
+    // first redraw. It also means a TBT ride with no GPX loaded, where this is
+    // the only map, keeps its zoom from one visit to the next; this page is
+    // rebuilt on every visit, and each one used to start at the default scale.
+    //
+    // Only when nothing has been saved does this frame the trail -- otherwise
+    // enlarging the dashboard's map, going back and enlarging it again would
+    // throw the rider's own framing away and refit, which reads as the map
+    // resetting itself for no reason.
+    const bool restored = MapView_RestoreCamera(&s_view);
     if (GpxTrack_PointCount() > 0) {
-        // Where the map was last looking, if anywhere. Only when nothing has
-        // been saved does this frame the trail -- otherwise enlarging the
-        // dashboard's map, going back and enlarging it again would throw the
-        // rider's own framing away and refit, which reads as the map resetting
-        // itself for no reason.
-        MapView_SetCameraOwner(&s_view, true);
-        if (!MapView_RestoreCamera(&s_view)) {
+        if (!restored) {
             // First look of the boot: the whole trail, rather than an
             // arbitrary zoom on a corner of it.
             MapView_FitTrack(&s_view);
         }
         RoadView_Refresh();
     }
+
+    // After the camera, which can bring a pan or zoom lock with it. This ran
+    // before it, so a map restored to somewhere the rider had dragged it came
+    // back without the button that returns to the rider, until the next touch.
+    UpdateRecenterButton();
 
     // The corner's first text, rather than leaving the creation placeholder up
     // for the 500ms until the timer's first tick. UpdateStatusLabel owns every
