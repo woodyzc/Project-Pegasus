@@ -17,3 +17,8 @@ void Display_SetBrightness(uint8_t percent);
 
 // Last value passed to Display_SetBrightness() (defaults to full brightness).
 uint8_t Display_GetBrightness();
+
+// Counts the frames LVGL has begun rendering. The one boundary between one
+// frame's 40-line strips and the next: a draw callback runs once per strip,
+// so anything that wants to total a FRAME compares this between calls.
+uint32_t Display_FrameSeq();

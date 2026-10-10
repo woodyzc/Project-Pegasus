@@ -14,6 +14,33 @@ static int16_t ClampCoord(double value) {
     return (int16_t)(value + (value >= 0.0 ? 0.5 : -0.5));
 }
 
+/* Same rounding as ClampCoord, without a double in it. */
+static int16_t ClampCoordF(float value) {
+    if (value > (float)MAP_COORD_LIMIT) {
+        return (int16_t)MAP_COORD_LIMIT;
+    }
+    if (value < -(float)MAP_COORD_LIMIT) {
+        return (int16_t)(-MAP_COORD_LIMIT);
+    }
+    return (int16_t)(value + (value >= 0.0f ? 0.5f : -0.5f));
+}
+
+/* A centre in 1e-7 degrees, split into the nearest whole unit and what is left.
+   Clamped to what an int32 holds: a view panned past the antimeridian can
+   carry a longitude beyond 180, and nothing there is drawn anyway. */
+static void SplitE7(double degrees, int32_t *out_whole, float *out_frac) {
+    double scaled = degrees * 1e7;
+    double whole;
+    if (scaled > 2.0e9) {
+        scaled = 2.0e9;
+    } else if (scaled < -2.0e9) {
+        scaled = -2.0e9;
+    }
+    whole = floor(scaled + 0.5);
+    *out_whole = (int32_t)whole;
+    *out_frac = (float)(scaled - whole);
+}
+
 void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double center_lon,
                            double metres_per_pixel, int16_t center_x, int16_t center_y) {
     if (proj == NULL) {
@@ -30,12 +57,16 @@ void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double cent
     proj->cos_h_f = 1.0f;
     proj->sin_h_f = 0.0f;
     proj->rotated = false;
+    SplitE7(center_lat, &proj->center_lat_e7, &proj->center_lat_frac_e7);
+    SplitE7(center_lon, &proj->center_lon_e7, &proj->center_lon_frac_e7);
     proj->valid = (metres_per_pixel > 0.0);
     if (!proj->valid) {
         proj->px_per_deg_lon = 0.0;
         proj->px_per_deg_lat = 0.0;
         proj->px_per_deg_lon_f = 0.0f;
         proj->px_per_deg_lat_f = 0.0f;
+        proj->px_per_e7_lon_f = 0.0f;
+        proj->px_per_e7_lat_f = 0.0f;
         return;
     }
 
@@ -52,6 +83,8 @@ void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double cent
        pair agreeing is the thing worth preserving. */
     proj->px_per_deg_lon_f = (float)proj->px_per_deg_lon;
     proj->px_per_deg_lat_f = (float)proj->px_per_deg_lat;
+    proj->px_per_e7_lon_f = (float)(proj->px_per_deg_lon * 1e-7);
+    proj->px_per_e7_lat_f = (float)(proj->px_per_deg_lat * 1e-7);
 }
 
 void Map_SetProjectionHeading(MapProjection_t *proj, double heading_deg) {
@@ -108,6 +141,42 @@ void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, in
                         (double)(dx * proj->cos_h_f + dy * proj->sin_h_f));
     *out_y = ClampCoord((double)proj->center_y +
                         (double)(-dx * proj->sin_h_f + dy * proj->cos_h_f));
+}
+
+void Map_ProjectE7Prepared(const MapProjection_t *proj, int32_t lat_e7, int32_t lon_e7,
+                           int16_t *out_x, int16_t *out_y) {
+    if (proj == NULL || out_x == NULL || out_y == NULL) {
+        return;
+    }
+    if (!proj->valid) {
+        *out_x = proj->center_x;
+        *out_y = proj->center_y;
+        return;
+    }
+    {
+        /* Exact integer differences. Through uint32 so a longitude far across
+           the antimeridian wraps rather than overflowing: anything that wraps
+           is at least 69 degrees away and lands off the screen either way.
+           Exact in float below 2^24 units -- 1.6 degrees, wider than any view
+           this draws -- and within float precision beyond. */
+        const int32_t dlat_i = (int32_t)((uint32_t)lat_e7 - (uint32_t)proj->center_lat_e7);
+        const int32_t dlon_i = (int32_t)((uint32_t)lon_e7 - (uint32_t)proj->center_lon_e7);
+        const float dlat = (float)dlat_i - proj->center_lat_frac_e7;
+        const float dlon = (float)dlon_i - proj->center_lon_frac_e7;
+
+        const float dx = dlon * proj->px_per_e7_lon_f;
+        /* Screen y grows downward while latitude grows north, hence the sign. */
+        const float dy = -dlat * proj->px_per_e7_lat_f;
+
+        if (!proj->rotated) {
+            *out_x = ClampCoordF((float)proj->center_x + dx);
+            *out_y = ClampCoordF((float)proj->center_y + dy);
+            return;
+        }
+        /* The same rotation as Map_ProjectPrepared, by minus the heading. */
+        *out_x = ClampCoordF((float)proj->center_x + (dx * proj->cos_h_f + dy * proj->sin_h_f));
+        *out_y = ClampCoordF((float)proj->center_y + (-dx * proj->sin_h_f + dy * proj->cos_h_f));
+    }
 }
 
 void Map_Project(double lat, double lon, double center_lat, double center_lon,

@@ -1559,20 +1559,28 @@ void PageSettings::onViewLoad() {
     // is slow with this map" cannot be answered without it, because serial
     // cannot be opened on this board.
     if (RoadMap_IsLoaded()) {
-        // Two figures, because they answer different questions and only one
-        // of them can be read live. The first is the map standing still. The
-        // second is the last draw taken WHILE it was being dragged, held
-        // since -- which is the number that decides whether panning feels
-        // smooth, and which cannot be watched as it happens because
+        // A build is one projection of the view; "draw" is every strip of the
+        // frame drawn from it -- LVGL draws a frame in 40-line strips, and
+        // each strip used to repeat the whole projection (RoadView.cpp). The
+        // two together are what the road layer costs a frame.
+        //
+        // The drag row is the last build made WHILE the map was being
+        // dragged, held since -- the number that decides whether panning
+        // feels smooth, and which cannot be watched as it happens because
         // releasing the map repaints at full detail before anyone can get to
         // this page.
-        snprintf(buf, sizeof(buf), "%u/%u ways, %u seg, %ums (drag %u seg, %ums)",
+        snprintf(buf, sizeof(buf), "%u/%u ways, %u seg; build %ums, draw %ums/%u",
                  (unsigned)RoadView_LastVisibleWays(), (unsigned)RoadMap_WayCount(),
                  (unsigned)RoadView_LastSegments(),
-                 (unsigned)(RoadView_LastDrawOnlyUs() / 1000),
-                 (unsigned)RoadView_LastDragSegments(),
-                 (unsigned)(RoadView_LastDragDrawUs() / 1000));
+                 (unsigned)(RoadView_LastBuildUs() / 1000),
+                 (unsigned)(RoadView_LastFrameDrawUs() / 1000),
+                 (unsigned)RoadView_LastFrameStrips());
         MakeInfoRow(info_card, "Roads", buf);
+        snprintf(buf, sizeof(buf), "%u seg; build %ums, draw %ums",
+                 (unsigned)RoadView_LastDragSegments(),
+                 (unsigned)(RoadView_LastDragBuildUs() / 1000),
+                 (unsigned)(RoadView_LastDragFrameDrawUs() / 1000));
+        MakeInfoRow(info_card, "Roads drag", buf);
     }
 
     // The recorded/planned track, which is a separate layer from the roads and

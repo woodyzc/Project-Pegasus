@@ -319,6 +319,85 @@ static void test_degenerate_scale_still_builds(void) {
     printf("done\n");
 }
 
+// ---------------------------------------------------------------------------
+// The integer projection against the degree one
+// ---------------------------------------------------------------------------
+// Map_ProjectE7Prepared exists to take every double out of the road layer's
+// per-point path. The claim is that it agrees with Map_ProjectPrepared to the
+// pixel except where the two round a value lying within float precision of a
+// half. "Except" has to be measured, not asserted, so this counts.
+//
+// A small deterministic generator rather than rand(), so a failure reproduces.
+static uint32_t s_lcg = 12345u;
+static int32_t NextSpread(int32_t spread) {
+    s_lcg = s_lcg * 1664525u + 1013904223u;
+    return (int32_t)(s_lcg % (uint32_t)(2 * spread + 1)) - spread;
+}
+
+static void test_e7_projection_agrees(void) {
+    printf("- e7 projection agrees with the degree projection: ");
+    const double anchors[][2] = {
+        {0.0, 0.0},          // equator, where longitude is widest
+        {39.17, -77.27},     // the riding area
+        {-33.87, 151.21},    // the other hemisphere and sign
+        {64.15, -21.94},     // far north, where cos(lat) bites
+        {10.0, 179.95},      // beside the antimeridian
+    };
+    const double scales[] = {0.3, 1.0, 4.0, 16.0, 80.0};
+    const double headings[] = {0.0, 37.0, 90.0, 180.0, 271.5};
+    long compared = 0;
+    long differed = 0;
+    int worst = 0;
+
+    for (size_t a = 0; a < sizeof(anchors) / sizeof(anchors[0]); a++) {
+        for (size_t sc = 0; sc < sizeof(scales) / sizeof(scales[0]); sc++) {
+            for (size_t hd = 0; hd < sizeof(headings) / sizeof(headings[0]); hd++) {
+                MapProjection_t proj;
+                // A centre that is not on a whole 1e-7 unit, as a fix never is.
+                const double clat = anchors[a][0] + 0.000000037;
+                const double clon = anchors[a][1] - 0.000000061;
+                Map_PrepareProjection(&proj, clat, clon, scales[sc], 120, 131);
+                Map_SetProjectionHeading(&proj, headings[hd]);
+
+                // Points spread over a few screens at this scale, so most land
+                // on or near the view and some are clamped.
+                const int32_t spread = (int32_t)(scales[sc] * 600.0 / 111320.0 * 1e7);
+                for (int i = 0; i < 400; i++) {
+                    const int32_t lat_e7 = (int32_t)lround(clat * 1e7) + NextSpread(spread);
+                    const int32_t lon_e7 = (int32_t)lround(clon * 1e7) + NextSpread(spread);
+                    int16_t ex, ey, dx, dy;
+                    Map_ProjectE7Prepared(&proj, lat_e7, lon_e7, &ex, &ey);
+                    Map_ProjectPrepared(&proj, (double)lat_e7 * 1e-7, (double)lon_e7 * 1e-7,
+                                        &dx, &dy);
+                    const int ddx = ex > dx ? ex - dx : dx - ex;
+                    const int ddy = ey > dy ? ey - dy : dy - ey;
+                    const int d = ddx > ddy ? ddx : ddy;
+                    compared++;
+                    if (d != 0) {
+                        differed++;
+                    }
+                    if (d > worst) {
+                        worst = d;
+                    }
+                }
+            }
+        }
+    }
+    check(worst <= 1, "never more than a pixel apart");
+    // A rounding coincidence, not a habit: well under one point in a thousand.
+    check(differed * 1000 < compared, "and almost never apart at all");
+    printf("done (%ld points, %ld off by a pixel)\n", compared, differed);
+
+    {
+        // The degenerate scale pins to the centre on this path too.
+        MapProjection_t bad;
+        int16_t bx, by;
+        Map_PrepareProjection(&bad, 38.0, -77.0, 0.0, 55, 66);
+        Map_ProjectE7Prepared(&bad, 390000000, -780000000, &bx, &by);
+        check(bx == 55 && by == 66, "zero scale pins to the centre (e7)");
+    }
+}
+
 int main(void) {
     TrackBuffer_t track;
     int16_t x;
@@ -653,6 +732,7 @@ int main(void) {
     test_fast_search_matches_the_old_full_pass();
     test_source_box_admits_the_rotated_corners();
     test_degenerate_scale_still_builds();
+    test_e7_projection_agrees();
 
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     printf("RESULT: %s\n", failures == 0 ? "PASS" : "FAIL");

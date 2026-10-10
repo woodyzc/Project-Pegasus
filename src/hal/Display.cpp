@@ -32,6 +32,18 @@ static void Display_Flush(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t 
     lv_disp_flush_ready(drv);
 }
 
+// Bumped as LVGL starts rendering each frame. See Display_FrameSeq().
+static volatile uint32_t s_frame_seq = 0;
+
+static void Display_RenderStart(lv_disp_drv_t *drv) {
+    (void)drv;
+    s_frame_seq++;
+}
+
+uint32_t Display_FrameSeq() {
+    return s_frame_seq;
+}
+
 // ledc channel shared by Backlight_Init() and Display_SetBrightness().
 static constexpr uint8_t BACKLIGHT_LEDC_CHANNEL = 0;
 static uint8_t s_brightness_pct = 100;
@@ -110,5 +122,6 @@ void Display_Init() {
     s_disp_drv.ver_res = TFT_HEIGHT;
     s_disp_drv.flush_cb = Display_Flush;
     s_disp_drv.draw_buf = &s_draw_buf;
+    s_disp_drv.render_start_cb = Display_RenderStart;
     lv_disp_drv_register(&s_disp_drv);
 }

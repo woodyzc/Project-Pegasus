@@ -3,16 +3,27 @@
 #include <Arduino.h>
 #include <math.h>
 
+#include "../hal/Display.h"
 #include "../navigation/MapProject.h"
 #include "../navigation/RoadMap.h"
 
+// Map_ProjectE7Prepared takes 1e-7 degrees, and the road blob's raw integers
+// go straight into it. A different scale in the file format would project
+// every road to the wrong place without a single error, so it is checked here.
+static_assert(ROADMAP_COORD_SCALE == 1e7, "road points must be 1e-7 degrees");
+
 namespace {
 
-volatile uint32_t g_draw_us = 0;
-volatile uint32_t g_segments = 0;
+// Figures for the settings page; RoadView.h says what each one answers. All of
+// them describe a BUILD (one projection of the view) or the frame drawn from
+// it, never a single strip -- see the note above RoadDrawCb for the
+// difference, which the first version of these figures did not know about.
 volatile uint32_t g_visible = 0;
+volatile uint32_t g_segments = 0;
 volatile uint32_t g_cull_us = 0;
-volatile uint32_t g_draw_only_us = 0;
+volatile uint32_t g_build_us = 0;
+volatile uint32_t g_frame_draw_us = 0;
+volatile uint16_t g_frame_strips = 0;
 
 // ⚠️ Kept separately, because the obvious way to read it does not work.
 //
@@ -23,7 +34,8 @@ volatile uint32_t g_draw_only_us = 0;
 // is asking them to look at two pages at once.
 //
 // So the drag draws record here and stay put until the next drag.
-volatile uint32_t g_draw_only_us_drag = 0;
+volatile uint32_t g_build_us_drag = 0;
+volatile uint32_t g_frame_draw_us_drag = 0;
 volatile uint16_t g_segments_drag = 0;
 
 struct RoadStyle {
@@ -239,38 +251,87 @@ void ForgetLayer(lv_event_t *e) {
     }
 }
 
-void RoadDrawCb(lv_event_t *e) {
-    lv_obj_t *obj = lv_event_get_target(e);
-    MapView_t *g_view = (MapView_t *)lv_obj_get_user_data(obj);
-    if (!RoadMap_IsLoaded() || g_view == nullptr) {
-        return;
-    }
-    lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
+// ---- One projection per frame, however many strips LVGL draws it in ----
+//
+// ⚠️ LVGL renders into a 40-line buffer (Display.cpp), so a frame of this layer
+// is drawn as a stack of horizontal strips, and DRAW_MAIN fires once PER STRIP:
+// seven times for the ROUTE page's map, five for the dashboard tile.
+//
+// Everything above lv_draw_line -- the grid query, reading every way,
+// decimating and projecting every point -- depends on the view and not on the
+// strip, and it used to run in full for each one. A full repaint paid for the
+// projection seven times over, and the figures on the settings page could not
+// show it, because each one timed a single strip: the "41ms" it reported was
+// one seventh of a frame's projection work plus that strip's share of the
+// drawing.
+//
+// So a build projects the view once into s_segments, keyed by everything the
+// projection depends on, and each strip draws only the segments that cross it.
+// The key earns a second saving: a redraw that changes nothing about the view
+// -- the clock or a label in the status strip over the map, the corner status
+// on the ROUTE page -- reuses the last build rather than redoing all of it to
+// repaint a 30px patch.
 
+// Water, then minor, then secondary, then arteries -- painter's order, so a
+// trunk road crosses a river rather than being cut by it.
+const uint8_t ORDER[ROAD_CLASS_COUNT] = {ROAD_CLASS_WATER, ROAD_CLASS_MINOR,
+                                         ROAD_CLASS_SECONDARY, ROAD_CLASS_ARTERY};
+
+struct RoadSegment {
+    lv_point_t a;
+    lv_point_t b;
+};
+
+// Sized to the larger of the two ceilings, since both bound what a build can
+// keep: 900 segments at 8 bytes, in internal RAM because every strip walks it.
+RoadSegment s_segments[ROAD_MAX_SEGMENTS];
+// Class k's segments are [s_class_from[k], s_class_to[k]).
+uint16_t s_class_from[ROAD_CLASS_COUNT];
+uint16_t s_class_to[ROAD_CLASS_COUNT];
+
+// Everything a build depends on. The layer, because two are attached at once;
+// its absolute area, because the points are stored in screen coordinates and a
+// page sliding in moves it; the map generation, because the route picker can
+// load a different extract.
+struct BuildKey {
+    const lv_obj_t *layer;
     lv_area_t area;
-    lv_obj_get_coords(obj, &area);
+    double clat;
+    double clon;
+    double mpp;
+    double heading;
+    bool interactive;
+    uint32_t map_generation;
+};
+BuildKey s_key;
+bool s_have_build = false;
+
+// Strips of the frame being drawn, and what they cost. Published when the next
+// frame starts (Display_FrameSeq), so the figure is a whole frame rather than
+// one strip -- and not several frames, which is what totalling them per build
+// would give for a map that sits still under an updating clock.
+uint32_t s_acc_frame = 0;
+uint32_t s_draw_accum_us = 0;
+uint16_t s_strips_accum = 0;
+bool s_acc_interactive = false;
+
+// Field by field: the struct has padding, and memcmp would compare it.
+bool SameKey(const BuildKey &x, const BuildKey &y) {
+    return x.layer == y.layer && x.area.x1 == y.area.x1 && x.area.y1 == y.area.y1 &&
+           x.area.x2 == y.area.x2 && x.area.y2 == y.area.y2 && x.clat == y.clat &&
+           x.clon == y.clon && x.mpp == y.mpp && x.heading == y.heading &&
+           x.interactive == y.interactive && x.map_generation == y.map_generation;
+}
+
+// Projects the view into s_segments. Everything here used to run inside the
+// draw callback, once per strip.
+void Build(const BuildKey &key) {
+    const lv_area_t &area = key.area;
     const lv_coord_t w = lv_area_get_width(&area);
     const lv_coord_t h = lv_area_get_height(&area);
-
-    double clat, clon, mpp;
-    if (g_view->have_center) {
-        clat = g_view->center_lat;
-        clon = g_view->center_lon;
-        mpp = g_view->metres_per_pixel;
-    } else {
-        // Nothing has set a view yet -- no fix, no track. Frame the roads
-        // themselves so the map is not simply blank while waiting.
-        double min_lat, min_lon, max_lat, max_lon;
-        if (!RoadMap_Bounds(&min_lat, &min_lon, &max_lat, &max_lon)) {
-            return;
-        }
-        clat = (min_lat + max_lat) / 2.0;
-        clon = (min_lon + max_lon) / 2.0;
-        mpp = Map_FitScale(min_lat, max_lat, min_lon, max_lon, w, h, 4);
-    }
-    if (mpp <= 0.0) {
-        return;
-    }
+    const double clat = key.clat;
+    const double clon = key.clon;
+    const double mpp = key.mpp;
 
     // What the view covers, in degrees, so a way can be rejected without
     // projecting any of it.
@@ -295,7 +356,7 @@ void RoadDrawCb(lv_event_t *e) {
     const int32_t view_min_lon = (int32_t)((clon - half_w_deg) * ROADMAP_COORD_SCALE);
     const int32_t view_max_lon = (int32_t)((clon + half_w_deg) * ROADMAP_COORD_SCALE);
 
-    // Prepared once for the whole frame. The per-point path is then two
+    // Prepared once for the whole build. The per-point path is then two
     // multiplies and two adds, where Map_Project would recompute a cosine and
     // two divisions for every point of every visible way.
     MapProjection_t proj;
@@ -303,7 +364,7 @@ void RoadDrawCb(lv_event_t *e) {
     // Taken from the view rather than recomputed, so the roads and the trail
     // turn by exactly the same angle. Two layers deriving the same number
     // independently is how they end up a frame apart.
-    Map_SetProjectionHeading(&proj, MapView_HeadingDeg(g_view));
+    Map_SetProjectionHeading(&proj, key.heading);
 
     // Timed in two halves, because three rounds of optimising the drawing have
     // each moved the number less than expected. Guessing which half is
@@ -311,7 +372,7 @@ void RoadDrawCb(lv_event_t *e) {
     const uint32_t started = micros();
     uint32_t segments = 0;
 
-    // Ask the index once, then draw from what it returned.
+    // Ask the index once, then project from what it returned.
     //
     // The grid answers "which ways are near here" without touching the rest
     // of the file. Scanning every way cost 9,904us of a 12,272us frame to find
@@ -359,12 +420,6 @@ void RoadDrawCb(lv_event_t *e) {
     visible_count = kept;
 
     g_cull_us = micros() - started;
-    const uint32_t draw_started = micros();
-
-    // Water, then minor, then secondary, then arteries -- painter's order, so
-    // a trunk road crosses a river rather than being cut by it.
-    static const uint8_t ORDER[ROAD_CLASS_COUNT] = {
-        ROAD_CLASS_WATER, ROAD_CLASS_MINOR, ROAD_CLASS_SECONDARY, ROAD_CLASS_ARTERY};
 
     // Counting sort into painter's order, so each pass walks a contiguous slice
     // of its own class instead of the whole list.
@@ -383,8 +438,8 @@ void RoadDrawCb(lv_event_t *e) {
         }
     }
 
-    const uint32_t max_segments = g_interactive ? ROAD_DRAG_MAX_SEGMENTS : ROAD_MAX_SEGMENTS;
-    const int min_segment_px = g_interactive ? ROAD_DRAG_MIN_SEGMENT_PX : ROAD_MIN_SEGMENT_PX;
+    const uint32_t max_segments = key.interactive ? ROAD_DRAG_MAX_SEGMENTS : ROAD_MAX_SEGMENTS;
+    const int min_segment_px = key.interactive ? ROAD_DRAG_MIN_SEGMENT_PX : ROAD_MIN_SEGMENT_PX;
 
     // The pixel threshold expressed back in scaled source degrees, so a point
     // can be rejected without being projected. px_per_deg_* already folds in
@@ -405,18 +460,17 @@ void RoadDrawCb(lv_event_t *e) {
         }
     }
 
+    for (int k = 0; k < ROAD_CLASS_COUNT; k++) {
+        s_class_from[k] = 0;
+        s_class_to[k] = 0;
+    }
+
     for (int pass = 0; pass < ROAD_CLASS_COUNT && segments < max_segments; pass++) {
         const uint8_t klass = ORDER[pass];
         const uint16_t from = slice_start[klass];
         const uint16_t to = (uint16_t)(from + class_count[klass]);
         uint32_t class_segments = 0;
-
-        lv_draw_line_dsc_t dsc;
-        lv_draw_line_dsc_init(&dsc);
-        dsc.color = lv_color_hex(ROAD_STYLE[klass].colour);
-        dsc.width = ROAD_STYLE[klass].width;
-        dsc.round_start = 1;
-        dsc.round_end = 1;
+        s_class_from[klass] = (uint16_t)segments;
 
         for (uint16_t v = from; v < to && segments < max_segments &&
                                 class_segments < ROAD_CLASS_SEGMENTS[klass];
@@ -426,7 +480,7 @@ void RoadDrawCb(lv_event_t *e) {
                 continue;
             }
             // Decimate while projecting: a point that lands within a pixel or
-            // two of the last one drawn cannot change what appears, and
+            // two of the last one kept cannot change what appears, and
             // drawing it costs the same as one that can.
             //
             // This is where the frame time was going. OSM records geometry at
@@ -440,7 +494,9 @@ void RoadDrawCb(lv_event_t *e) {
             bool have_prev = false;
             int32_t prev_rlat = 0;
             int32_t prev_rlon = 0;
-            for (uint16_t k = 0; k < way.count; k++) {
+            for (uint16_t k = 0; k < way.count && segments < max_segments &&
+                                 class_segments < ROAD_CLASS_SEGMENTS[klass];
+                 k++) {
                 const int32_t rlat = way.points[k * 2];
                 const int32_t rlon = way.points[k * 2 + 1];
 
@@ -454,11 +510,10 @@ void RoadDrawCb(lv_event_t *e) {
                 // so the large majority of projections were computed in order
                 // to be discarded.
                 //
-                // And a projection is not cheap here. Map_ProjectPrepared is
-                // all double, and the ESP32-S3 has only a single-precision
-                // FPU -- every one of them is software floating point. ~214
-                // visible ways at tens of points each is around ten thousand
-                // of those, which is the 35-47ms the panel reports.
+                // And a projection was not cheap here: the ESP32-S3 has only a
+                // single-precision FPU, and the degree path converts and
+                // subtracts in double -- see MapProject.h. ~214 visible ways at
+                // tens of points each is around ten thousand of those.
                 //
                 // The measurement that found this: raising the threshold cut
                 // segments 498 -> 264 and the time went UP, 35ms -> 47ms. A
@@ -477,9 +532,12 @@ void RoadDrawCb(lv_event_t *e) {
                     }
                 }
 
+                // Straight from the stored 1e-7 degrees: no conversion to a
+                // double degree and no double subtraction, which were most of
+                // what a point cost (MapProject.h, Map_ProjectE7Prepared).
+                // ROADMAP_COORD_SCALE is 1e7, which is what makes that legal.
                 int16_t x, y;
-                Map_ProjectPrepared(&proj, (double)rlat / ROADMAP_COORD_SCALE,
-                                    (double)rlon / ROADMAP_COORD_SCALE, &x, &y);
+                Map_ProjectE7Prepared(&proj, rlat, rlon, &x, &y);
                 lv_point_t p = {(lv_coord_t)(area.x1 + x), (lv_coord_t)(area.y1 + y)};
 
                 const uint8_t code = OutCode(&p, &area);
@@ -488,7 +546,8 @@ void RoadDrawCb(lv_event_t *e) {
                     // Both ends off the same side: the segment cannot cross
                     // the view, so there is nothing for LVGL to clip.
                     if ((code & prev_code) == 0) {
-                        lv_draw_line(ctx, &dsc, &prev, &p);
+                        s_segments[segments].a = prev;
+                        s_segments[segments].b = p;
                         segments++;
                         class_segments++;
                     }
@@ -500,16 +559,122 @@ void RoadDrawCb(lv_event_t *e) {
                 have_prev = true;
             }
         }
+        s_class_to[klass] = (uint16_t)segments;
     }
 
     g_visible = visible_count;
-    g_draw_only_us = micros() - draw_started;
-    if (g_interactive) {
-        g_draw_only_us_drag = g_draw_only_us;
+    g_segments = segments;
+    g_build_us = micros() - started;
+    if (key.interactive) {
+        g_build_us_drag = g_build_us;
         g_segments_drag = (uint16_t)segments;
     }
-    g_draw_us = micros() - started;
-    g_segments = segments;
+}
+
+// Draws the current build into one strip. A segment whose ink cannot reach the
+// strip is skipped here with four compares, rather than handed to lv_draw_line
+// to discover the same thing through its own setup.
+void DrawBuild(lv_draw_ctx_t *ctx) {
+    const lv_area_t *clip = ctx->clip_area;
+    for (int pass = 0; pass < ROAD_CLASS_COUNT; pass++) {
+        const uint8_t klass = ORDER[pass];
+        const uint16_t from = s_class_from[klass];
+        const uint16_t to = s_class_to[klass];
+        if (from == to) {
+            continue;
+        }
+
+        lv_draw_line_dsc_t dsc;
+        lv_draw_line_dsc_init(&dsc);
+        dsc.color = lv_color_hex(ROAD_STYLE[klass].colour);
+        dsc.width = ROAD_STYLE[klass].width;
+        dsc.round_start = 1;
+        dsc.round_end = 1;
+
+        // The full width rather than half of it, plus one: the round caps
+        // reach past the endpoints, and anti-aliasing past the stroke. Too
+        // generous costs a call that draws nothing; too tight leaves a seam
+        // along the strip boundary.
+        const lv_coord_t pad = (lv_coord_t)(ROAD_STYLE[klass].width + 1);
+        for (uint16_t i = from; i < to; i++) {
+            const RoadSegment &seg = s_segments[i];
+            const lv_coord_t min_x = seg.a.x < seg.b.x ? seg.a.x : seg.b.x;
+            const lv_coord_t max_x = seg.a.x < seg.b.x ? seg.b.x : seg.a.x;
+            const lv_coord_t min_y = seg.a.y < seg.b.y ? seg.a.y : seg.b.y;
+            const lv_coord_t max_y = seg.a.y < seg.b.y ? seg.b.y : seg.a.y;
+            if (max_y + pad < clip->y1 || min_y - pad > clip->y2 || max_x + pad < clip->x1 ||
+                min_x - pad > clip->x2) {
+                continue;
+            }
+            lv_draw_line(ctx, &dsc, &seg.a, &seg.b);
+        }
+    }
+}
+
+void RoadDrawCb(lv_event_t *e) {
+    lv_obj_t *obj = lv_event_get_target(e);
+    MapView_t *g_view = (MapView_t *)lv_obj_get_user_data(obj);
+    if (!RoadMap_IsLoaded() || g_view == nullptr) {
+        return;
+    }
+    lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
+
+    BuildKey key;
+    key.layer = obj;
+    lv_obj_get_coords(obj, &key.area);
+
+    if (g_view->have_center) {
+        key.clat = g_view->center_lat;
+        key.clon = g_view->center_lon;
+        key.mpp = g_view->metres_per_pixel;
+    } else {
+        // Nothing has set a view yet -- no fix, no track. Frame the roads
+        // themselves so the map is not simply blank while waiting.
+        double min_lat, min_lon, max_lat, max_lon;
+        if (!RoadMap_Bounds(&min_lat, &min_lon, &max_lat, &max_lon)) {
+            return;
+        }
+        key.clat = (min_lat + max_lat) / 2.0;
+        key.clon = (min_lon + max_lon) / 2.0;
+        key.mpp = Map_FitScale(min_lat, max_lat, min_lon, max_lon,
+                               lv_area_get_width(&key.area), lv_area_get_height(&key.area), 4);
+    }
+    if (key.mpp <= 0.0) {
+        return;
+    }
+    key.heading = MapView_HeadingDeg(g_view);
+    key.interactive = g_interactive;
+    key.map_generation = RoadMap_Generation();
+
+    // A new frame: the strips counted so far were the last one, so publish
+    // them as one figure and start again.
+    const uint32_t frame = Display_FrameSeq();
+    if (frame != s_acc_frame) {
+        if (s_strips_accum > 0) {
+            g_frame_draw_us = s_draw_accum_us;
+            g_frame_strips = s_strips_accum;
+            if (s_acc_interactive) {
+                g_frame_draw_us_drag = s_draw_accum_us;
+            }
+        }
+        s_acc_frame = frame;
+        s_draw_accum_us = 0;
+        s_strips_accum = 0;
+    }
+
+    if (!s_have_build || !SameKey(key, s_key)) {
+        Build(key);
+        s_key = key;
+        s_have_build = true;
+    }
+
+    const uint32_t started = micros();
+    DrawBuild(ctx);
+    s_draw_accum_us += micros() - started;
+    if (s_strips_accum < UINT16_MAX) {
+        s_strips_accum++;
+    }
+    s_acc_interactive = key.interactive;
 }
 
 } // namespace
@@ -594,10 +759,6 @@ void RoadView_Refresh() {
     }
 }
 
-uint32_t RoadView_LastDrawUs() {
-    return g_draw_us;
-}
-
 uint32_t RoadView_LastSegments() {
     return g_segments;
 }
@@ -610,12 +771,24 @@ uint32_t RoadView_LastCullUs() {
     return g_cull_us;
 }
 
-uint32_t RoadView_LastDrawOnlyUs() {
-    return g_draw_only_us;
+uint32_t RoadView_LastBuildUs() {
+    return g_build_us;
 }
 
-uint32_t RoadView_LastDragDrawUs() {
-    return g_draw_only_us_drag;
+uint32_t RoadView_LastFrameDrawUs() {
+    return g_frame_draw_us;
+}
+
+uint16_t RoadView_LastFrameStrips() {
+    return g_frame_strips;
+}
+
+uint32_t RoadView_LastDragBuildUs() {
+    return g_build_us_drag;
+}
+
+uint32_t RoadView_LastDragFrameDrawUs() {
+    return g_frame_draw_us_drag;
 }
 
 uint16_t RoadView_LastDragSegments() {

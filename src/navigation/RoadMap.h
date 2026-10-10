@@ -114,6 +114,10 @@ size_t RoadMap_WayCount();
 size_t RoadMap_PointCount();
 uint32_t RoadMap_Bytes();
 
+// Changes every time the loaded extract does, including to none. For caches
+// of anything drawn from the map: compare this, not the path or the counts.
+uint32_t RoadMap_Generation();
+
 // Way `index`, or false past the end. The points belong to the loaded blob and
 // stay valid until the next RoadMap_Load().
 bool RoadMap_Way(size_t index, RoadWay_t *out);

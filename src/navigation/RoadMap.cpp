@@ -83,7 +83,13 @@ uint16_t Rd16(const uint8_t *p) {
     return v;
 }
 
+// Bumped whenever the loaded extract goes away, which every load begins by
+// doing. Anything that caches what it drew from the map compares this rather
+// than a path or a count, which a reload of a different file could repeat.
+uint32_t s_generation = 0;
+
 void Release() {
+    s_generation++;
     heap_caps_free(s_blob);
     heap_caps_free(s_offsets);
     heap_caps_free(s_way_bounds);
@@ -430,6 +436,10 @@ size_t RoadMap_PointCount() {
 
 uint32_t RoadMap_Bytes() {
     return s_bytes;
+}
+
+uint32_t RoadMap_Generation() {
+    return s_generation;
 }
 
 bool RoadMap_Way(size_t index, RoadWay_t *out) {

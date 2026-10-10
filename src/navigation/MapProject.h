@@ -83,6 +83,22 @@ typedef struct {
     float px_per_deg_lat_f;
     float cos_h_f;
     float sin_h_f;
+
+    // ---- For coordinates already held as 1e-7 degrees ----
+    //
+    // Roads and the track buffer store integers, and handing them to
+    // Map_ProjectPrepared meant converting each to a double degree first --
+    // a software division per axis -- only to subtract a double centre from
+    // it, which is software too. The centre is split instead into a whole
+    // number of 1e-7 units and the fraction left over, so the per-point
+    // subtraction is an integer one and exact, and the fraction comes off in
+    // float. See Map_ProjectE7Prepared.
+    int32_t center_lat_e7;
+    int32_t center_lon_e7;
+    float center_lat_frac_e7; // centre * 1e7 - center_*_e7, within half a unit
+    float center_lon_frac_e7;
+    float px_per_e7_lat_f;
+    float px_per_e7_lon_f;
 } MapProjection_t;
 
 void Map_PrepareProjection(MapProjection_t *proj, double center_lat, double center_lon,
@@ -110,6 +126,17 @@ double Map_RotatedRadiusPx(int16_t width, int16_t height);
 // them together so the fast path cannot drift from the reference.
 void Map_ProjectPrepared(const MapProjection_t *proj, double lat, double lon, int16_t *out_x,
                          int16_t *out_y);
+
+// The same projection for a coordinate held as 1e-7 degrees, with no double
+// arithmetic per point at all. For the road layer, which projects thousands of
+// points a frame: the conversion to degrees and the double subtraction were
+// the bulk of what each one cost.
+//
+// Agrees with Map_ProjectPrepared to the pixel except where the two round a
+// value lying within float precision of a half -- the host tests bound how
+// rarely that is and that it is never more than one pixel.
+void Map_ProjectE7Prepared(const MapProjection_t *proj, int32_t lat_e7, int32_t lon_e7,
+                           int16_t *out_x, int16_t *out_y);
 
 // Metres per pixel that fits a bounding box into width x height, leaving
 // `margin_px` on every side. Never returns zero or a negative: a track with no
