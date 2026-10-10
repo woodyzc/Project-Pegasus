@@ -706,14 +706,66 @@ lv_obj_t *MakeUnit(lv_obj_t *cell, const char *text) {
     return label;
 }
 
+// ---- Writing only what changed (CLAUDE.md 8a) ----
+//
+// Every one of LVGL's setters below invalidates whether or not the value
+// differs, and clearing HIDDEN on an object in a flex column also marks the
+// column's layout dirty. The turn card is rewritten on every directive -- the
+// phone sends one whenever the distance ticks down -- and almost everything
+// on it is the same as last time: the arrow, its colour, the street, the
+// secondary row. Rewritten blindly, a distance change repainted the whole
+// card, recoloured arrow image included.
+//
+// The same is true of the first page's once-a-second renderers, which rewrote
+// every figure, unit and colour each tick whether or not anything had moved --
+// the units never do, the clock once a minute -- and of the TRIP cell's paint,
+// which reset four styles on two cells every second. In GPX mode the status
+// strip sits over the map, so each of those rewrites repainted the patch of
+// map underneath it too.
+//
+// Each compares against what the object already holds, so there is no second
+// copy to fall out of step with it. Skipping an EQUAL write is all they do: a
+// value that has changed -- including to "--" -- is always written.
+static void SetTextIfChanged(lv_obj_t *label, const char *text) {
+    if (label == nullptr || text == nullptr) {
+        return;
+    }
+    const char *current = lv_label_get_text(label);
+    if (current != nullptr && strcmp(current, text) == 0) {
+        return;
+    }
+    lv_label_set_text(label, text);
+}
+
+void SetTextColorIfChanged(lv_obj_t *obj, lv_color_t colour) {
+    if (obj != nullptr && lv_obj_get_style_text_color(obj, LV_PART_MAIN).full != colour.full) {
+        lv_obj_set_style_text_color(obj, colour, 0);
+    }
+}
+
+void SetBgColorIfChanged(lv_obj_t *obj, lv_color_t colour) {
+    if (obj != nullptr && lv_obj_get_style_bg_color(obj, LV_PART_MAIN).full != colour.full) {
+        lv_obj_set_style_bg_color(obj, colour, 0);
+    }
+}
+
+void SetHiddenIfChanged(lv_obj_t *obj, bool hidden) {
+    if (obj == nullptr || lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN) == hidden) {
+        return;
+    }
+    if (hidden) {
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 // Dims every band, hides the marker and returns the reading to plain white:
 // no reading means no zone, and a coloured "--" would still be asserting
 // something about the rider.
 void ClearHeartRateZone() {
     s_hr_zone = -1;
-    if (s_hr_label != nullptr) {
-        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(COLOR_HR_CELL_INK), 0);
-    }
+    SetTextColorIfChanged(s_hr_label, lv_color_hex(COLOR_HR_CELL_INK));
 }
 
 void UpdateHeartRateZone(uint8_t bpm) {
@@ -725,9 +777,7 @@ void UpdateHeartRateZone(uint8_t bpm) {
     // and is the half that worked without the eye travelling: the bpm figure
     // is the thing already being looked at.
     s_hr_zone = HrZone_Index(bpm, rest, max);
-    if (s_hr_label != nullptr) {
-        lv_obj_set_style_text_color(s_hr_label, lv_color_hex(ZONE_COLORS_ON_WHITE[s_hr_zone]), 0);
-    }
+    SetTextColorIfChanged(s_hr_label, lv_color_hex(ZONE_COLORS_ON_WHITE[s_hr_zone]));
 }
 
 // Distances follow the same unit setting as speed: showing kilometres to the
@@ -802,6 +852,12 @@ const char *ManeuverWord(uint8_t icon_id) {
 // alternative and is worse: movement at the edge of vision while riding is a
 // distraction, and the name is only readable during part of the cycle.
 void SetStreetName(lv_obj_t *label, const char *text, lv_coord_t max_width) {
+    // The font was chosen for exactly this text last time; measuring it in
+    // three fonts again would only arrive at the same one.
+    const char *current = lv_label_get_text(label);
+    if (current != nullptr && strcmp(current, text) == 0) {
+        return;
+    }
     static const lv_font_t *const kFonts[] = {
         &lv_font_montserrat_24,
         &lv_font_montserrat_18,
@@ -866,8 +922,8 @@ void FormatMetric(float value, char *out, size_t size) {
 void RenderClock() {
     TimeReading_t reading;
     if (!TimeSource_Now(lv_tick_get(), &reading)) {
-        lv_label_set_text(s_clock_label, "--:--");
-        lv_label_set_text(s_clock_caption, "");
+        SetTextIfChanged(s_clock_label, "--:--");
+        SetTextIfChanged(s_clock_caption, "");
         return;
     }
 
@@ -881,19 +937,22 @@ void RenderClock() {
     // The offset can push the local day either side of the UTC one.
     const int32_t wrapped = ((local_seconds % 86400) + 86400) % 86400;
 
-    lv_label_set_text_fmt(s_clock_label, "%02d:%02d", (int)(wrapped / 3600),
-                          (int)((wrapped % 3600) / 60));
+    char hhmm[8];
+    snprintf(hhmm, sizeof(hhmm), "%02d:%02d", (int)(wrapped / 3600), (int)((wrapped % 3600) / 60));
+    SetTextIfChanged(s_clock_label, hhmm);
 
     if (!reading.offset_known) {
         // A time nobody has placed in a zone. Saying UTC is honest; showing
         // it as local would be a guess presented as a fact.
-        lv_label_set_text(s_clock_caption, "UTC");
+        SetTextIfChanged(s_clock_caption, "UTC");
     } else if (reading.zone[0] != '\0') {
-        lv_label_set_text(s_clock_caption, reading.zone);
+        SetTextIfChanged(s_clock_caption, reading.zone);
     } else {
         // No abbreviation, so state the offset itself rather than nothing.
         const int mins = reading.offset_min;
-        lv_label_set_text_fmt(s_clock_caption, "%+03d:%02d", mins / 60, abs(mins) % 60);
+        char offset[12];
+        snprintf(offset, sizeof(offset), "%+03d:%02d", mins / 60, abs(mins) % 60);
+        SetTextIfChanged(s_clock_caption, offset);
     }
 }
 
@@ -939,20 +998,14 @@ void PaintTripCell(lv_obj_t *cell, lv_obj_t *caption, lv_obj_t *value, lv_obj_t 
     // that has to put COLOR_VALUE back.
     const lv_color_t ink = lv_color_hex(COLOR_BG);
 
-    lv_obj_set_style_bg_color(cell, lv_color_hex(bg), 0);
-    if (value != nullptr) {
-        lv_obj_set_style_text_color(value, ink, 0);
-    }
+    SetBgColorIfChanged(cell, lv_color_hex(bg));
+    SetTextColorIfChanged(value, ink);
     // The caption and unit are the quiet grey everywhere else on the panel,
     // and that grey is illegible on all three fills -- so here they take the
     // same dark ink as the figure rather than keeping their usual colour.
     const lv_color_t trim = ink;
-    if (caption != nullptr) {
-        lv_obj_set_style_text_color(caption, trim, 0);
-    }
-    if (unit != nullptr) {
-        lv_obj_set_style_text_color(unit, trim, 0);
-    }
+    SetTextColorIfChanged(caption, trim);
+    SetTextColorIfChanged(unit, trim);
 }
 
 // Satellites, in the top-left of the status strip.
@@ -976,16 +1029,17 @@ void RenderSatellites() {
     // so it is the freshness of the POSITION, not of the last publish. A
     // receiver in a tunnel keeps publishing at 1Hz while knowing nothing.
     if (s_gps_last_ms == 0) {
-        lv_label_set_text(s_sat_label, LV_SYMBOL_GPS " --");
-        lv_obj_set_style_text_color(s_sat_label, lv_color_hex(COLOR_CAPTION), 0);
+        SetTextIfChanged(s_sat_label, LV_SYMBOL_GPS " --");
+        SetTextColorIfChanged(s_sat_label, lv_color_hex(COLOR_CAPTION));
         return;
     }
 
-    lv_label_set_text_fmt(s_sat_label,
-                          s_last_fix_from_module ? LV_SYMBOL_GPS " %d"
-                                                 : LV_SYMBOL_BLUETOOTH " %d",
-                          (int)s_last_num_sv);
-    lv_obj_set_style_text_color(s_sat_label, lv_color_hex(COLOR_VALUE), 0);
+    char sats[16];
+    snprintf(sats, sizeof(sats),
+             s_last_fix_from_module ? LV_SYMBOL_GPS " %d" : LV_SYMBOL_BLUETOOTH " %d",
+             (int)s_last_num_sv);
+    SetTextIfChanged(s_sat_label, sats);
+    SetTextColorIfChanged(s_sat_label, lv_color_hex(COLOR_VALUE));
 }
 
 // See s_trip_cell for why only the bad states are filled, and why filling
@@ -1021,35 +1075,37 @@ void RenderSpeedAndTrip() {
     if (s_has_speed) {
         char speed[12];
         FormatMetric(Settings_SpeedFromKmh(s_last_speed_kmh), speed, sizeof(speed));
-        lv_label_set_text(s_speed_label, speed);
+        SetTextIfChanged(s_speed_label, speed);
     } else {
         // Written, not skipped. Leaving the label alone kept the last number
         // on screen for ever, which is how a speed outlived the fix it came
         // from -- and 0.0 left behind reads exactly like a rider who stopped.
-        lv_label_set_text(s_speed_label, "--");
+        SetTextIfChanged(s_speed_label, "--");
     }
-    lv_label_set_text(s_speed_unit_label, Settings_SpeedUnitLabel());
+    SetTextIfChanged(s_speed_unit_label, Settings_SpeedUnitLabel());
     // Two decimals until three digits are needed, then one. At 40px "123.45"
     // is 119px in a cell that can show 108, so the choice is between dropping
     // a decimal and dropping a digit -- and 10m resolution stops being worth
     // anything a long way before 100km. Under 100 nothing changes.
     const float trip = Settings_DistanceFromKm((float)Trip_Km());
-    lv_label_set_text_fmt(s_trip_label, (trip >= 100.0f) ? "%.1f" : "%.2f", trip);
+    char trip_text[16];
+    snprintf(trip_text, sizeof(trip_text), (trip >= 100.0f) ? "%.1f" : "%.2f", trip);
+    SetTextIfChanged(s_trip_label, trip_text);
     if (s_trip_unit_label != nullptr) {
-        lv_label_set_text(s_trip_unit_label, Settings_DistanceUnitLabel());
+        SetTextIfChanged(s_trip_unit_label, Settings_DistanceUnitLabel());
     }
 
     if (s_speed_avg_label != nullptr) {
         if (SpeedStatsUnknown()) {
-            lv_label_set_text(s_speed_avg_label, "--");
-            lv_label_set_text(s_speed_max_label, "--");
+            SetTextIfChanged(s_speed_avg_label, "--");
+            SetTextIfChanged(s_speed_max_label, "--");
         } else {
             char avg[12];
             char max[12];
             FormatMetric(Settings_SpeedFromKmh(RideStats_AvgSpeedKmh()), avg, sizeof(avg));
             FormatMetric(Settings_SpeedFromKmh(RideStats_MaxSpeedKmh()), max, sizeof(max));
-            lv_label_set_text(s_speed_avg_label, avg);
-            lv_label_set_text(s_speed_max_label, max);
+            SetTextIfChanged(s_speed_avg_label, avg);
+            SetTextIfChanged(s_speed_max_label, max);
         }
     }
 }
@@ -1065,8 +1121,8 @@ void RenderHeartRateStats() {
     // rider could believe, and "average heart rate 0" reads as a fault rather
     // than as an absence.
     if (avg == 0) {
-        lv_label_set_text(s_hr_avg_label, "--");
-        lv_label_set_text(s_hr_max_label, "--");
+        SetTextIfChanged(s_hr_avg_label, "--");
+        SetTextIfChanged(s_hr_max_label, "--");
         // COLOR_HR_CELL_INK, not COLOR_VALUE. This is the one light cell on
         // the panel -- COLOR_HR_CELL_BG is 0xF2F5F7 -- so white ink here is
         // white on white, and the dashes were drawn every time and seen none
@@ -1076,13 +1132,17 @@ void RenderHeartRateStats() {
         //
         // ClearHeartRateZone() had it right for the live figure beside these
         // two, which is why that one was legible in the same frame.
-        lv_obj_set_style_text_color(s_hr_avg_label, lv_color_hex(COLOR_HR_CELL_INK), 0);
-        lv_obj_set_style_text_color(s_hr_max_label, lv_color_hex(COLOR_HR_CELL_INK), 0);
+        SetTextColorIfChanged(s_hr_avg_label, lv_color_hex(COLOR_HR_CELL_INK));
+        SetTextColorIfChanged(s_hr_max_label, lv_color_hex(COLOR_HR_CELL_INK));
         return;
     }
 
-    lv_label_set_text_fmt(s_hr_avg_label, "%u", (unsigned)avg);
-    lv_label_set_text_fmt(s_hr_max_label, "%u", (unsigned)max);
+    char avg_text[8];
+    char max_text[8];
+    snprintf(avg_text, sizeof(avg_text), "%u", (unsigned)avg);
+    snprintf(max_text, sizeof(max_text), "%u", (unsigned)max);
+    SetTextIfChanged(s_hr_avg_label, avg_text);
+    SetTextIfChanged(s_hr_max_label, max_text);
 
     // Each figure takes ITS OWN zone's colour, not the live reading's. A ride
     // that averages zone 2 and peaks in zone 5 is the ordinary shape of a
@@ -1092,10 +1152,10 @@ void RenderHeartRateStats() {
     // with no number parsed.
     const uint8_t rest = Settings_GetHrRestBpm();
     const uint8_t ceiling = Settings_GetHrMaxBpm();
-    lv_obj_set_style_text_color(
-        s_hr_avg_label, lv_color_hex(ZONE_COLORS_ON_WHITE[HrZone_Index(avg, rest, ceiling)]), 0);
-    lv_obj_set_style_text_color(
-        s_hr_max_label, lv_color_hex(ZONE_COLORS_ON_WHITE[HrZone_Index(max, rest, ceiling)]), 0);
+    SetTextColorIfChanged(s_hr_avg_label,
+                          lv_color_hex(ZONE_COLORS_ON_WHITE[HrZone_Index(avg, rest, ceiling)]));
+    SetTextColorIfChanged(s_hr_max_label,
+                          lv_color_hex(ZONE_COLORS_ON_WHITE[HrZone_Index(max, rest, ceiling)]));
 }
 
 // The only place in this file allowed to touch LVGL objects: an lv_timer
@@ -1326,13 +1386,14 @@ void RefreshTimerCallback(lv_timer_t *timer) {
             } else if (battery.percent >= 12) {
                 icon = LV_SYMBOL_BATTERY_1;
             }
-            lv_label_set_text_fmt(s_battery_label, "%s %d%%", icon, battery.percent);
+            char text[24];
+            snprintf(text, sizeof(text), "%s %d%%", icon, battery.percent);
+            SetTextIfChanged(s_battery_label, text);
             // Red below the curve's low-battery point, so it stands out
             // against the otherwise uniform caption grey.
-            lv_obj_set_style_text_color(
+            SetTextColorIfChanged(
                 s_battery_label,
-                lv_color_hex((!battery.on_usb && battery.percent <= 10) ? 0xFF6B6B : COLOR_CAPTION),
-                0);
+                lv_color_hex((!battery.on_usb && battery.percent <= 10) ? 0xFF6B6B : COLOR_CAPTION));
         }
     }
 
@@ -1364,14 +1425,20 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                     arrow_colour = COLOR_NAV_IMMINENT;
                 }
 
-                lv_img_set_src(s_route_arrow_label, TbtIcon(tbt.icon_id));
-                lv_obj_set_style_img_recolor(s_route_arrow_label, lv_color_hex(arrow_colour), 0);
-                lv_label_set_text(s_route_dist_label, dist);
-                lv_label_set_text(s_route_dist_unit, dist_unit);
-                lv_obj_set_style_text_color(s_route_dist_label,
-                                            lv_color_hex(imminent ? COLOR_NAV_IMMINENT
-                                                                  : COLOR_VALUE),
-                                            0);
+                // Compared first, every one: see "Writing only what changed".
+                const void *icon_src = TbtIcon(tbt.icon_id);
+                if (lv_img_get_src(s_route_arrow_label) != icon_src) {
+                    lv_img_set_src(s_route_arrow_label, icon_src);
+                }
+                const lv_color_t arrow_c = lv_color_hex(arrow_colour);
+                if (lv_obj_get_style_img_recolor(s_route_arrow_label, LV_PART_MAIN).full !=
+                    arrow_c.full) {
+                    lv_obj_set_style_img_recolor(s_route_arrow_label, arrow_c, 0);
+                }
+                SetTextIfChanged(s_route_dist_label, dist);
+                SetTextIfChanged(s_route_dist_unit, dist_unit);
+                SetTextColorIfChanged(s_route_dist_label,
+                                      lv_color_hex(imminent ? COLOR_NAV_IMMINENT : COLOR_VALUE));
 
                 const char *street =
                     tbt.street_name[0] != '\0' ? tbt.street_name : "AHEAD";
@@ -1407,19 +1474,19 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                         (int32_t)(1000 - (left * 1000) / s_tbt_bar_scale_m);
                     lv_bar_set_value(s_route_bar, filled, LV_ANIM_OFF);
                 }
-                lv_obj_set_style_bg_color(s_route_bar,
-                                          lv_color_hex(imminent ? COLOR_NAV_IMMINENT
-                                                                : arrow_colour),
-                                          LV_PART_INDICATOR);
+                const lv_color_t bar_c =
+                    lv_color_hex(imminent ? COLOR_NAV_IMMINENT : arrow_colour);
+                if (lv_obj_get_style_bg_color(s_route_bar, LV_PART_INDICATOR).full != bar_c.full) {
+                    lv_obj_set_style_bg_color(s_route_bar, bar_c, LV_PART_INDICATOR);
+                }
 
                 // ---- Which exit, over the arrow ----
                 if (tbt.exit_number > 0) {
-                    lv_label_set_text_fmt(s_route_exit_label, "%u",
-                                          (unsigned)tbt.exit_number);
-                    lv_obj_clear_flag(s_route_exit_label, LV_OBJ_FLAG_HIDDEN);
-                } else {
-                    lv_obj_add_flag(s_route_exit_label, LV_OBJ_FLAG_HIDDEN);
+                    char exit_text[8];
+                    snprintf(exit_text, sizeof(exit_text), "%u", (unsigned)tbt.exit_number);
+                    SetTextIfChanged(s_route_exit_label, exit_text);
                 }
+                SetHiddenIfChanged(s_route_exit_label, tbt.exit_number == 0);
 
                 // ---- What follows, and how far is left ----
                 // Only the cached route knows either, so both are blank until
@@ -1435,29 +1502,27 @@ void RefreshTimerCallback(lv_timer_t *timer) {
                     // "then right 60 m", not "then right in 60 m". The
                     // preposition is two characters of meaning and eight of
                     // width on a line that has none to spare.
-                    lv_label_set_text_fmt(s_route_then_label, "then %s %s%s",
-                                          ManeuverWord(tbt.then_icon_id), then_dist,
-                                          then_unit);
+                    char then_text[48];
+                    snprintf(then_text, sizeof(then_text), "then %s %s%s",
+                             ManeuverWord(tbt.then_icon_id), then_dist, then_unit);
+                    SetTextIfChanged(s_route_then_label, then_text);
                     any_secondary = true;
                 } else {
-                    lv_label_set_text(s_route_then_label, "");
+                    SetTextIfChanged(s_route_then_label, "");
                 }
                 if (tbt.remaining_m != TBT_DISTANCE_UNKNOWN) {
                     char left_dist[16];
                     char left_unit[8];
                     FormatTbtDistance(tbt.remaining_m, left_dist, sizeof(left_dist),
                                       left_unit, sizeof(left_unit));
-                    lv_label_set_text_fmt(s_route_remaining_label, "%s%s left", left_dist,
-                                          left_unit);
+                    char left_text[32];
+                    snprintf(left_text, sizeof(left_text), "%s%s left", left_dist, left_unit);
+                    SetTextIfChanged(s_route_remaining_label, left_text);
                     any_secondary = true;
                 } else {
-                    lv_label_set_text(s_route_remaining_label, "");
+                    SetTextIfChanged(s_route_remaining_label, "");
                 }
-                if (any_secondary) {
-                    lv_obj_clear_flag(s_route_secondary_row, LV_OBJ_FLAG_HIDDEN);
-                } else {
-                    lv_obj_add_flag(s_route_secondary_row, LV_OBJ_FLAG_HIDDEN);
-                }
+                SetHiddenIfChanged(s_route_secondary_row, !any_secondary);
 
                 s_tbt_last_ms = lv_tick_get();
             }
@@ -1662,17 +1727,6 @@ void OnDashboardGesture(lv_event_t *e) {
 // Page one avoids this by accident rather than design -- its renderers are
 // driven by publishes and a one-second tick -- so this helper is the thing to
 // reach for anywhere a label is written on a fast timer.
-static void SetTextIfChanged(lv_obj_t *label, const char *text) {
-    if (label == nullptr || text == nullptr) {
-        return;
-    }
-    const char *current = lv_label_get_text(label);
-    if (current != nullptr && strcmp(current, text) == 0) {
-        return;
-    }
-    lv_label_set_text(label, text);
-}
-
 void RenderPage2() {
     if (s_page2 == nullptr) {
         return;
