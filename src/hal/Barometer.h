@@ -64,8 +64,9 @@ bool Barometer_Filtered();
 
 // Whether the NVM-ready bit was seen during init. NOT a health check: the
 // part configures and reads correctly either way, and this is false on every
-// warm restart while being true on a cold power-on. Surfaced only because
-// that difference is real, unexplained, and was briefly mistaken for a fault.
+// warm restart while being true on a cold power-on. Surfaced -- the settings
+// page's Barometer row ends "NVM" or "no NVM" -- only because that difference
+// is real, unexplained, and was briefly mistaken for a fault.
 bool Barometer_NvmReady();
 
 // The 7-bit address that answered: 0x47, 0x46, or 0 when nothing did.
@@ -122,11 +123,12 @@ float Barometer_AltitudeM();
 // that keeps advancing, INCLINE read a confident +0.0% on a climb instead of
 // blanking. A frozen input produces a wrong answer, not a missing one.
 // ⚠️ "has EVER read", not "is reading". No live decision may use this, and
-// as of 2026-10-03 nothing outside this driver calls it at all -- the
-// migration to AltitudeFresh() is complete. Kept because the distinction is
-// worth stating where someone will look for it, and because the question it
-// answers ("was a barometer ever working this boot") is a real one a
-// diagnostic might want. Anything choosing what to show a rider wants Fresh.
+// none does: its one caller is RideLog's choice of which altitude a ride
+// file carries, which is deliberately "barometer if it was ever read, for
+// the whole file" -- one reference per elevation profile, never a splice --
+// and uses this only so a sensor found but not yet read does not write 0m
+// into the opening points (RideLog.cpp). Anything choosing what to show a
+// rider wants Fresh.
 bool Barometer_HaveAltitude();
 bool Barometer_AltitudeFresh();
 

@@ -1559,9 +1559,16 @@ void PageSettings::onViewLoad() {
             // registers that are only writable in standby, and getting it
             // wrong produces no symptom at all in the numbers. "no IIR" means
             // the readings are raw and INCLINE will be twitchy in wind.
-            snprintf(buf, sizeof(buf), "0x%02X, %.0f Pa, %.0f m, %.0fC, %s",
+            //
+            // "NVM" is whether the part's NVM-ready bit was seen at init.
+            // Not a fault either way -- it reads false on every warm restart
+            // and true on a cold power-on, and the part works in both -- but
+            // that difference is real and unexplained, and the one time it
+            // was hidden it was mistaken for a fault (Barometer.h).
+            snprintf(buf, sizeof(buf), "0x%02X, %.0f Pa, %.0f m, %.0fC, %s, %s",
                      (unsigned)Barometer_Address(), (double)pa, (double)Barometer_AltitudeM(),
-                     (double)degc, Barometer_Filtered() ? "IIR" : "no IIR");
+                     (double)degc, Barometer_Filtered() ? "IIR" : "no IIR",
+                     Barometer_NvmReady() ? "NVM" : "no NVM");
         } else {
             snprintf(buf, sizeof(buf), "0x%02X, found but not reading", (unsigned)Barometer_Address());
         }
