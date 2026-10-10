@@ -96,6 +96,11 @@
 #                         Carries more weight than most: the offline half of
 #                         turn-by-turn cannot be exercised on the bench,
 #                         because no GPS module has ever been attached.
+#   * test_line_raster  - the map's anti-aliased line drawing (compiles the
+#                         real src/ui/LineRaster.c). It writes straight into
+#                         LVGL's strip buffer, so every pixel of every case is
+#                         checked, including that nothing outside the clip is
+#                         touched.
 #
 #   cd test/host && make          # build + run everything
 #   cd test/host && make asan     # same under ASan/UBSan
@@ -104,6 +109,7 @@
 SYSTEM  := ../../src/system
 SENSORS := ../../src/sensors
 NAV     := ../../src/navigation
+UI      := ../../src/ui
 
 CFLAGS ?= -std=c11 -Wall -Wextra
 SUFFIX ?=
@@ -117,7 +123,7 @@ BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFI
         test_baro_altitude$(SUFFIX) test_grade$(SUFFIX) test_stillness$(SUFFIX) test_long_press$(SUFFIX) test_gyro_bias$(SUFFIX) test_battery_level$(SUFFIX) test_map_scale$(SUFFIX) \
         test_ride_summary$(SUFFIX) test_map_heading$(SUFFIX) \
         test_gps_frame$(SUFFIX) test_alert_frame$(SUFFIX) test_csc_parse$(SUFFIX) \
-        test_nmea_parse$(SUFFIX) test_track_progress$(SUFFIX)
+        test_nmea_parse$(SUFFIX) test_track_progress$(SUFFIX) test_line_raster$(SUFFIX)
 
 .PHONY: all run asan clean
 
@@ -133,7 +139,7 @@ run: $(BINS)
 # three times over -- a changed constant in a .h, a `make` that reports PASS,
 # and a suite that never recompiled against it.
 HEADERS := $(wildcard $(SYSTEM)/*.h) $(wildcard $(SENSORS)/*.h) \
-           $(wildcard $(NAV)/*.h)
+           $(wildcard $(NAV)/*.h) $(UI)/LineRaster.h
 
 $(BINS): $(HEADERS)
 
@@ -255,6 +261,12 @@ test_hr_zone$(SUFFIX): test_hr_zone.c $(SYSTEM)/HrZone.c
 # two agree.
 test_route_parse$(SUFFIX): test_route_parse.c $(NAV)/RouteParse.c $(NAV)/RouteFollow.c
 	$(CC) $(CFLAGS) -I$(NAV) -o $@ $(CSRC) -lm
+
+# Every pixel of every case against a per-pixel reference. The rasterizer
+# writes into LVGL's draw buffer directly, so a clip mistake here is a write
+# into whatever memory follows the strip.
+test_line_raster$(SUFFIX): test_line_raster.c $(UI)/LineRaster.c
+	$(CC) $(CFLAGS) -I$(UI) -o $@ $(CSRC) -lm
 
 # Every suite under the sanitizers.
 asan:

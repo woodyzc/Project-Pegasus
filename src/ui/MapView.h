@@ -25,11 +25,11 @@
 
 typedef struct {
     lv_obj_t *container;
-    // The trail in two pieces: what has been ridden and what has not. Two
-    // lv_line objects rather than one, because a line has a single colour and
-    // the whole point is that the two halves differ.
-    lv_obj_t *trail_done;
-    lv_obj_t *trail;
+    // The overlay: one transparent object over the whole view whose draw
+    // callback paints the route, its chevrons, the rider and the HUD, in that
+    // order. The route used to be two lv_line objects, one per colour; it is
+    // drawn here now so that it can go through LineRaster with everything
+    // else (see the note at MapView.cpp's DrawRoute).
     lv_obj_t *marker;
 
     lv_point_t *points;     // caller-owned, `capacity` entries
@@ -85,10 +85,12 @@ typedef struct {
     // their exit.
     bool camera_owner;
 
-    // What the last Redraw actually put on screen, so the overlay callback can
-    // decorate the same geometry rather than recomputing it. Chevrons go on
-    // the stretch still to ride, which is [ahead_from, count).
+    // What the last Redraw laid out in `points`, for the overlay to draw. The
+    // ridden stretch is [0, split) and the stretch still to ride is
+    // [ahead_from, count); the two share the vertex they meet at, so the join
+    // has no gap. Chevrons go on the second.
     size_t drawn_count;
+    size_t drawn_split;
     size_t drawn_ahead_from;
 
     // The chevrons themselves, laid out by Redraw: apex then the two arm ends,
@@ -128,8 +130,8 @@ typedef struct {
 } MapView_t;
 
 // Builds the view inside `parent`. `points` and `projected` must each hold
-// `capacity` entries and outlive the view -- lv_line keeps a pointer to
-// `points` rather than copying it.
+// `capacity` entries and outlive the view -- the overlay draws from `points`
+// on every frame rather than copying it.
 void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
                     lv_coord_t h, lv_point_t *points, MapPoint_t *projected, size_t capacity);
 
@@ -236,5 +238,10 @@ uint32_t MapView_LastBuildDragUs();
 // 20,000-point route draws at most a couple of hundred.
 uint32_t MapView_LastSourcePoints();
 uint32_t MapView_LastDrawnPoints();
+
+// What the overlay -- route, chevrons, rider, HUD -- cost to draw, summed over
+// every strip of the last frame that drew one. The road layer has its own
+// figure (RoadView_LastFrameDrawUs); together they are the map.
+uint32_t MapView_LastOverlayFrameUs();
 
 

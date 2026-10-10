@@ -906,6 +906,27 @@ performance cost four rounds before anyone measured.
   on 2026-10-10, by reading `lv_refr.c`, not by measuring — the panel's own
   figures could not have shown it. `Display_FrameSeq()` is the frame boundary
   for anything that wants to total a frame.
+- **The map's lines do not go through `lv_draw_line`** (2026-10-10). It costs
+  50–165µs a segment here: a skewed line runs four line masks over its
+  bounding box row by row, and each round end is a whole radius-masked
+  `lv_draw_rect`. A frame of roads is hundreds of segments, and that was the
+  road layer's entire cost. `src/ui/LineRaster.c` draws the same
+  anti-aliased, round-ended line straight into LVGL's strip buffer: per row
+  the line is one interval, so the inside is a plain fill and only the fringe
+  pixels get a coverage. Roads, the route, its chevrons and the rider's
+  outline all use it; the route is drawn by MapView's overlay callback now,
+  not by two `lv_line` objects. Even widths put the axis on a pixel boundary
+  exactly where LVGL does, so straight streets stay crisp.
+  - ⚠️ **A direct write skips everything LVGL would apply on the way into the
+    buffer**: a mask (a parent with a rounded clip), a display `set_px_cb`, a
+    layer with alpha (three bytes a pixel, not two). `LineRasterLv_Surface()`
+    refuses in each of those cases and the callers fall back to
+    `lv_draw_line`. Any new direct writer goes through that check, not
+    around it. `-D PEGASUS_LINE_RASTER=0` makes it refuse always, which is
+    the one-rebuild test for "is this path what is wrong with the map".
+    `test_line_raster.c` compares every pixel against a per-pixel
+    reference and checks nothing outside the clip is touched — the failure
+    it exists for is a write past the strip into whatever memory follows.
 
 ## 9. WiFi File Transfer
 

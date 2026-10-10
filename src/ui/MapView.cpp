@@ -8,11 +8,13 @@
 
 #include <stdint.h>
 
+#include "../hal/Display.h"
 #include "../hal/Imu.h"
 #include "../navigation/GpxProgress.h"
 #include "../navigation/GpxTrack.h"
 #include "../system/Settings.h"
 #include "../system/Stillness.h"
+#include "LineRasterLv.h"
 
 namespace {
 
@@ -25,6 +27,15 @@ uint32_t g_build_drag_us = 0;
 uint32_t g_src_points = 0;
 uint32_t g_drawn_points = 0;
 bool g_interactive = false;
+
+// What the overlay cost on the last frame it drew, and the strips counted so
+// far towards the frame being drawn. Totalled per frame, the way RoadView
+// totals the road layer: the callback runs once per 40-line strip, and one
+// strip's time says nothing about a frame (CLAUDE.md 8a).
+uint32_t g_overlay_frame_us = 0;
+uint32_t s_overlay_frame = 0;
+uint32_t s_overlay_accum_us = 0;
+uint16_t s_overlay_strips = 0;
 
 constexpr uint32_t COLOR_MAP_BG = 0x0B1116;
 // The trail, in two colours: what is behind the rider and what is ahead.
@@ -40,6 +51,17 @@ constexpr uint32_t COLOR_MAP_BG = 0x0B1116;
 // without competing, and frees amber for things that actually want attention.
 constexpr uint32_t COLOR_TRAIL_DONE = 0x6B7680;
 constexpr uint32_t COLOR_TRAIL_AHEAD = 0xF02D9B;
+
+// 6px, and it tracks the roads rather than being chosen on its own. The roads
+// under it are drawn 2 to 4px wide, and a route the same weight as the streets
+// it crosses is a route the eye has to hunt for. This is the one line on the
+// map that is not scenery.
+//
+// It was 4 while the roads were 1 to 4. Widening them for legibility without
+// widening this would have quietly handed the top of the hierarchy to the
+// rivers -- the fix for one problem creating another, one file away, with
+// nothing to catch it but looking at the screen.
+constexpr lv_coord_t TRAIL_WIDTH_PX = 6;
 
 // Direction chevrons, laid along the stretch still to ride. White, because
 // they sit ON the magenta and have to read at 7px.
@@ -131,8 +153,11 @@ constexpr double MAP_STILL_DEADBAND_M = 10.0;
 //
 // Extracted from the marker when the chevrons and the north arrow needed the
 // same thing. RoadView draws its whole network this way for the same reason.
+//
+// Rows go straight into the strip through LineRaster_Span when `surface` is
+// set, which is the same one-row fill without an lv_draw_rect around each.
 void FillTriangle(lv_draw_ctx_t *ctx, const lv_area_t &area, const lv_point_t p[3],
-                  uint32_t colour) {
+                  uint32_t colour, const LineRasterSurface_t *surface) {
     lv_coord_t min_y = p[0].y;
     lv_coord_t max_y = p[0].y;
     for (int i = 1; i < 3; i++) {
@@ -152,15 +177,24 @@ void FillTriangle(lv_draw_ctx_t *ctx, const lv_area_t &area, const lv_point_t p[
         return;
     }
 
+    const lv_color_t fill_colour = lv_color_hex(colour);
     lv_draw_rect_dsc_t fill;
-    lv_draw_rect_dsc_init(&fill);
-    fill.bg_color = lv_color_hex(colour);
-    fill.bg_opa = LV_OPA_COVER;
-    fill.border_width = 0;
-    fill.radius = 0;
+    if (surface == nullptr) {
+        lv_draw_rect_dsc_init(&fill);
+        fill.bg_color = fill_colour;
+        fill.bg_opa = LV_OPA_COVER;
+        fill.border_width = 0;
+        fill.radius = 0;
+    }
 
     for (lv_coord_t y = min_y; y <= max_y; y++) {
-        double xs[3];
+        // Single precision, and it changes no pixel: every term is a small
+        // integer, so a crossing that is a whole number comes out exactly in
+        // either precision, and one that is not lies at least 1/64 of a pixel
+        // from the next whole number -- far beyond float's rounding at these
+        // magnitudes -- so truncation lands the same. The double it replaces
+        // was a software division per edge per row.
+        float xs[3];
         int n = 0;
         for (int i = 0; i < 3; i++) {
             const lv_point_t a = p[i];
@@ -173,27 +207,93 @@ void FillTriangle(lv_draw_ctx_t *ctx, const lv_area_t &area, const lv_point_t p[
             if (y < lo_y || y > hi_y) {
                 continue;
             }
-            xs[n++] = (double)a.x + (double)(b.x - a.x) * (double)(y - a.y) / (double)(b.y - a.y);
+            xs[n++] = (float)a.x + (float)(b.x - a.x) * (float)(y - a.y) / (float)(b.y - a.y);
         }
         if (n < 2) {
             continue;
         }
-        double lo = xs[0];
-        double hi = xs[0];
+        float lo = xs[0];
+        float hi = xs[0];
         for (int i = 1; i < n; i++) {
             if (xs[i] < lo) lo = xs[i];
             if (xs[i] > hi) hi = xs[i];
         }
         lv_area_t row;
-        row.x1 = (lv_coord_t)(area.x1 + lo);
-        row.x2 = (lv_coord_t)(area.x1 + hi);
+        row.x1 = (lv_coord_t)((float)area.x1 + lo);
+        row.x2 = (lv_coord_t)((float)area.x1 + hi);
         row.y1 = (lv_coord_t)(area.y1 + y);
         row.y2 = row.y1;
         if (row.x2 < row.x1) {
             continue;
         }
-        lv_draw_rect(ctx, &fill, &row);
+        if (surface != nullptr) {
+            LineRaster_Span(surface, row.y1, row.x1, row.x2, fill_colour.full);
+        } else {
+            lv_draw_rect(ctx, &fill, &row);
+        }
     }
+}
+
+// One stroke of the overlay: through LineRaster when the strip allows it,
+// lv_draw_line with the same round ends when it does not. Coordinates are
+// absolute, as both of those want them.
+void Stroke(lv_draw_ctx_t *ctx, const LineRasterSurface_t *surface, const lv_point_t &a,
+            const lv_point_t &b, lv_coord_t width, lv_color_t colour) {
+    if (surface != nullptr && LineRaster_Line(surface, a.x, a.y, b.x, b.y, width, colour.full)) {
+        return;
+    }
+    lv_draw_line_dsc_t dsc;
+    lv_draw_line_dsc_init(&dsc);
+    dsc.color = colour;
+    dsc.width = width;
+    dsc.round_start = 1;
+    dsc.round_end = 1;
+    lv_draw_line(ctx, &dsc, &a, &b);
+}
+
+// A stretch of the route, in container coordinates, skipping the segments
+// whose ink cannot reach the strip.
+void DrawPolyline(lv_draw_ctx_t *ctx, const LineRasterSurface_t *surface, const lv_area_t &area,
+                  const lv_point_t *pts, size_t count, lv_coord_t width, uint32_t colour) {
+    if (count < 2) {
+        return;
+    }
+    const lv_color_t c = lv_color_hex(colour);
+    const lv_area_t *clip = ctx->clip_area;
+    const lv_coord_t pad = (lv_coord_t)(width + 1);
+    for (size_t i = 0; i + 1 < count; i++) {
+        const lv_point_t a = {(lv_coord_t)(area.x1 + pts[i].x), (lv_coord_t)(area.y1 + pts[i].y)};
+        const lv_point_t b = {(lv_coord_t)(area.x1 + pts[i + 1].x),
+                              (lv_coord_t)(area.y1 + pts[i + 1].y)};
+        const lv_coord_t min_x = a.x < b.x ? a.x : b.x;
+        const lv_coord_t max_x = a.x < b.x ? b.x : a.x;
+        const lv_coord_t min_y = a.y < b.y ? a.y : b.y;
+        const lv_coord_t max_y = a.y < b.y ? b.y : a.y;
+        if (max_y + pad < clip->y1 || min_y - pad > clip->y2 || max_x + pad < clip->x1 ||
+            min_x - pad > clip->x2) {
+            continue;
+        }
+        Stroke(ctx, surface, a, b, width, c);
+    }
+}
+
+// The route: the stretch still to ride, then the ridden stretch over it, so
+// where the two meet the ridden colour wins and the join is clean -- the order
+// the two lv_line objects this replaces were stacked in.
+//
+// Drawn here rather than by those objects because an lv_line goes through
+// lv_draw_line, and so pays what RoadView.cpp measured for every segment:
+// four line masks and two radius-masked rects. The route is the widest line on
+// the map and on a long one the most segments of anything after the roads.
+void DrawRoute(lv_draw_ctx_t *ctx, const LineRasterSurface_t *surface, const lv_area_t &area,
+               const MapView_t *view) {
+    if (view->drawn_count < 2) {
+        return;
+    }
+    DrawPolyline(ctx, surface, area, view->points + view->drawn_ahead_from,
+                 view->drawn_count - view->drawn_ahead_from, TRAIL_WIDTH_PX, COLOR_TRAIL_AHEAD);
+    DrawPolyline(ctx, surface, area, view->points, view->drawn_split, TRAIL_WIDTH_PX,
+                 COLOR_TRAIL_DONE);
 }
 
 
@@ -262,19 +362,15 @@ void LayOutChevrons(MapView_t *view) {
 
 // Draws what LayOutChevrons placed, skipping any whose strokes cannot reach
 // the strip being drawn.
-void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
+void DrawChevrons(lv_draw_ctx_t *ctx, const LineRasterSurface_t *surface, const lv_area_t &area,
+                  const MapView_t *view) {
     if (view->chevron_count == 0) {
         return;
     }
 
-    // One descriptor for all of them: rounded caps, so the apex closes cleanly
-    // instead of showing the notch two square-ended strokes leave.
-    lv_draw_line_dsc_t chev;
-    lv_draw_line_dsc_init(&chev);
-    chev.color = lv_color_hex(COLOR_CHEVRON);
-    chev.width = CHEVRON_STROKE_PX;
-    chev.round_start = 1;
-    chev.round_end = 1;
+    // Round ends, so the apex closes cleanly instead of showing the notch two
+    // square-ended strokes leave.
+    const lv_color_t colour = lv_color_hex(COLOR_CHEVRON);
 
     const lv_area_t *clip = ctx->clip_area;
     const lv_coord_t pad = (lv_coord_t)(CHEVRON_STROKE_PX + 1);
@@ -297,8 +393,8 @@ void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *vi
         lv_point_t apex = {(lv_coord_t)(area.x1 + c[0].x), (lv_coord_t)(area.y1 + c[0].y)};
         lv_point_t arm1 = {(lv_coord_t)(area.x1 + c[1].x), (lv_coord_t)(area.y1 + c[1].y)};
         lv_point_t arm2 = {(lv_coord_t)(area.x1 + c[2].x), (lv_coord_t)(area.y1 + c[2].y)};
-        lv_draw_line(ctx, &chev, &apex, &arm1);
-        lv_draw_line(ctx, &chev, &apex, &arm2);
+        Stroke(ctx, surface, apex, arm1, CHEVRON_STROKE_PX, colour);
+        Stroke(ctx, surface, apex, arm2, CHEVRON_STROKE_PX, colour);
     }
 }
 
@@ -308,7 +404,8 @@ void DrawChevrons(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *vi
 // sometimes holds a thing and sometimes does not is harder to read than one
 // that always does, and the arrow pointing straight up IS the information
 // when the map is north-up.
-void DrawNorth(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
+void DrawNorth(lv_draw_ctx_t *ctx, const LineRasterSurface_t *surface, const lv_area_t &area,
+               const MapView_t *view) {
     const double heading = MapView_IsTrackUp(view) ? MapView_HeadingDeg(view) : 0.0;
     // Screen-up is the heading, so north sits at minus the heading. Screen y
     // grows downward, which the sine term accounts for.
@@ -327,7 +424,7 @@ void DrawNorth(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view)
     tri[1].y = (lv_coord_t)(cy - (uy * r * 0.45) + (ux * r * 0.5));
     tri[2].x = (lv_coord_t)(cx - (ux * r * 0.45) + (uy * r * 0.5));
     tri[2].y = (lv_coord_t)(cy - (uy * r * 0.45) - (ux * r * 0.5));
-    FillTriangle(ctx, area, tri, COLOR_HUD);
+    FillTriangle(ctx, area, tri, COLOR_HUD, surface);
 }
 
 // The bar itself. Its label is an ordinary lv_label, because drawing text
@@ -440,7 +537,8 @@ bool StripReaches(const lv_draw_ctx_t *ctx, const lv_area_t &area, lv_coord_t x1
              area.x1 + x1 > clip->x2);
 }
 
-void DrawRider(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view);
+void DrawRider(lv_draw_ctx_t *ctx, const LineRasterSurface_t *surface, const lv_area_t &area,
+               const MapView_t *view);
 
 void MarkerDrawCb(lv_event_t *e) {
     lv_obj_t *obj = lv_event_get_target(e);
@@ -450,15 +548,34 @@ void MarkerDrawCb(lv_event_t *e) {
     }
     lv_draw_ctx_t *ctx = lv_event_get_draw_ctx(e);
 
+    // A new frame: publish the last one's total and start again.
+    const uint32_t frame = Display_FrameSeq();
+    if (frame != s_overlay_frame) {
+        if (s_overlay_strips > 0) {
+            g_overlay_frame_us = s_overlay_accum_us;
+        }
+        s_overlay_frame = frame;
+        s_overlay_accum_us = 0;
+        s_overlay_strips = 0;
+    }
+    const uint32_t started = micros();
+
     lv_area_t area;
     lv_obj_get_coords(obj, &area);
 
-    // Order matters: chevrons sit on the route and under the rider, the HUD
-    // sits over both.
-    DrawChevrons(ctx, area, view);
+    // Null when this strip must go through LVGL; every draw below takes
+    // either.
+    LineRasterSurface_t surface_store;
+    const LineRasterSurface_t *surface =
+        LineRasterLv_Surface(ctx, &surface_store) ? &surface_store : nullptr;
+
+    // Order matters: the route under its chevrons, the chevrons under the
+    // rider, the HUD over all of it.
+    DrawRoute(ctx, surface, area, view);
+    DrawChevrons(ctx, surface, area, view);
 
     if (view->show_rider) {
-        DrawRider(ctx, area, view);
+        DrawRider(ctx, surface, area, view);
     }
 
     // Both in fixed corners, so a strip that cannot reach the corner skips
@@ -467,21 +584,29 @@ void MarkerDrawCb(lv_event_t *e) {
     const lv_coord_t north_x1 = (lv_coord_t)(north_x2 - 2 * NORTH_RADIUS_PX - 4);
     if (StripReaches(ctx, area, north_x1, HUD_MARGIN_PX - 2, north_x2,
                      HUD_MARGIN_PX + 2 * NORTH_RADIUS_PX + 2)) {
-        DrawNorth(ctx, area, view);
+        DrawNorth(ctx, surface, area, view);
     }
+    // Square-ended and axis-aligned, which lv_draw_line does as a plain fill
+    // already; LineRaster would round the ends off.
     const lv_coord_t bar_y = (lv_coord_t)(view->height - HUD_MARGIN_PX - 2);
     if (StripReaches(ctx, area, 0, bar_y - 6, view->width, bar_y + 2)) {
         DrawScaleBar(ctx, area, view);
     }
+
+    s_overlay_accum_us += micros() - started;
+    if (s_overlay_strips < UINT16_MAX) {
+        s_overlay_strips++;
+    }
 }
 
 // The rider's triangle and its outline.
-void DrawRider(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view) {
+void DrawRider(lv_draw_ctx_t *ctx, const LineRasterSurface_t *surface, const lv_area_t &area,
+               const MapView_t *view) {
     // marker_points[0..2] are the corners; [3] repeats [0] to close the
     // outline stroke below.
     const lv_point_t *p = view->marker_points;
 
-    FillTriangle(ctx, area, p, COLOR_MARKER);
+    FillTriangle(ctx, area, p, COLOR_MARKER, surface);
 
     // The border last, over the fill, so it trims the stepped edge the
     // scanlines leave and separates the marker from whatever it is sitting on.
@@ -509,17 +634,12 @@ void DrawRider(lv_draw_ctx_t *ctx, const lv_area_t &area, const MapView_t *view)
     }
     out[3] = out[0];
 
-    lv_draw_line_dsc_t edge;
-    lv_draw_line_dsc_init(&edge);
-    edge.color = lv_color_hex(COLOR_MARKER_EDGE);
-    edge.width = 2;
-    edge.round_start = 1;
-    edge.round_end = 1;
+    const lv_color_t edge = lv_color_hex(COLOR_MARKER_EDGE);
     for (int i = 0; i < 3; i++) {
         lv_point_t a = {(lv_coord_t)(area.x1 + out[i].x), (lv_coord_t)(area.y1 + out[i].y)};
         lv_point_t b = {(lv_coord_t)(area.x1 + out[i + 1].x),
                         (lv_coord_t)(area.y1 + out[i + 1].y)};
-        lv_draw_line(ctx, &edge, &a, &b);
+        Stroke(ctx, surface, a, b, 2, edge);
     }
 }
 
@@ -547,6 +667,7 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // not own the camera.
     view->camera_owner = false;
     view->drawn_count = 0;
+    view->drawn_split = 0;
     view->drawn_ahead_from = 0;
     view->chevron_count = 0;
     view->scale_px = 0;
@@ -587,29 +708,10 @@ void MapView_Create(MapView_t *view, lv_obj_t *parent, lv_coord_t x, lv_coord_t 
     // let a stray touch drag the map into empty space.
     lv_obj_clear_flag(view->container, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Created first, so it sits behind the ridden half: where the two overlap
-    // by the one shared point, the ridden colour wins and the join is clean.
-    view->trail = lv_line_create(view->container);
-    lv_obj_set_style_line_color(view->trail, lv_color_hex(COLOR_TRAIL_AHEAD), 0);
-    // 6px, and it tracks the roads rather than being chosen on its own. The
-    // roads under it are drawn 2 to 5px wide, and a route the same weight as
-    // the streets it crosses is a route the eye has to hunt for. This is the
-    // one line on the map that is not scenery.
+    // The route, its chevrons, the rider and the HUD are all drawn by this one
+    // object's callback (MarkerDrawCb), over the road layer RoadView_Attach
+    // puts behind it.
     //
-    // It was 4 while the roads were 1 to 4. Widening them for legibility
-    // without widening this would have quietly handed the top of the
-    // hierarchy to the rivers -- the fix for one problem creating another,
-    // one file away, with nothing to catch it but looking at the screen.
-    lv_obj_set_style_line_width(view->trail, 6, 0);
-    lv_obj_set_style_line_rounded(view->trail, true, 0);
-    lv_obj_set_pos(view->trail, 0, 0);
-
-    view->trail_done = lv_line_create(view->container);
-    lv_obj_set_style_line_color(view->trail_done, lv_color_hex(COLOR_TRAIL_DONE), 0);
-    lv_obj_set_style_line_width(view->trail_done, 6, 0);
-    lv_obj_set_style_line_rounded(view->trail_done, true, 0);
-    lv_obj_set_pos(view->trail_done, 0, 0);
-
     // A triangle rather than a dot: the rider's heading is already published
     // and carries real information at a junction -- which way am I pointing
     // relative to the line I am supposed to be following.
@@ -728,7 +830,7 @@ bool MapView_SetPosition(MapView_t *view, const GPS_Info_t *gps) {
 }
 
 void MapView_Redraw(MapView_t *view) {
-    if (view == nullptr || view->trail == nullptr) {
+    if (view == nullptr || view->marker == nullptr) {
         return;
     }
 
@@ -753,11 +855,12 @@ void MapView_Redraw(MapView_t *view) {
         MapView_SaveCamera(view);
     }
 
-    // The overlay -- rider, chevrons, north arrow, scale bar -- is drawn from
-    // the view, so every redraw changes it. One invalidate of its whole area;
-    // the road layer asks for the same area and LVGL merges the two. Before
-    // this, a pan with no road map loaded repainted only the trail's own
-    // bounding boxes and left chevrons from the previous position behind.
+    // The overlay -- route, rider, chevrons, north arrow, scale bar -- is
+    // drawn from the view, so every redraw changes it. One invalidate of its
+    // whole area; the road layer asks for the same area and LVGL merges the
+    // two. Before this, a pan with no road map loaded repainted only the
+    // route's own bounding boxes and left chevrons from the previous position
+    // behind.
     lv_obj_invalidate(view->marker);
 
     UpdateScaleBar(view);
@@ -777,14 +880,12 @@ void MapView_Redraw(MapView_t *view) {
     }
 
     if (!view->have_center || GpxTrack_PointCount() == 0) {
-        lv_line_set_points(view->trail, view->points, 0);
-        if (view->trail_done != nullptr) {
-            lv_line_set_points(view->trail_done, view->points, 0);
-        }
-        // And the chevrons with it. They are drawn by the overlay from what the
-        // last Redraw left here, so without this a route that failed to load
-        // took its line away and left its arrows floating over the map.
+        // The route and its chevrons together. Both are drawn by the overlay
+        // from what the last Redraw left here, and they used to be cleared
+        // separately -- so a route that failed to load took its line away and
+        // left its arrows floating over the map.
         view->drawn_count = 0;
+        view->drawn_split = 0;
         view->drawn_ahead_from = 0;
         view->chevron_count = 0;
         return;
@@ -845,19 +946,15 @@ void MapView_Redraw(MapView_t *view) {
         }
     }
 
-    if (view->trail_done != nullptr) {
-        // The two share the buffer and overlap by the point they meet at, so
-        // the join has no gap in it.
-        lv_line_set_points(view->trail_done, view->points, (uint16_t)split);
-    }
+    // The two stretches share the buffer and overlap by the point they meet
+    // at, so the join has no gap in it.
     const size_t ahead_from = (split > 0) ? split - 1 : 0;
-    lv_line_set_points(view->trail, view->points + ahead_from,
-                       (uint16_t)(written - ahead_from));
 
-    // Handed to the overlay rather than recomputed there: it decorates the
-    // same geometry that was just drawn, and the drawn line is clipped and
-    // thinned relative to the source.
+    // Handed to the overlay, which draws the route and decorates it from
+    // exactly this: the drawn line is clipped and thinned relative to the
+    // source, so the chevrons must follow it rather than the track.
     view->drawn_count = written;
+    view->drawn_split = split;
     view->drawn_ahead_from = ahead_from;
     LayOutChevrons(view);
 
@@ -1087,4 +1184,8 @@ uint32_t MapView_LastSourcePoints() {
 
 uint32_t MapView_LastDrawnPoints() {
     return g_drawn_points;
+}
+
+uint32_t MapView_LastOverlayFrameUs() {
+    return g_overlay_frame_us;
 }

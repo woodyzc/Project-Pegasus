@@ -6,6 +6,7 @@
 #include "../hal/Display.h"
 #include "../navigation/MapProject.h"
 #include "../navigation/RoadMap.h"
+#include "LineRasterLv.h"
 
 // Map_ProjectE7Prepared takes 1e-7 degrees, and the road blob's raw integers
 // go straight into it. A different scale in the file format would project
@@ -95,6 +96,11 @@ const double ROAD_MAX_MPP[ROAD_CLASS_COUNT] = {
 // a property of WHERE the rider is, not of the zoom -- the 1.9km view above
 // is river valley and parkland and holds half the ways of a town centre at
 // a quarter the scale.
+//
+// Every per-segment cost quoted here is lv_draw_line's. Since 2026-10-10 the
+// segments are drawn by LineRaster (DrawBuild), which is a different cost
+// curve entirely, so these figures describe the ceiling's history, not the
+// board. Re-measure from the settings page's "Roads" row before moving it.
 constexpr uint32_t ROAD_MAX_SEGMENTS = 900;
 
 // And a share per class, because the ceiling alone starves the wrong ones.
@@ -151,6 +157,13 @@ constexpr int ROAD_MIN_SEGMENT_PX = 3;
 // This is what every map application does and it is honest about what it
 // trades: detail the rider cannot read anyway during a drag, for a map that
 // keeps up with their finger. Nothing is lost when they let go.
+//
+// ⚠️ That 94us was lv_draw_line, which this layer no longer draws through
+// (LineRaster, 2026-10-10). Whether a drag still needs to shed detail is now
+// a question for the panel: if "Roads" -- full detail -- builds and draws
+// inside the 30ms refresh period, these two constants cost detail for nothing
+// and can go. The build half still scales with points projected, so measure
+// rather than assume.
 constexpr int ROAD_DRAG_MIN_SEGMENT_PX = 9;
 constexpr uint32_t ROAD_DRAG_MAX_SEGMENTS = 260;
 
@@ -572,10 +585,18 @@ void Build(const BuildKey &key) {
 }
 
 // Draws the current build into one strip. A segment whose ink cannot reach the
-// strip is skipped here with four compares, rather than handed to lv_draw_line
-// to discover the same thing through its own setup.
+// strip is skipped here with four compares, before any drawing is set up.
+//
+// Through LineRaster, straight into the strip, rather than through
+// lv_draw_line, which is what the 50-165us a segment measured above was: four
+// line masks run over the segment's bounding box row by row, plus a full
+// radius-masked lv_draw_rect for each round end. The same capsule drawn as a
+// fill with a computed fringe costs a few microseconds. lv_draw_line stays as
+// the fallback for a strip LineRasterLv will not hand over (it says when).
 void DrawBuild(lv_draw_ctx_t *ctx) {
     const lv_area_t *clip = ctx->clip_area;
+    LineRasterSurface_t surface;
+    const bool direct = LineRasterLv_Surface(ctx, &surface);
     for (int pass = 0; pass < ROAD_CLASS_COUNT; pass++) {
         const uint8_t klass = ORDER[pass];
         const uint16_t from = s_class_from[klass];
@@ -604,6 +625,10 @@ void DrawBuild(lv_draw_ctx_t *ctx) {
             const lv_coord_t max_y = seg.a.y < seg.b.y ? seg.b.y : seg.a.y;
             if (max_y + pad < clip->y1 || min_y - pad > clip->y2 || max_x + pad < clip->x1 ||
                 min_x - pad > clip->x2) {
+                continue;
+            }
+            if (direct && LineRaster_Line(&surface, seg.a.x, seg.a.y, seg.b.x, seg.b.y,
+                                          dsc.width, dsc.color.full)) {
                 continue;
             }
             lv_draw_line(ctx, &dsc, &seg.a, &seg.b);
@@ -709,8 +734,8 @@ void RoadView_Attach(MapView_t *view) {
     // Not clickable, and this matters more than it looks. lv_obj_create sets
     // LV_OBJ_FLAG_CLICKABLE by default, so this layer -- which covers the
     // whole map -- swallowed every touch and the dashboard's navigation tile
-    // stopped opening the ROUTE page. MapView's own trail does not do this
-    // because lv_line clears the flag in its constructor.
+    // stopped opening the ROUTE page. MapView's overlay clears it for the
+    // same reason.
     //
     // Nothing here is interactive: it is a backdrop, and touches belong to
     // whatever is underneath it.
@@ -730,8 +755,9 @@ void RoadView_Attach(MapView_t *view) {
     // to it must not outlive that.
     lv_obj_add_event_cb(layer, ForgetLayer, LV_EVENT_DELETE, nullptr);
 
-    // Behind the trail, in front of the container's background. Index 0 is the
-    // back of the child list, and MapView creates the trail before this runs.
+    // Behind the overlay that draws the route, in front of the container's
+    // background. Index 0 is the back of the child list, and MapView creates
+    // the overlay before this runs.
     lv_obj_move_to_index(layer, 0);
 }
 

@@ -32,6 +32,9 @@
 
 // Matches Page_Dashboard's palette so the two screens read as one product.
 
+// A microsecond figure as the two halves of "12.3ms", for a "%u.%ums" format.
+#define MS_TENTHS(us) (unsigned)((us) / 1000u), (unsigned)(((us) % 1000u) / 100u)
+
 namespace {
 
 constexpr uint32_t COLOR_BG = 0x101820;
@@ -1575,17 +1578,19 @@ void PageSettings::onViewLoad() {
         // feels smooth, and which cannot be watched as it happens because
         // releasing the map repaints at full detail before anyone can get to
         // this page.
-        snprintf(buf, sizeof(buf), "%u/%u ways, %u seg; build %ums, draw %ums/%u",
+        //
+        // Tenths of a millisecond: the draw went from tens of milliseconds to
+        // a few once it stopped going through lv_draw_line (LineRaster.h),
+        // and a whole-millisecond figure would read "0ms" or "1ms" for the
+        // comparison it exists to make.
+        snprintf(buf, sizeof(buf), "%u/%u ways, %u seg; build %u.%ums, draw %u.%ums/%u",
                  (unsigned)RoadView_LastVisibleWays(), (unsigned)RoadMap_WayCount(),
-                 (unsigned)RoadView_LastSegments(),
-                 (unsigned)(RoadView_LastBuildUs() / 1000),
-                 (unsigned)(RoadView_LastFrameDrawUs() / 1000),
-                 (unsigned)RoadView_LastFrameStrips());
+                 (unsigned)RoadView_LastSegments(), MS_TENTHS(RoadView_LastBuildUs()),
+                 MS_TENTHS(RoadView_LastFrameDrawUs()), (unsigned)RoadView_LastFrameStrips());
         MakeInfoRow(info_card, "Roads", buf);
-        snprintf(buf, sizeof(buf), "%u seg; build %ums, draw %ums",
-                 (unsigned)RoadView_LastDragSegments(),
-                 (unsigned)(RoadView_LastDragBuildUs() / 1000),
-                 (unsigned)(RoadView_LastDragFrameDrawUs() / 1000));
+        snprintf(buf, sizeof(buf), "%u seg; build %u.%ums, draw %u.%ums",
+                 (unsigned)RoadView_LastDragSegments(), MS_TENTHS(RoadView_LastDragBuildUs()),
+                 MS_TENTHS(RoadView_LastDragFrameDrawUs()));
         MakeInfoRow(info_card, "Roads drag", buf);
     }
 
@@ -1597,10 +1602,15 @@ void PageSettings::onViewLoad() {
     //
     // src/drawn is the ratio that says whether the search is doing its job --
     // thousands against a couple of hundred is the expected shape.
+    //
+    // "draw" is the overlay the route is drawn by -- route, chevrons, rider,
+    // HUD -- totalled over a frame's strips, the counterpart of the road
+    // layer's figure above.
     if (GpxTrack_PointCount() > 0) {
-        snprintf(buf, sizeof(buf), "%u src, %u drawn, %uus (drag %uus)",
+        snprintf(buf, sizeof(buf), "%u src, %u drawn, %uus (drag %uus); draw %u.%ums",
                  (unsigned)MapView_LastSourcePoints(), (unsigned)MapView_LastDrawnPoints(),
-                 (unsigned)MapView_LastBuildUs(), (unsigned)MapView_LastBuildDragUs());
+                 (unsigned)MapView_LastBuildUs(), (unsigned)MapView_LastBuildDragUs(),
+                 MS_TENTHS(MapView_LastOverlayFrameUs()));
         MakeInfoRow(info_card, "Track", buf);
 
         // Where the rider has got to on it, and what the last fix cost to
