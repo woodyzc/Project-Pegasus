@@ -1655,8 +1655,18 @@ void PageSettings::onViewLoad() {
         const unsigned bad = (unsigned)TimeSource_PhoneRejected();
         if (TimeSource_Now(millis(), &reading)) {
             const char *src = reading.kind == TIME_SRC_GNSS ? "GNSS" : "phone";
-            snprintf(buf, sizeof(buf), "%s, %+d min (%u ok, %u bad)", src,
-                     (int)reading.offset_min, ok, bad);
+            // An offset nobody has supplied yet is 0 in the reading, and
+            // printed as "+0 min" it claimed the rider was on UTC: the one
+            // row meant to tell those cases apart, quietly merging two of
+            // them. A GNSS clock gets its zone from the dashboard's first
+            // draw after a fix, so there is a window where this is true.
+            if (reading.offset_known) {
+                snprintf(buf, sizeof(buf), "%s, %+d min (%u ok, %u bad)", src,
+                         (int)reading.offset_min, ok, bad);
+            } else {
+                snprintf(buf, sizeof(buf), "%s, zone not known yet (%u ok, %u bad)", src, ok,
+                         bad);
+            }
         } else if (ok > 0 || bad > 0) {
             snprintf(buf, sizeof(buf), "stale (%u ok, %u bad)", ok, bad);
         } else {
