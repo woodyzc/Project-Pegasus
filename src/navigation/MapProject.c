@@ -2,6 +2,12 @@
 
 #include <math.h>
 
+/* M_PI is not ISO C: glibc hides it under -std=c11, and the host tests build
+   with exactly that. RouteFollow.c and TripAccum.c carry the same fallback. */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 static int16_t ClampCoord(double value) {
     if (value > (double)MAP_COORD_LIMIT) {
         return (int16_t)MAP_COORD_LIMIT;

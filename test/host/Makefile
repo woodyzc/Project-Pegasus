@@ -111,7 +111,11 @@ SENSORS := ../../src/sensors
 NAV     := ../../src/navigation
 UI      := ../../src/ui
 
-CFLAGS ?= -std=c11 -Wall -Wextra
+# _GNU_SOURCE because the suites use M_PI, which is not ISO C: glibc hides it
+# under -std=c11, so on Linux four suites failed to compile while macOS --
+# whose headers define it regardless -- stayed green. Found by an outside
+# review on 2026-10-10, which verified this flag on Linux.
+CFLAGS ?= -std=c11 -Wall -Wextra -D_GNU_SOURCE
 SUFFIX ?=
 
 BINS := test_ble_hr_parse$(SUFFIX) test_tbt_parse$(SUFFIX) test_ubx_parse$(SUFFIX) \
