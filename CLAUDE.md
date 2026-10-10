@@ -847,12 +847,29 @@ performance cost four rounds before anyone measured.
   to PSRAM by the renderer and read back by the flush, ~300KB of slow-bus
   traffic per frame. One 40-line partial buffer (19KB) in
   `MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL` is the standard arrangement and took
-  the dashboard to 33fps at 5% CPU. Single, not double: `tft.pushColors` is
-  blocking, so there is no DMA completion to overlap against.
+  the dashboard to 33fps at 5% CPU. It was single while the flush was the
+  blocking `tft.pushColors`; since 2026-10-10 it is two, flushed by DMA so one
+  strip renders while the other is sent (`Display_FlushDma`). The settings
+  page's "Display" row says which the board actually got: it falls back to one
+  blocking buffer if the second 19.2KB is not there or DMA will not start, and
+  `-D PEGASUS_LCD_DMA=0` forces that.
+  - ⚠️ **TFT_eSPI 2.5.43's DMA is broken on this exact configuration** (S3 +
+    `USE_HSPI_PORT`), and `Display.cpp` works around it. After a transfer the
+    SPI peripheral's DMA enable must be cleared before the CPU writes to it
+    directly again, or the next `setAddrWindow` sends garbage. TFT_eSPI clears
+    `SPI_DMA_CONF_REG(spi_host)` -- but `spi_host` is the driver enum
+    (`SPI3_HOST` == 2) and the macro wants the peripheral number (GPSPI3 ==
+    3), so it clears GPSPI2 and leaves ours on. Its direct path uses
+    `SPI_PORT`, which is right; so does the workaround.
+  - `initDMA()` aborts through `ESP_ERROR_CHECK` on failure, and a reset here
+    releases the power latch: an abort in `Display_Init` is a board that
+    switches itself off on every boot. `DmaWillStart()` makes the same driver
+    calls first, without the abort, and only then lets `initDMA()` run.
 - **`LV_COLOR_16_SWAP` and `Display_Flush`'s `pushColors(..., swap)` are one
   decision in two files.** With the swap off in LVGL and on in the flush,
   TFT_eSPI byte-swaps all 76,800 pixels in software per full redraw — the CPU
-  sat at 90% during any motion. Swap in LVGL (`1`) and pass `false`. Either
+  sat at 90% during any motion. Swap in LVGL (`1`) and pass `false` -- the DMA
+  flush's const `pushImageDMA` never swaps, which is the same decision. Either
   alone gives visibly wrong colours. This is the 16-bit word's endianness and
   is **not** `TFT_RGB_ORDER`, which is the R/B channel order; the panel needs
   both set.

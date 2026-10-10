@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "../hal/Barometer.h"
+#include "../hal/Display.h"
 #include "../hal/Imu.h"
 #include "../navigation/RoadMap.h"
 #include "../navigation/GpxProgress.h"
@@ -1463,6 +1464,10 @@ void PageSettings::onViewLoad() {
 #else
     MakeInfoRow(info_card, "Build", "no stamp (built without tools/build_stamp.py)");
 #endif
+    // How the panel is fed. The DMA flush falls back to the blocking one
+    // rather than refusing to boot, so a board that quietly took the fallback
+    // looks identical apart from feeling slower -- this is where it says so.
+    MakeInfoRow(info_card, "Display", Display_ModeText());
 
     // The IMU, which exists to answer one question -- is the bike moving --
     // and gates the odometer, the idle timer and the SPEED cell on the answer
