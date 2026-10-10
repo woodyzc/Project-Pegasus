@@ -1,6 +1,7 @@
 #include "RoadView.h"
 
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 #include <math.h>
 
 #include "../hal/Display.h"
@@ -120,8 +121,8 @@ const uint32_t ROAD_CLASS_SEGMENTS[ROAD_CLASS_COUNT] = {
     260,  // water
 };
 
-// Ways that can be on screen at once. Static rather than on the stack: this
-// runs on the LVGL task, whose stack is 8KB, and 2048 entries is 4KB of it.
+// Ways that can be on screen at once. Not on the stack: this runs on the LVGL
+// task, whose stack is 8KB, and 1024 entries is 4KB of it (BuildScratch).
 // Sized to what the segment budget can actually draw, not to what is in view.
 //
 // This was briefly 6144, on the reasoning that a dense extract has that many
@@ -298,6 +299,23 @@ struct RoadSegment {
 // Sized to the larger of the two ceilings, since both bound what a build can
 // keep: 900 segments at 8 bytes, in internal RAM because every strip walks it.
 RoadSegment s_segments[ROAD_MAX_SEGMENTS];
+
+// What a build works through on its way to s_segments: the index's answer, the
+// class of each way in it, and the same list sorted into painter's order.
+//
+// In PSRAM, allocated by the first build. These were statics -- 9KB of
+// internal RAM held for the whole boot for work done only when the view
+// changes -- and internal RAM is what this board runs short of: NimBLE, the
+// LVGL heap and both DMA draw buffers have to come out of it. Unlike
+// s_segments, each is walked once per build and in order, so PSRAM's latency
+// is paid a cache line at a time.
+struct BuildScratch {
+    uint32_t visible[ROAD_VISIBLE_MAX];
+    uint8_t visible_class[ROAD_VISIBLE_MAX];
+    uint32_t sorted[ROAD_VISIBLE_MAX];
+};
+BuildScratch *s_scratch = nullptr;
+
 // Class k's segments are [s_class_from[k], s_class_to[k]).
 uint16_t s_class_from[ROAD_CLASS_COUNT];
 uint16_t s_class_to[ROAD_CLASS_COUNT];
@@ -401,10 +419,24 @@ void Build(const BuildKey &key) {
         }
     }
 
-    // Static, not on the stack: this runs on the LVGL task, whose stack is 8KB.
-    static uint32_t visible[ROAD_VISIBLE_MAX];
-    static uint8_t visible_class[ROAD_VISIBLE_MAX];
-    static uint32_t sorted[ROAD_VISIBLE_MAX];
+    if (s_scratch == nullptr) {
+        s_scratch = static_cast<BuildScratch *>(
+            heap_caps_malloc(sizeof(BuildScratch), MALLOC_CAP_SPIRAM));
+        if (s_scratch == nullptr) {
+            // An empty build: no roads rather than a crash. The road blob is
+            // in PSRAM as well, so with roads loaded this is not expected.
+            for (int k = 0; k < ROAD_CLASS_COUNT; k++) {
+                s_class_from[k] = 0;
+                s_class_to[k] = 0;
+            }
+            g_visible = 0;
+            g_segments = 0;
+            return;
+        }
+    }
+    uint32_t *const visible = s_scratch->visible;
+    uint8_t *const visible_class = s_scratch->visible_class;
+    uint32_t *const sorted = s_scratch->sorted;
 
     uint16_t visible_count = (uint16_t)RoadMap_Query(view_min_lat, view_min_lon, view_max_lat,
                                                      view_max_lon, class_mask, visible,
