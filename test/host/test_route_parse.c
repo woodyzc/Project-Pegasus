@@ -12,9 +12,12 @@
  * wrong, and they are why the implementation snaps to the line and measures
  * along it instead. */
 #include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
+#include "MapProject.h"
 #include "RouteFollow.h"
 #include "RouteParse.h"
 
@@ -569,6 +572,192 @@ static void test_maneuver_ordering(void) {
     check(!RouteFollow_ManeuversOrdered(blob, NULL), "null manifest rejected");
 }
 
+/* ---- The near-first snap against the loop it replaced ----
+ *
+ * RouteFollow_SnapFrom now searches near the fix first and the whole route only
+ * when it cannot show that gives the same answer. "The same answer" is the
+ * claim, and the sequential tie margin is exactly the kind of thing that makes
+ * such a claim wrong in a case nobody thought of -- an earlier version of the
+ * shortcut was. So the old loop is kept here verbatim as the reference, and the
+ * two are compared field for field over thousands of fixes: near the line, off
+ * it by the distances where the shortcut decides, and kilometres away. */
+#define REF_FORWARD_COST 0.5
+#define REF_BACKWARD_COST 3.0
+#define REF_TIE_M 0.05
+#define REF_HINT_BUDGET_M 25.0 /* RouteFollow.c's ROUTE_SNAP_HINT_BUDGET_M */
+
+static double RefLonScale(double lat_deg) {
+    const double c = cos(lat_deg * M_PI / 180.0);
+    return c > 0.01 ? c : 0.01;
+}
+
+static double RefHintPenalty(double along, double hint_along) {
+    const double delta = along - hint_along;
+    const double cost = (delta >= 0.0) ? delta * REF_FORWARD_COST : -delta * REF_BACKWARD_COST;
+    return cost < REF_HINT_BUDGET_M ? cost : REF_HINT_BUDGET_M;
+}
+
+static bool RefSnapFrom(const uint8_t *blob, const RouteManifest_t *manifest, const uint32_t *cum,
+                        double lat, double lon, bool have_hint, uint32_t hint_along_m,
+                        RouteFix_t *out) {
+    const double lon_scale = RefLonScale(lat);
+    double best_score = INFINITY;
+    double best_cross = INFINITY;
+    uint16_t best_segment = 0;
+    double best_along = 0.0;
+    const double hint = (double)hint_along_m;
+    RoutePoint_t a;
+    if (!Route_Point(blob, manifest, 0, &a)) {
+        return false;
+    }
+    for (uint16_t i = 0; i + 1 < manifest->point_count; i++) {
+        RoutePoint_t b;
+        if (!Route_Point(blob, manifest, (uint16_t)(i + 1), &b)) {
+            return false;
+        }
+        const double ax = ((double)a.lon / ROUTE_COORD_SCALE - lon) *
+                          MAP_EARTH_METRES_PER_DEGREE * lon_scale;
+        const double ay = ((double)a.lat / ROUTE_COORD_SCALE - lat) * MAP_EARTH_METRES_PER_DEGREE;
+        const double bx = ((double)b.lon / ROUTE_COORD_SCALE - lon) *
+                          MAP_EARTH_METRES_PER_DEGREE * lon_scale;
+        const double by = ((double)b.lat / ROUTE_COORD_SCALE - lat) * MAP_EARTH_METRES_PER_DEGREE;
+        const double abx = bx - ax;
+        const double aby = by - ay;
+        const double len_sq = abx * abx + aby * aby;
+        double t = 0.0;
+        if (len_sq > 1e-9) {
+            t = -(ax * abx + ay * aby) / len_sq;
+            if (t < 0.0) {
+                t = 0.0;
+            } else if (t > 1.0) {
+                t = 1.0;
+            }
+        }
+        const double cx = ax + t * abx;
+        const double cy = ay + t * aby;
+        const double cross = sqrt(cx * cx + cy * cy);
+        const double seg_len = (double)cum[i + 1] - (double)cum[i];
+        const double along = (double)cum[i] + t * seg_len;
+        const double score = have_hint ? cross + RefHintPenalty(along, hint) : cross;
+        if (score < best_score - REF_TIE_M) {
+            best_score = score;
+            best_cross = cross;
+            best_segment = i;
+            best_along = along;
+        } else if (score < best_score + REF_TIE_M && along < best_along) {
+            if (score < best_score) {
+                best_score = score;
+            }
+            best_cross = cross;
+            best_segment = i;
+            best_along = along;
+        }
+        a = b;
+    }
+    if (!isfinite(best_score)) {
+        return false;
+    }
+    out->segment_index = best_segment;
+    out->distance_along_m = (uint32_t)(best_along + 0.5);
+    out->cross_track_m = (uint32_t)(best_cross + 0.5);
+    out->off_route = best_cross > (double)ROUTE_OFF_ROUTE_M;
+    return true;
+}
+
+static uint32_t s_rng = 2463534242u;
+static double Unit(void) { /* [0, 1) */
+    s_rng ^= s_rng << 13;
+    s_rng ^= s_rng >> 17;
+    s_rng ^= s_rng << 5;
+    return (double)(s_rng >> 8) / 16777216.0;
+}
+
+static void test_snap_near_first_matches_the_full_loop(void) {
+    printf("- the near-first snap matches the full loop: ");
+    enum { MAX_POINTS = 1600 };
+    static uint8_t blob[MAX_POINTS * ROUTE_POINT_SIZE];
+    static uint32_t cum[MAX_POINTS];
+    const double anchors[][2] = {{39.17, -77.27}, {-33.87, 151.21}, {64.15, -21.94}, {0.0, 0.0}};
+    long compared = 0;
+    long differed = 0;
+
+    for (int route = 0; route < 96; route++) {
+        const double lat0 = anchors[route % 4][0];
+        const double lon0 = anchors[route % 4][1];
+        const double m_per_lon = 111320.0 * cos(lat0 * M_PI / 180.0);
+        const int out_and_back = (route % 3) == 0;
+        const int legs = 40 + (int)(Unit() * (out_and_back ? 600 : 1500));
+        double x = 0.0;
+        double y = 0.0;
+        double heading = Unit() * 2.0 * M_PI;
+        double xs[MAX_POINTS];
+        double ys[MAX_POINTS];
+        int n = 0;
+
+        /* A wandering road: steps of 3-120m turning a little each time, now
+           and then sharply, with the occasional repeated point. */
+        for (int i = 0; i < legs && n < MAX_POINTS; i++) {
+            xs[n] = x;
+            ys[n] = y;
+            n++;
+            const double step = (Unit() < 0.03) ? 0.0 : 3.0 + Unit() * 117.0;
+            heading += (Unit() < 0.1) ? (Unit() - 0.5) * 3.0 : (Unit() - 0.5) * 0.4;
+            x += step * cos(heading);
+            y += step * sin(heading);
+        }
+        if (out_and_back) {
+            for (int i = n - 2; i >= 0 && n < MAX_POINTS; i--) {
+                xs[n] = xs[i];
+                ys[n] = ys[i];
+                n++;
+            }
+        }
+
+        RouteManifest_t m;
+        memset(&m, 0, sizeof(m));
+        m.point_count = (uint16_t)n;
+        for (int i = 0; i < n; i++) {
+            put_point(blob, (uint16_t)i, (int32_t)lround((lat0 + ys[i] / 111320.0) * 1e7),
+                      (int32_t)lround((lon0 + xs[i] / m_per_lon) * 1e7));
+        }
+        const uint32_t total = RouteFollow_BuildCumulative(blob, &m, cum);
+
+        for (int f = 0; f < 120; f++) {
+            /* Somewhere on the route, then pushed off it by a distance drawn
+               to land often around the 200m the shortcut decides at. */
+            const int k = (int)(Unit() * (n - 1));
+            const double u = Unit();
+            const double px = xs[k] + (xs[k + 1] - xs[k]) * u;
+            const double py = ys[k] + (ys[k + 1] - ys[k]) * u;
+            const double r = Unit();
+            const double off = (r < 0.5) ? Unit() * 60.0
+                               : (r < 0.8) ? 150.0 + Unit() * 120.0
+                                           : 500.0 + Unit() * 5000.0;
+            const double dir = Unit() * 2.0 * M_PI;
+            const double flat = lat0 + (py + off * sin(dir)) / 111320.0;
+            const double flon = lon0 + (px + off * cos(dir)) / m_per_lon;
+            const bool have_hint = Unit() < 0.7;
+            const uint32_t hint = (uint32_t)(Unit() * (double)(total + 1));
+
+            RouteFix_t got;
+            RouteFix_t want;
+            memset(&got, 0, sizeof(got));
+            memset(&want, 0, sizeof(want));
+            const bool ok_got = RouteFollow_SnapFrom(blob, &m, cum, flat, flon, have_hint, hint, &got);
+            const bool ok_want = RefSnapFrom(blob, &m, cum, flat, flon, have_hint, hint, &want);
+            compared++;
+            if (ok_got != ok_want || got.segment_index != want.segment_index ||
+                got.distance_along_m != want.distance_along_m ||
+                got.cross_track_m != want.cross_track_m || got.off_route != want.off_route) {
+                differed++;
+            }
+        }
+    }
+    check(compared > 10000, "enough fixes compared");
+    check(differed == 0, "every fix snaps exactly as the full loop snaps it");
+    printf("done (%ld fixes, %ld differed)\n", compared, differed);
+}
+
 int main(void) {
     test_chunk_header();
     test_manifest();
@@ -581,6 +770,7 @@ int main(void) {
     test_snap_hint_cannot_override_geometry();
     test_next_maneuver();
     test_maneuver_ordering();
+    test_snap_near_first_matches_the_full_loop();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

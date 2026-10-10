@@ -124,44 +124,126 @@ bool RouteFollow_Snap(const uint8_t *blob,
     return RouteFollow_SnapFrom(blob, manifest, cum, lat, lon, false, 0, out);
 }
 
-bool RouteFollow_SnapFrom(const uint8_t *blob,
-                          const RouteManifest_t *manifest,
-                          const uint32_t *cum,
-                          double lat,
-                          double lon,
-                          bool have_hint,
-                          uint32_t hint_along_m,
-                          RouteFix_t *out) {
-    if (blob == NULL || manifest == NULL || cum == NULL || out == NULL ||
-        manifest->point_count < 2) {
-        return false;
+// ---- Searching near the fix first ----
+//
+// The snap examines every segment, and it has to be able to: a fix that
+// genuinely belongs anywhere on the route must be found, and the hint is only
+// allowed to discount, never to exclude. But it runs every second while the
+// route is navigating from its own GPS, over up to 4,000 points, with every
+// one converted from 1e-7 degrees by a software double division, scaled,
+// differenced and square-rooted -- the ESP32-S3 has no double FPU -- on the
+// core that draws the UI, holding the route lock the BLE host task needs.
+//
+// Nearly always the answer is within a few tens of metres of the fix, and
+// almost none of the route needs its arithmetic to establish that. A segment
+// cannot come within R of the fix if both its ends lie past the same edge of
+// an R-sized box around it, which four integer compares decide -- and then,
+// since every score is the cross-track distance plus a non-negative hint
+// penalty, it scores more than R.
+//
+// ⚠️ That alone does NOT make it safe to drop such segments, and the reason is
+// the tie margin. The pass is sequential: a segment takes the lead only by
+// beating the leader by more than ROUTE_SNAP_TIE_M, so which segment leads
+// depends on the order and on every score along the way, and a run of near-ties
+// can carry a skipped segment's influence a long way down. An earlier version
+// of this accepted the near result whenever it scored under R minus the
+// margin; walking the cases found an ordering where that differs from the full
+// pass. The rule below has no such hole:
+//
+//   * A skipped segment scores more than R, so it can only take the lead from
+//     a leader scoring more than R plus the margin. While the leader is below
+//     that, skipping is exactly what the full pass would have done.
+//   * Otherwise the skip leaves the outcome PENDING -- the true leader may now
+//     be a segment that was never scored, and segments scored from here on may
+//     or may not have taken the lead from it.
+//   * While pending, the true leader -- whichever it is -- scores at least the
+//     FLOOR: R (anything skipped scores more) or the lowest score seen since
+//     pending began, whichever is less. The known leader from before it began
+//     scored more than R, so it is above the floor too.
+//   * A scored segment beating the floor by more than the margin therefore
+//     takes the lead in the full pass whatever the skipped segments scored, and
+//     settles it. That is the common case, and it comes quickly: the route
+//     enters the box at a corner, scoring about R, and gets closer.
+//   * Reaching the end still pending means the answer may be a segment that
+//     was never scored -- the rider is off the route -- and the whole route is
+//     searched as before.
+//
+// The result is the full pass's result, bit for bit; test_route_parse checks
+// that against a copy of the old loop over thousands of fixes.
+#define ROUTE_SNAP_NEAR_M 200.0
+
+typedef struct {
+    double score;
+    double cross;
+    double along;
+    uint16_t segment;
+} SnapBest_t;
+
+typedef enum {
+    SNAP_PASS_UNREADABLE = 0,
+    SNAP_PASS_ANSWERED,
+    SNAP_PASS_UNDECIDED, // near only: the answer may lie in a skipped segment
+} SnapPassResult_t;
+
+// One pass over the segments, in order, keeping the leader by the rules below.
+// With `near`, segments that cannot come within ROUTE_SNAP_NEAR_M of the fix
+// are skipped under the rules above.
+static SnapPassResult_t SnapPass(const uint8_t *blob, const RouteManifest_t *manifest,
+                                 const uint32_t *cum, double lat, double lon, double lon_scale,
+                                 bool have_hint, double hint, bool near, SnapBest_t *best) {
+    int32_t lat_lo = 0;
+    int32_t lat_hi = 0;
+    int32_t lon_lo = 0;
+    int32_t lon_hi = 0;
+    bool pending = false;
+    double floor_score = ROUTE_SNAP_NEAR_M;
+    RoutePoint_t a;
+
+    best->score = INFINITY;
+    best->cross = INFINITY;
+    best->along = 0.0;
+    best->segment = 0;
+
+    if (near) {
+        // In the same metric the scoring uses, so the box is the bounding
+        // square of exactly the region within R. A unit wider each way, so
+        // rounding can only admit a segment, never lose one.
+        const double half_lat = ROUTE_SNAP_NEAR_M / MAP_EARTH_METRES_PER_DEGREE *
+                                ROUTE_COORD_SCALE;
+        const double half_lon = ROUTE_SNAP_NEAR_M / (MAP_EARTH_METRES_PER_DEGREE * lon_scale) *
+                                ROUTE_COORD_SCALE;
+        const double c_lat = lat * ROUTE_COORD_SCALE;
+        const double c_lon = lon * ROUTE_COORD_SCALE;
+        if (!(c_lat - half_lat > -2.0e9 && c_lat + half_lat < 2.0e9 &&
+              c_lon - half_lon > -2.0e9 && c_lon + half_lon < 2.0e9)) {
+            return SNAP_PASS_UNDECIDED; // no box worth the name; search it all
+        }
+        lat_lo = (int32_t)floor(c_lat - half_lat) - 1;
+        lat_hi = (int32_t)ceil(c_lat + half_lat) + 1;
+        lon_lo = (int32_t)floor(c_lon - half_lon) - 1;
+        lon_hi = (int32_t)ceil(c_lon + half_lon) + 1;
     }
 
-    // Work in metres on a plane whose origin is the fix. Over one segment the
-    // distortion is immaterial, and it keeps the arithmetic in a range where
-    // double has far more precision than the measurement deserves.
-    const double lon_scale = LonScale(lat);
-
-    // The winner is chosen on `score`, which is the cross-track plus whatever
-    // the hint charges it; `best_cross` is the winner's real distance from the
-    // line, and it is what gets reported and what decides off_route. Scoring
-    // and measuring have to stay separate -- a candidate that won by 20m of
-    // hint discount is still exactly as far off the road as it was.
-    double best_score = INFINITY;
-    double best_cross = INFINITY;
-    uint16_t best_segment = 0;
-    double best_along = 0.0;
-    const double hint = (double)hint_along_m;
-
-    RoutePoint_t a;
     if (!Route_Point(blob, manifest, 0, &a)) {
-        return false;
+        return SNAP_PASS_UNREADABLE;
     }
 
     for (uint16_t i = 0; i + 1 < manifest->point_count; i++) {
         RoutePoint_t b;
         if (!Route_Point(blob, manifest, (uint16_t)(i + 1), &b)) {
-            return false;
+            return SNAP_PASS_UNREADABLE;
+        }
+
+        if (near && ((a.lat < lat_lo && b.lat < lat_lo) || (a.lat > lat_hi && b.lat > lat_hi) ||
+                     (a.lon < lon_lo && b.lon < lon_lo) || (a.lon > lon_hi && b.lon > lon_hi))) {
+            // Scores more than R; see the rules above. Already pending, it
+            // cannot lower the floor, which is never above R.
+            if (!pending && best->score > ROUTE_SNAP_NEAR_M + ROUTE_SNAP_TIE_M) {
+                pending = true;
+                floor_score = ROUTE_SNAP_NEAR_M;
+            }
+            a = b;
+            continue;
         }
 
         const double ax = ((double)a.lon / ROUTE_COORD_SCALE - lon) *
@@ -203,34 +285,83 @@ bool RouteFollow_SnapFrom(const uint8_t *blob,
 
         const double score = have_hint ? cross + HintPenalty(along, hint) : cross;
 
-        if (score < best_score - ROUTE_SNAP_TIE_M) {
-            best_score = score;
-            best_cross = cross;
-            best_segment = i;
-            best_along = along;
-        } else if (score < best_score + ROUTE_SNAP_TIE_M && along < best_along) {
-            // Indistinguishable from the leader; take the earlier one. Only
-            // the true minimum is ever kept in best_score, so a run of
-            // near-ties cannot ratchet the threshold upwards.
-            if (score < best_score) {
-                best_score = score;
+        if (pending) {
+            if (score < floor_score - ROUTE_SNAP_TIE_M) {
+                // Beats whatever leads by more than the margin, so the full
+                // pass hands it the lead whatever the skipped segments scored.
+                pending = false;
+                best->score = score;
+                best->cross = cross;
+                best->segment = i;
+                best->along = along;
+            } else if (score < floor_score) {
+                // Might or might not have taken the lead; the floor says only
+                // that whatever leads now scores at least this.
+                floor_score = score;
             }
-            best_cross = cross;
-            best_segment = i;
-            best_along = along;
+        } else if (score < best->score - ROUTE_SNAP_TIE_M) {
+            best->score = score;
+            best->cross = cross;
+            best->segment = i;
+            best->along = along;
+        } else if (score < best->score + ROUTE_SNAP_TIE_M && along < best->along) {
+            // Indistinguishable from the leader; take the earlier one. Only
+            // the true minimum is ever kept in best->score, so a run of
+            // near-ties cannot ratchet the threshold upwards.
+            if (score < best->score) {
+                best->score = score;
+            }
+            best->cross = cross;
+            best->segment = i;
+            best->along = along;
         }
 
         a = b;
     }
+    return pending ? SNAP_PASS_UNDECIDED : SNAP_PASS_ANSWERED;
+}
 
-    if (!isfinite(best_score)) {
+bool RouteFollow_SnapFrom(const uint8_t *blob,
+                          const RouteManifest_t *manifest,
+                          const uint32_t *cum,
+                          double lat,
+                          double lon,
+                          bool have_hint,
+                          uint32_t hint_along_m,
+                          RouteFix_t *out) {
+    if (blob == NULL || manifest == NULL || cum == NULL || out == NULL ||
+        manifest->point_count < 2) {
         return false;
     }
 
-    out->segment_index = best_segment;
-    out->distance_along_m = (uint32_t)(best_along + 0.5);
-    out->cross_track_m = (uint32_t)(best_cross + 0.5);
-    out->off_route = best_cross > (double)ROUTE_OFF_ROUTE_M;
+    // Work in metres on a plane whose origin is the fix. Over one segment the
+    // distortion is immaterial, and it keeps the arithmetic in a range where
+    // double has far more precision than the measurement deserves.
+    const double lon_scale = LonScale(lat);
+
+    // The winner is chosen on `score`, which is the cross-track plus whatever
+    // the hint charges it; `cross` is the winner's real distance from the
+    // line, and it is what gets reported and what decides off_route. Scoring
+    // and measuring have to stay separate -- a candidate that won by 20m of
+    // hint discount is still exactly as far off the road as it was.
+    const double hint = (double)hint_along_m;
+    SnapBest_t best;
+
+    // Near the fix first; the whole route only when that cannot be shown to
+    // give the same answer. See ROUTE_SNAP_NEAR_M.
+    SnapPassResult_t r =
+        SnapPass(blob, manifest, cum, lat, lon, lon_scale, have_hint, hint, true, &best);
+    if (r == SNAP_PASS_UNDECIDED) {
+        r = SnapPass(blob, manifest, cum, lat, lon, lon_scale, have_hint, hint, false, &best);
+    }
+    if (r != SNAP_PASS_ANSWERED || !isfinite(best.score)) {
+        return false;
+    }
+
+    out->segment_index = best.segment;
+    out->distance_along_m = (uint32_t)(best.along + 0.5);
+    out->cross_track_m = (uint32_t)(best.cross + 0.5);
+    out->off_route = best.cross > (double)ROUTE_OFF_ROUTE_M;
     return true;
 }
 
