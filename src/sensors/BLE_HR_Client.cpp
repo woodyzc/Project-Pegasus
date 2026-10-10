@@ -582,6 +582,11 @@ void BLE_HR_Shutdown() {
     BLE_CSC_Park();
     ParkSupervisor();
 
+    // The phone too, which used to be the one link nobody closed: ReleaseStack
+    // below deleted the server with it still attached. Before the heart-rate
+    // disconnect rather than after, because that path has an early return.
+    BLE_TBT_DisconnectPeers(kShutdownDisconnectMs);
+
     if (s_client == nullptr || !s_client->isConnected()) {
         RecordShutdown(1, 0);
         // Still tear the stack down, and still forget the pointers. The old

@@ -137,6 +137,27 @@ void BLE_TBT_StartAdvertising();
 // corpse.
 void BLE_TBT_NoteStackReleased();
 
+// Closes every phone link cleanly and stops advertising, waiting up to
+// `timeout_ms` for the controller to confirm. Call before the stack is torn
+// down; BLE_HR_Shutdown() does.
+//
+// The restart used to say goodbye only to the heart-rate peer and then delete
+// the stack with the phone still attached. No terminate went out, so the phone
+// went on believing the link was up until its own supervision timeout -- and a
+// central that thinks it is connected does not scan for the device it is
+// connected to. Seen 2026-10-09: switch GPX to TBT mid-ride, Restart to apply,
+// and the phone never found the head unit again. Section 3 records the same
+// failure with the watch in the other direction.
+//
+// Also latches re-advertising off for the rest of the boot, which is the rest
+// of the boot by construction: it is only called on the way down.
+void BLE_TBT_DisconnectPeers(uint32_t timeout_ms);
+
+// What the previous boot's shutdown managed with the phone: "clean in NNNms"
+// (the goodbye was confirmed), "TIMED OUT", "nothing connected", or "not run"
+// (no clean shutdown happened -- a power cut, the reset button, a flash).
+const char *BLE_TBT_LastShutdownText();
+
 void BLE_TBT_PauseAdvertising();
 void BLE_TBT_ResumeAdvertising();
 

@@ -45,11 +45,30 @@ volatile uint32_t s_restart_count = 0;
 // resume cannot fight a phone that connected in the meantime.
 volatile bool s_paused = false;
 
+// Set by BLE_TBT_DisconnectPeers() for the rest of the boot. Both server
+// callbacks re-advertise as a matter of course, and during a teardown that is
+// exactly wrong: the disconnect the shutdown asks for would put the
+// advertisement straight back up, and the phone could reconnect in the
+// moment before the stack is deleted under it.
+volatile bool s_shutting_down = false;
+
+// What the previous boot's shutdown managed with the phone, read from NVS at
+// start and cleared there. Same scheme, and the same reason, as
+// BLE_HR_LastShutdownText(): it describes the instant before a reboot, so RAM
+// cannot hold it.
+constexpr char kNvsPhoneShutdownCode[] = "tbt_sd_code";
+constexpr char kNvsPhoneShutdownMs[] = "tbt_sd_ms";
+int s_last_phone_shutdown_code = 0;
+uint32_t s_last_phone_shutdown_ms = 0;
+
 class ServerCallbacks : public NimBLEServerCallbacks {
     void onConnect(NimBLEServer *server, NimBLEConnInfo &conn_info) override {
         (void)server;
         (void)conn_info;
         s_connected = true;
+        if (s_shutting_down) {
+            return;
+        }
 
         // Keep advertising. A connectable advertisement ends the moment a peer
         // connects, and this device has to stay findable after that: the watch
@@ -68,6 +87,9 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         (void)conn_info;
         (void)reason;
         s_connected = false;
+        if (s_shutting_down) {
+            return; // nothing to hand over to, and nothing to re-advertise for
+        }
 
         // With a route cached, a disconnect is a handover rather than an end:
         // NavRoute navigates from its own GPS from the next tick. Clearing
@@ -349,6 +371,18 @@ void NoteTbtStep(const char *key, uint8_t value) {
 } // namespace
 
 void BLE_TBT_Start() {
+    // Read (and clear) what the previous boot's shutdown managed with the
+    // phone, before anything here can overwrite it.
+    {
+        Preferences prefs;
+        if (prefs.begin("pegasus", false)) {
+            s_last_phone_shutdown_code = prefs.getInt(kNvsPhoneShutdownCode, 0);
+            s_last_phone_shutdown_ms = prefs.getUInt(kNvsPhoneShutdownMs, 0);
+            prefs.putInt(kNvsPhoneShutdownCode, 0);
+            prefs.end();
+        }
+    }
+
     // Idempotent in NimBLE 2.x, and harmless when BLE_HR_Init() already ran.
     NimBLEDevice::init("pegasus");
 
@@ -487,6 +521,56 @@ void BLE_TBT_StartAdvertising() {
     // Ground truth from the controller rather than our own bookkeeping.
     NoteTbtStep("tbt_act", ble_gap_adv_active() ? 1 : 0);
     s_start_result = adv_ok ? "started" : "adv REFUSED";
+}
+
+void BLE_TBT_DisconnectPeers(uint32_t timeout_ms) {
+    if (s_server == nullptr) {
+        return; // never started, or already released
+    }
+    s_shutting_down = true;
+
+    // Advertising first, so nothing new can connect while the existing links
+    // are being closed.
+    NimBLEDevice::stopAdvertising();
+    s_advertising = false;
+    s_paused = false;
+
+    int code = 1; // nothing connected
+    const uint32_t started = millis();
+    if (s_server->getConnectedCount() > 0) {
+        for (uint16_t handle : s_server->getPeerDevices()) {
+            s_server->disconnect(handle);
+        }
+        // disconnect() only queues the terminate; it goes out on the next
+        // connection event. Wait for the controller to report every link down
+        // rather than guessing at a delay -- the same lesson BLE_HR_Shutdown
+        // learnt with the watch.
+        const uint32_t deadline = started + timeout_ms;
+        while (s_server->getConnectedCount() > 0 && (int32_t)(millis() - deadline) < 0) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        code = (s_server->getConnectedCount() == 0) ? 2 : 3;
+    }
+
+    Preferences prefs;
+    if (prefs.begin("pegasus", false)) {
+        prefs.putInt(kNvsPhoneShutdownCode, code);
+        prefs.putUInt(kNvsPhoneShutdownMs, millis() - started);
+        prefs.end();
+    }
+}
+
+const char *BLE_TBT_LastShutdownText() {
+    static char text[40];
+    switch (s_last_phone_shutdown_code) {
+        case 1:  return "nothing connected";
+        case 2:  snprintf(text, sizeof(text), "clean in %ums", (unsigned)s_last_phone_shutdown_ms);
+                 return text;
+        case 3:  snprintf(text, sizeof(text), "TIMED OUT after %ums",
+                          (unsigned)s_last_phone_shutdown_ms);
+                 return text;
+        default: return "not run";
+    }
 }
 
 void BLE_TBT_NoteStackReleased() {
