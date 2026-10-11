@@ -728,20 +728,26 @@ void InfoTimerCallback(lv_timer_t *timer) {
     // and the DMA draw buffers all need it, and PSRAM has megabytes spare. So
     // three figures for it -- free now, the least it has been since boot, and
     // the largest single block, which is what a big allocation actually
-    // needs -- and the LVGL pool beside them. That pool is a fixed 64KB of
-    // internal RAM (LV_MEM_SIZE) and nothing had ever measured how much of it
-    // is used; its peak is what says whether it can give some back.
+    // needs -- and the LVGL pool beside them, a fixed 64KB of internal RAM
+    // (LV_MEM_SIZE) whose use nothing had ever measured.
+    //
+    // ⚠️ Used is total minus free, from walking the pool. NOT the monitor's
+    // max_used, which this row showed at first and which read "peak 14" beside
+    // 42KB in use: lv_mem_alloc adds the size REQUESTED, lv_mem_free takes
+    // away the size of the BLOCK, which is larger, and lv_mem_realloc -- every
+    // label's text -- touches neither, so the counter behind it only drifts
+    // low. First reading, 2026-10-10: 42 of 64KB on this page, which is about
+    // the heaviest there is. The pool stays at 64KB.
     lv_mem_monitor_t lvmem;
     lv_mem_monitor(&lvmem);
     SetRowTextFmt(s_heap_value,
-                  "%u KB free (low %u, block %u) / PSRAM %u KB\nLVGL %u of %u KB, peak %u, frag %u%%",
+                  "%u KB free (low %u, block %u) / PSRAM %u KB\nLVGL %u of %u KB, frag %u%%",
                   (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
                   (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024),
                   (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
                   (unsigned)(ESP.getFreePsram() / 1024),
                   (unsigned)((lvmem.total_size - lvmem.free_size) / 1024),
-                  (unsigned)(lvmem.total_size / 1024), (unsigned)(lvmem.max_used / 1024),
-                  (unsigned)lvmem.frag_pct);
+                  (unsigned)(lvmem.total_size / 1024), (unsigned)lvmem.frag_pct);
 
     // Recording starts on the first fix, which is usually after this page was
     // built, so a value set only at load would read "waiting for fix" for the
