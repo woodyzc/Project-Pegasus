@@ -847,12 +847,34 @@ performance cost four rounds before anyone measured.
   to PSRAM by the renderer and read back by the flush, ~300KB of slow-bus
   traffic per frame. One 40-line partial buffer (19KB) in
   `MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL` is the standard arrangement and took
-  the dashboard to 33fps at 5% CPU. It was single while the flush was the
-  blocking `tft.pushColors`; since 2026-10-10 it is two, flushed by DMA so one
-  strip renders while the other is sent (`Display_FlushDma`). The settings
-  page's "Display" row says which the board actually got: it falls back to one
-  blocking buffer if the second 19.2KB is not there or DMA will not start, and
-  `-D PEGASUS_LCD_DMA=0` forces that.
+  the dashboard to 33fps at 5% CPU. It is single, and the flush is the
+  blocking `tft.pushColors`. A second buffer flushed by DMA, so one strip
+  renders while the other is sent, is written (`Display_FlushDma`) and is
+  **off**: see the next item. The settings page's "Display" row says which
+  flush the board actually got.
+  - ⚠️ **The DMA flush hung the boot** (2026-10-10, 9e45999). The board held
+    its power latch and enumerated on USB, but never drew a frame, and the
+    coredump partition stayed blank: a hang, not a panic. To the rider it was
+    simply a board that would not switch on. Rebuilt with
+    `-D PEGASUS_LCD_DMA=0` and nothing else changed, it booted at once. The
+    first frame is the splash, drawn by `lv_refr_now()` inside `setup()`, so
+    it is the first DMA transfer; where exactly it stopped was not
+    established. Both candidates wait with no timeout -- `dmaWait()` on a
+    transfer that never completes, and `setAddrWindow`'s direct register
+    writes spinning on `SPI_USR` -- and both come from one design: TFT_eSPI
+    drives the same peripheral through the IDF spi_master driver and through
+    raw registers. The flag is 0 in `platformio.ini` and the code default is
+    0 too. A DMA flush worth having gives the bus one owner (esp_lcd's panel
+    IO, with its completion callback) and a timeout that falls back to
+    blocking.
+  - **A hung boot is still flashable.** The latch is held, so USB stays up and
+    esptool connects as usual -- no holding the power key. The coredump read
+    in §8 works the same way, and was what said "hang" rather than "crash".
+  - **This shipped in a commit that was never seen running, and four more
+    were stacked on it before anyone switched the board on.** The flush is
+    on the path of every frame including the first, so a fault there does
+    not show as a bug -- it shows as dead hardware. A change to the boot path
+    gets its photo before anything else is built on it.
   - ⚠️ **TFT_eSPI 2.5.43's DMA is broken on this exact configuration** (S3 +
     `USE_HSPI_PORT`), and `Display.cpp` works around it. After a transfer the
     SPI peripheral's DMA enable must be cleared before the CPU writes to it

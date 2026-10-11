@@ -7,11 +7,24 @@
 #include <soc/spi_reg.h>
 
 // Send each rendered strip by DMA while the next one renders, rather than
-// pushing it from the CPU and waiting. -D PEGASUS_LCD_DMA=0 restores the
-// blocking flush, which is the first thing to try if the panel ever shows
-// garbage after a build with this on.
+// pushing it from the CPU and waiting.
+//
+// ⚠️ OFF, and opt-in: on this board it hung the boot. Flashed on 2026-10-10
+// (9e45999), the board held its power latch and enumerated on USB but never
+// drew a frame, and the coredump partition stayed blank -- a hang, not a
+// panic. Built with this at 0 and nothing else changed, it booted at once.
+// The first frame is the splash, drawn by lv_refr_now() inside setup(), so
+// that is the first DMA transfer; where exactly it stops was not established.
+// Both candidates wait without a timeout: TFT_eSPI's dmaWait() on a transfer
+// that never completes, and its direct register writes in setAddrWindow
+// spinning on SPI_USR. Mixing the IDF spi_master driver with direct register
+// access on one peripheral is the design underneath both.
+//
+// Do not turn this back on as it stands. A DMA flush worth having drives the
+// bus through one owner (esp_lcd's panel IO, say, with its own completion
+// callback) and waits with a timeout that falls back to blocking.
 #ifndef PEGASUS_LCD_DMA
-#define PEGASUS_LCD_DMA 1
+#define PEGASUS_LCD_DMA 0
 #endif
 
 // TFT_eSPI is configured entirely via the USER_SETUP_LOADED build_flags in
